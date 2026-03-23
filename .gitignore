@@ -55,3 +55,7 @@ instructions.graphene
 poscar.graphene
 poscar.mos2
 df
+
+# Obsolete documentation
+manual.tex
+manual.pdf
