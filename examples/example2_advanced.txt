@@ -1,0 +1,20 @@
+Project: NiO magnetic insulator study
+
+Methods: PBEsol functional
+         GGA+U with U=5.0 on Ni-d orbitals
+         SOC with magnetization in z-direction
+         HSE06 for accurate band gaps
+
+Tasks: 1. Structure relaxation
+       2. Self-consistent calculation
+       3. Band structure along G-X-M-G-R-X
+       4. DOS with projections on Ni:d and O:p
+       5. Wannierization of Ni-d and O-p states
+       6. Transport calculations with BoltzWann
+
+Convergence: Test k-points from 6x6x6 to 12x12x12
+             Test ENCUT 400-600 eV in steps of 50 eV
+
+Goals: Investigate the electronic structure and transport properties of NiO.
+       Focus on the band gap, magnetic moment, and effective mass.
+       Compare PBEsol and HSE06 results.

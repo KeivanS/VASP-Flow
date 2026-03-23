@@ -1,0 +1,159 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                     VASP WORKFLOW AGENT - QUICK REFERENCE                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─ BASIC USAGE ─────────────────────────────────────────────────────────────────┐
+│ ./vasp-agent.py -p PROJECT_NAME -i instructions.txt -s POSCAR                │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ INSTRUCTION FILE FORMAT ─────────────────────────────────────────────────────┐
+│ Project: [Name of your project]                                              │
+│                                                                               │
+│ Methods: [Functional]                                                         │
+│          [Additional methods like SOC, GGA+U]                                 │
+│                                                                               │
+│ Tasks: [List of calculations]                                                 │
+│        [One per line]                                                         │
+│                                                                               │
+│ Convergence: [Tests to perform]                                              │
+│                                                                               │
+│ Goals: [Optional description]                                                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ FUNCTIONALS ─────────────────────────────────────────────────────────────────┐
+│ • PBE (default)         Standard GGA functional                               │
+│ • PBEsol                Optimized for solids                                  │
+│ • R2SCAN                Meta-GGA functional                                    │
+│ • HSE06 or HSE          Hybrid functional (expensive!)                        │
+│ • RVV10                 Van der Waals functional                              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SPECIAL METHODS ─────────────────────────────────────────────────────────────┐
+│ SOC with magnetization in z-direction     Enable spin-orbit coupling         │
+│ GGA+U with U=3.0 on Mo-d orbitals          Add Hubbard U correction           │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TASKS (in execution order) ──────────────────────────────────────────────────┐
+│ 1. Relaxation / Optimization              Structure optimization             │
+│ 2. SCF / Self-consistent                  Static calculation                  │
+│ 3. Band structure along G-M-K-G           Electronic bands                    │
+│ 4. DOS (projected on Mo-d and S-p)        Density of states                   │
+│ 5. Fat bands                              Orbital-projected bands             │
+│ 6. Wannierization                         Wannier90 interface                 │
+│ 7. Transport                              BoltzWann calculations              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ K-PATH SPECIFICATION ────────────────────────────────────────────────────────┐
+│ Band structure along G-M-K-G              Hexagonal (graphene, MoS2)         │
+│ Band structure along G-X-M-G-R-X          Cubic                              │
+│                                                                               │
+│ Common k-points: G (Gamma), X, M, K, R, Z, U, L                              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ CONVERGENCE TESTS ───────────────────────────────────────────────────────────┐
+│ Test k-points 8x8 to 16x16                2D materials                        │
+│ Test k-points from 6x6x6 to 12x12x12      3D materials                        │
+│ ENCUT 400-600 eV                          Energy cutoff                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DOS PROJECTIONS ─────────────────────────────────────────────────────────────┐
+│ DOS (projected on Mo-d and S-p)           Orbital-specific DOS               │
+│ DOS with projections on Ni:d and O:p      Alternative syntax                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ AFTER GENERATION ────────────────────────────────────────────────────────────┐
+│ cd projects/PROJECT_NAME/generated                                           │
+│                                                                               │
+│ Option 1: Run all at once                                                     │
+│   ./submit_all.sh                                                            │
+│                                                                               │
+│ Option 2: Run step by step                                                    │
+│   cd 01_relax && ./run.sh                                                    │
+│   cd ../02_scf && ./run.sh                                                   │
+│   ...                                                                         │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DIRECTORY STRUCTURE ─────────────────────────────────────────────────────────┐
+│ projects/PROJECT_NAME/                                                        │
+│ ├── instructions.txt          Your instructions                              │
+│ ├── POSCAR                    Your structure                                  │
+│ └── generated/                Generated files                                 │
+│     ├── 01_relax/             Relaxation                                      │
+│     │   ├── INCAR              VASP input parameters                          │
+│     │   ├── KPOINTS            k-point mesh                                   │
+│     │   ├── POSCAR             Structure (copied)                             │
+│     │   ├── make_potcar.sh     POTCAR generation script                       │
+│     │   └── run.sh             Execution script                               │
+│     ├── 02_scf/               Self-consistent                                 │
+│     ├── 03_bands/             Band structure                                  │
+│     ├── 04_dos/               Density of states                               │
+│     ├── submit_all.sh         Run all calculations                            │
+│     └── analyze_all.sh        Analyze results                                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ POTCAR CONFIGURATION ────────────────────────────────────────────────────────┐
+│ Edit make_potcar.sh in each calculation directory:                           │
+│   POTCAR_DIR="$HOME/vasp/potcar/PBE"     Modify this path                    │
+│                                                                               │
+│ Or set environment variable:                                                  │
+│   export VASP_POTCAR_DIR="$HOME/vasp/potcar/PBE"                             │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ COMMON CHECKS ───────────────────────────────────────────────────────────────┐
+│ Check convergence:                                                            │
+│   grep "reached required accuracy" OUTCAR                                     │
+│                                                                               │
+│ Check energy:                                                                 │
+│   grep "energy  without" OUTCAR | tail -1                                     │
+│                                                                               │
+│ Check magnetic moment:                                                        │
+│   grep "magnetization (x)" OUTCAR | tail -1                                   │
+│                                                                               │
+│ Check Fermi level:                                                            │
+│   grep "E-fermi" OUTCAR | tail -1                                             │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SLURM CLUSTER USAGE ─────────────────────────────────────────────────────────┐
+│ Modify run.sh to add SLURM directives:                                       │
+│   #!/bin/bash                                                                 │
+│   #SBATCH --job-name=vasp_calc                                               │
+│   #SBATCH --nodes=1                                                           │
+│   #SBATCH --ntasks=16                                                         │
+│   #SBATCH --time=24:00:00                                                     │
+│                                                                               │
+│   module load vasp                                                            │
+│   srun vasp_std > vasp.out 2>&1                                              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ EXAMPLE INSTRUCTIONS ────────────────────────────────────────────────────────┐
+│ Project: MoS2 monolayer bands                                                 │
+│                                                                               │
+│ Methods: PBEsol functional                                                    │
+│          SOC with magnetization in z-direction                                │
+│                                                                               │
+│ Tasks: Relaxation                                                             │
+│        Band structure along G-M-K-G                                           │
+│        DOS (projected on Mo-d and S-p)                                        │
+│                                                                               │
+│ Convergence: Test k-points 8x8 to 16x16                                      │
+│              ENCUT 400-600 eV                                                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐
+│ POTCAR not found:          Edit POTCAR_DIR in make_potcar.sh                 │
+│ VASP not found:            Add VASP to PATH or use full path in run.sh       │
+│ Memory error:              Reduce k-points or ENCUT                           │
+│ Not converged:             Increase NSW or adjust EDIFF                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ USEFUL COMMANDS ─────────────────────────────────────────────────────────────┐
+│ make test                  Test installation                                  │
+│ make manual                Build PDF manual                                   │
+│ make clean                 Remove test files                                  │
+│ make examples              Show example commands                              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ For complete documentation, see manual.pdf                                   ║
+║ Version 1.0 - Created by Claude (Anthropic)                                  ║
+╚══════════════════════════════════════════════════════════════════════════════╝

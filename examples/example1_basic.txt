@@ -1,0 +1,6 @@
+Project: MoS2 electronic structure
+Methods: PBEsol functional, SOC with magnetization in z-direction
+Tasks: Relaxation
+       Band structure along G-M-K-G
+       DOS (projected on Mo-d and S-p)
+Convergence: Test k-points 8x8 to 16x16, ENCUT 400-600 eV
