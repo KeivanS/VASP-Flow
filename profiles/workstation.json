@@ -1,0 +1,12 @@
+{
+  "_comment": "Workstation profile — values here override site.env. Leave empty strings to inherit from site.env / environment variables.",
+  "name": "Workstation",
+  "vasp_std": "",
+  "vasp_ncl": "",
+  "vasp_gam": "",
+  "mpi_cmd": "",
+  "mpi_np": 0,
+  "wannier90_x": "",
+  "modules": [],
+  "slurm": null
+}

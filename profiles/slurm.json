@@ -1,0 +1,20 @@
+{
+  "_comment": "SLURM HPC profile. Edit partition, nodes, ntasks_per_node, time, account, and modules for your cluster. mpi_np should equal nodes * ntasks_per_node and is used to compute KPAR/NCORE in INCAR.",
+  "name": "SLURM HPC",
+  "vasp_std": "vasp_std",
+  "vasp_ncl": "vasp_ncl",
+  "vasp_gam": "vasp_gam",
+  "mpi_cmd": "srun",
+  "mpi_np": 128,
+  "wannier90_x": "wannier90.x",
+  "modules": [],
+  "slurm": {
+    "partition": "standard",
+    "nodes": 2,
+    "ntasks_per_node": 64,
+    "time": "12:00:00",
+    "account": "",
+    "output": "slurm-%j.out",
+    "error": "slurm-%j.err"
+  }
+}

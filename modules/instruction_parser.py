@@ -31,6 +31,8 @@ class InstructionParser:
             'kpath':          self._extract_kpath(content),
             'wannier':        self._extract_wannier(content),
             'transport':      self._extract_transport(content),
+            'dfpt':           self._extract_dfpt(content),
+            'phonons':        self._extract_phonons(content),
             'dos_projections': self._extract_dos_projections(content),
             # MPI / parallelization
             'mpi_np':         self._extract_int_key(content, r'MPI\s*[:,=]?\s*(\d+)', default=1),
@@ -140,6 +142,8 @@ class InstructionParser:
             'fatbands': ['fat bands', 'fatbands', 'projected bands'],
             'wannier': ['wannier', 'wannierization', 'wannier90'],
             'transport': ['transport', 'boltzwann', 'boltzmann'],
+            'dfpt': ['dfpt', 'born charges', 'born effective', 'dielectric', 'lepsilon'],
+            'phonons': ['phonon', 'phonons', 'phonopy', 'vibrational', 'lattice dynamics'],
         }
         
         content_lower = content.lower()
@@ -148,7 +152,8 @@ class InstructionParser:
                 tasks.append(task)
         
         # Ensure logical order
-        task_order = ['relax', 'scf', 'bands', 'dos', 'fatbands', 'wannier', 'transport']
+        task_order = ['relax', 'scf', 'bands', 'dos', 'fatbands', 'wannier', 'transport',
+                      'dfpt', 'phonons']
         ordered_tasks = [t for t in task_order if t in tasks]
         
         return ordered_tasks
@@ -219,22 +224,56 @@ class InstructionParser:
         return ['G', 'X', 'M', 'G']  # default cubic path
     
     def _extract_wannier(self, content: str) -> Dict[str, Any]:
-        """Extract Wannier90 settings"""
+        """Extract Wannier90 settings."""
         wannier_info = {
-            'enabled': 'wannier' in content.lower(),
+            'enabled':     'wannier' in content.lower(),
             'projections': [],
-            'num_wann': None,
-            'num_bands': None
+            'num_wann':    None,
+            'num_bands':   None,
+            'dis_win':     '',
         }
-        
+
         if wannier_info['enabled']:
-            # Extract projections if specified
-            proj_match = re.findall(r'project(?:ion)?s?\s*:\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
-            if proj_match:
-                wannier_info['projections'] = [p.strip() for p in proj_match[0].split(',')]
-        
+            # Projections from WANNIER_PROJ line or generic "projections: ..." line
+            m = re.search(r'WANNIER_PROJ\s*[:,=]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+            if not m:
+                m = re.search(r'project(?:ion)?s?\s*:\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+            if m:
+                wannier_info['projections'] = [p.strip() for p in m.group(1).split(',')]
+
+            m = re.search(r'WANNIER_NUM_WANN\s*[:,=]\s*(\d+)', content, re.IGNORECASE)
+            if m:
+                wannier_info['num_wann'] = int(m.group(1))
+
+            m = re.search(r'WANNIER_EWIN\s*[:,=]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+            if m:
+                wannier_info['dis_win'] = m.group(1).strip()
+
         return wannier_info
     
+    def _extract_dfpt(self, content: str) -> dict:
+        """Extract DFPT parameters."""
+        return {
+            'ediff': self._extract_float_key(content, r'DFPT_EDIFF\s*[:,=]\s*([-\d.Ee]+)',
+                                              default=1e-8),
+        }
+
+    def _extract_phonons(self, content: str) -> dict:
+        """Extract phonopy phonon calculation parameters."""
+        dim_m  = re.search(r'PHONONS_DIM\s*[:,=]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+        band_m = re.search(r'PHONONS_BAND\s*[:,=]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+        mesh_m = re.search(r'PHONONS_MESH\s*[:,=]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+        nac_false = bool(re.search(r'PHONONS_NAC\s*[:,=]\s*(\.?FALSE\.?|no|0)',
+                                   content, re.IGNORECASE))
+        return {
+            'dim':  dim_m.group(1).strip()  if dim_m  else '2 2 2',
+            'band': band_m.group(1).strip() if band_m else '',
+            'mesh': mesh_m.group(1).strip() if mesh_m else '20 20 20',
+            'disp': self._extract_float_key(content, r'PHONONS_DISP\s*[:,=]\s*([-\d.Ee]+)',
+                                            default=0.01),
+            'nac':  not nac_false,
+        }
+
     def _extract_transport(self, content: str) -> bool:
         """Check if transport calculations are requested"""
         return bool(re.search(r'(transport|boltzwann)', content, re.IGNORECASE))

@@ -13,8 +13,9 @@ import queue as Q
 from pathlib import Path
 from collections import defaultdict
 
-AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(AGENT_DIR, 'modules'))
+APP_DIR      = os.path.dirname(os.path.abspath(__file__))
+PROJECTS_DIR = os.environ.get('VASP_PROJECTS_DIR', os.getcwd())
+sys.path.insert(0, os.path.join(APP_DIR, 'modules'))
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
@@ -22,32 +23,48 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 _jobs  = {}
 _jlock = threading.Lock()
 
-# ── user-configurable defaults (edit here to change GUI defaults) ───────────
+# ── defaults: env vars first, then hardcoded fallbacks ───────────────────────
 CONFIG = {
-    'band_ymin':    '-4',
-    'band_ymax':    '4',
-    'dos_xmin':     '-6',
-    'dos_xmax':     '6',
+    # system — overridden by config.json if present
+    'vasp_std':     os.environ.get('VASP_STD',    ''),
+    'vasp_ncl':     os.environ.get('VASP_NCL',    ''),
+    'vasp_gam':     os.environ.get('VASP_GAM',    ''),
+    'mpi_launch':   os.environ.get('MPI_LAUNCH',  'mpirun -np'),
+    'mpi_np':       int(os.environ.get('MPI_NP',  '1')),
+    'wannier90_x':  os.environ.get('WANNIER90_X', 'wannier90.x'),
+    'potcar_dir':   os.environ.get('VASP_POTCAR_DIR', ''),
+    # calculation defaults
     'kpath':        'G-M-K-G',
     'nkpts_bands':  60,
     'nsw':          100,
     'ediffg':       '-0.01',
     'encut_manual': 520,
-    'mpi_np':       16,
-    'potcar_dir':   os.environ.get('VASP_POTCAR_DIR', ''),
+    'band_ymin':    '-4',
+    'band_ymax':    '4',
+    'dos_xmin':     '-6',
+    'dos_xmax':     '6',
 }
+
+# ── load saved user config (config.json in working directory) ─────────────────
+_config_path = os.path.join(PROJECTS_DIR, 'config.json')
+_first_run   = not os.path.isfile(_config_path)
+if not _first_run:
+    try:
+        _saved = json.loads(Path(_config_path).read_text())
+        CONFIG.update({k: v for k, v in _saved.items() if k in CONFIG})
+    except Exception:
+        pass
 
 def _slug(name):
     return re.sub(r'[^\w\-]', '_', name.strip()).strip('_') or 'vasp_project'
 
-def _pd(slug):    return os.path.join(AGENT_DIR, slug)
+def _pd(slug):    return os.path.join(PROJECTS_DIR, slug)
 
 def _steps(slug):
     pd = _pd(slug)
     if not os.path.isdir(pd): return []
     return sorted(d for d in os.listdir(pd)
-                  if re.match(r'\d\d_', d) and
-                  os.path.isfile(os.path.join(pd, d, 'run.sh')))
+                  if re.match(r'\d\d_', d) and os.path.isdir(os.path.join(pd, d)))
 
 def _launch(script, slug, step):
     key = f"{slug}/{step}"
@@ -76,7 +93,22 @@ def _parse_mesh(s):
 
 @app.route('/')
 def index():
-    return Response(HTML.replace('__CFG__', json.dumps(CONFIG)), mimetype='text/html')
+    cfg = dict(CONFIG, first_run=_first_run)
+    return Response(HTML.replace('__CFG__', json.dumps(cfg)), mimetype='text/html')
+
+@app.route('/api/config', methods=['GET', 'POST'])
+def api_config():
+    """GET: return current system config. POST {key:val}: save to config.json."""
+    sys_keys = ['vasp_std','vasp_ncl','vasp_gam','mpi_launch','mpi_np',
+                'wannier90_x','potcar_dir']
+    if request.method == 'GET':
+        return jsonify({k: CONFIG[k] for k in sys_keys})
+    data = request.json or {}
+    for k in sys_keys:
+        if k in data:
+            CONFIG[k] = data[k]
+    Path(_config_path).write_text(json.dumps({k: CONFIG[k] for k in sys_keys}, indent=2))
+    return jsonify(ok=True)
 
 @app.route('/api/generate', methods=['POST'])
 def api_generate():
@@ -130,6 +162,9 @@ def api_generate():
             for p in proj_list if p.get('orbitals')
         )
         tasks.append('DOS' + (f' (projected on {proj_str})' if proj_str else ''))
+    if d.get('wannier'): tasks.append('Wannier90 wannierization')
+    if d.get('dfpt'):    tasks.append('DFPT Born charges and dielectric')
+    if d.get('phonons'): tasks.append('phonons lattice dynamics')
 
     mpi = max(1, int(d.get('mpi_np', CONFIG['mpi_np']) or 1))
 
@@ -144,16 +179,39 @@ def api_generate():
     lines += [f'ISIF: {isif}', f'NSW: {nsw}', f'EDIFFG: {ediffg}', f'NKPTS: {nkpts}']
     if mpi > 1: lines.append(f'MPI: {mpi}')
 
+    # DFPT parameters
+    if d.get('dfpt'):
+        ediff = d.get('dfpt_ediff', '1E-8').strip()
+        if ediff: lines.append(f'DFPT_EDIFF: {ediff}')
+
+    # Phonons parameters
+    if d.get('phonons'):
+        lines.append(f'PHONONS_DIM: {d.get("phonons_dim","2 2 2")}')
+        lines.append(f'PHONONS_MESH: {d.get("phonons_mesh","20 20 20")}')
+        lines.append(f'PHONONS_DISP: {d.get("phonons_disp",0.01)}')
+        pb = d.get('phonons_band','').strip()
+        if pb: lines.append(f'PHONONS_BAND: {pb}')
+        if not d.get('phonons_nac', True): lines.append('PHONONS_NAC: FALSE')
+
+    # Wannier90 parameters
+    if d.get('wannier'):
+        num_wann = d.get('wannier_num_wann', 8)
+        proj     = d.get('wannier_proj', '').strip()
+        ewin     = d.get('wannier_ewin', '').strip()
+        if num_wann: lines.append(f'WANNIER_NUM_WANN: {num_wann}')
+        if proj:     lines.append(f'WANNIER_PROJ: {proj}')
+        if ewin:     lines.append(f'WANNIER_EWIN: {ewin}')
+
     # Manual params → add to instruction text so parser picks them up
     if param_mode == 'manual':
         encut_m = d.get('manual_encut','').strip()
         if encut_m: lines.append(f'ENCUT: {encut_m}')
 
-    Path(os.path.join(AGENT_DIR,'instructions.txt')).write_text('\n'.join(lines))
-    Path(os.path.join(AGENT_DIR,'POSCAR')).write_text(poscar)
+    Path(os.path.join(PROJECTS_DIR,'instructions.txt')).write_text('\n'.join(lines))
+    Path(os.path.join(PROJECTS_DIR,'POSCAR')).write_text(poscar)
 
     # Write POTCAR choices for the agent; clear if none
-    choices_file = os.path.join(AGENT_DIR, 'potcar_choices.json')
+    choices_file = os.path.join(PROJECTS_DIR, 'potcar_choices.json')
     if potcar_choices:
         Path(choices_file).write_text(json.dumps(potcar_choices))
     elif os.path.exists(choices_file):
@@ -162,11 +220,21 @@ def api_generate():
     env = os.environ.copy()
     if potcar_dir:
         env['VASP_POTCAR_DIR'] = potcar_dir
+    for key, evar in [('vasp_std','VASP_STD'), ('vasp_ncl','VASP_NCL'),
+                      ('vasp_gam','VASP_GAM'), ('mpi_launch','MPI_LAUNCH'),
+                      ('wannier90_x','WANNIER90_X')]:
+        val = CONFIG.get(key, '')
+        if val:
+            env[evar] = val
+    env['MPI_NP'] = str(CONFIG.get('mpi_np', 1))
 
-    result = subprocess.run(
-        [sys.executable, os.path.join(AGENT_DIR,'vasp-agent.py'),
-         '-i','instructions.txt','-s','POSCAR'],
-        capture_output=True, text=True, cwd=AGENT_DIR, env=env)
+    profile = d.get('profile', '').strip()
+    agent_cmd = [sys.executable, os.path.join(APP_DIR,'vasp-agent.py'),
+                 '-i','instructions.txt','-s','POSCAR']
+    if profile and profile != 'default':
+        agent_cmd += ['--profile', profile]
+    result = subprocess.run(agent_cmd,
+        capture_output=True, text=True, cwd=PROJECTS_DIR, env=env)
 
     if result.returncode != 0:
         return jsonify(error=(result.stderr or result.stdout or 'Error').strip()), 500
@@ -196,8 +264,31 @@ def api_generate():
     if dos_proj and os.path.isdir(_pd(slug)):
         Path(os.path.join(_pd(slug), 'dos_proj.json')).write_text(json.dumps(dos_proj))
 
+    # Save full settings so the Setup page can be restored on resume
+    if os.path.isdir(_pd(slug)):
+        Path(os.path.join(_pd(slug), 'settings.json')).write_text(json.dumps(d))
+
     return jsonify(ok=True, project=slug, steps=_steps(slug),
                    has_convergence=has_conv, output=result.stdout)
+
+@app.route('/api/project_settings/<slug>')
+def api_project_settings(slug):
+    """Return saved settings.json + POSCAR for a project so Setup can be pre-populated."""
+    pd_ = _pd(slug)
+    settings_file = os.path.join(pd_, 'settings.json')
+    poscar_file   = os.path.join(pd_, 'POSCAR')
+    if not os.path.isdir(pd_):
+        return jsonify(error='Project not found'), 404
+    settings = {}
+    if os.path.exists(settings_file):
+        try: settings = json.loads(Path(settings_file).read_text())
+        except Exception: pass
+    poscar = ''
+    if os.path.exists(poscar_file):
+        try: poscar = Path(poscar_file).read_text()
+        except Exception: pass
+    return jsonify(settings=settings, poscar=poscar)
+
 
 @app.route('/api/run', methods=['POST'])
 def api_run():
@@ -205,11 +296,14 @@ def api_run():
     slug = d.get('project', '')
     step = d.get('step', '')
     pd   = _pd(slug)
-    script = (os.path.join(pd, 'run_convergence.sh')  if step == 'convergence' else
-              os.path.join(pd, 'run_all.sh')           if step == 'all' else
-              os.path.join(pd, 'run_calculations.sh')  if step == 'calculations' else
-              os.path.join(pd, 'analyze.sh')           if step == 'analyze' else
-              os.path.join(pd, step, 'run.sh'))
+    special = {
+        'convergence':  'run_convergence.sh',
+        'all':          'run_all.sh',
+        'calculations': 'run_calculations.sh',
+        'analyze':      'analyze.sh',
+    }
+    script = (os.path.join(pd, special[step]) if step in special
+              else os.path.join(pd, step, 'run.sh'))
     if not os.path.exists(script):
         return jsonify(error=f'Script not found: {script}'), 404
     return jsonify(job_key=_launch(script, slug, step))
@@ -318,6 +412,26 @@ def api_outcar(slug, step):
 
     return jsonify(tail=tail, info=info)
 
+def _band_plot_opts(slug):
+    """Return (ymin, ymax, labels_str|None) from project settings.json."""
+    ymin, ymax, labels = CONFIG['band_ymin'], CONFIG['band_ymax'], None
+    sf = os.path.join(_pd(slug), 'settings.json')
+    if os.path.exists(sf):
+        try:
+            d = json.loads(Path(sf).read_text())
+            ewin = d.get('ewin', '').strip()
+            if ewin:
+                m = re.search(r'([-\d.]+)\s*(?:to|:)\s*([-\d.]+)', ewin)
+                if m:
+                    ymin, ymax = m.group(1), m.group(2)
+            kpath = d.get('kpath', '').strip()
+            if kpath:
+                labels = ','.join(kpath.replace(' ', '').split('-'))
+        except Exception:
+            pass
+    return ymin, ymax, labels
+
+
 @app.route('/api/plot/<slug>/<ptype>')
 def api_plot(slug, ptype):
     """Serve plot image. Normalise ptype, run sumo if needed, return png."""
@@ -370,11 +484,14 @@ def api_plot(slug, ptype):
                                          f'<i name="efermi">  {m[-1]}  </i>', txt)
                             Path(vr).write_text(txt)
                         break
-            subprocess.run(
-                ['sumo-bandplot','--prefix',base,
-                 '--ymin', CONFIG['band_ymin'], '--ymax', CONFIG['band_ymax'],
-                 '--format','png'],
-                capture_output=True, cwd=src)
+            ymin, ymax, labels = _band_plot_opts(slug)
+            label_args = ['--labels', labels] if labels else []
+            for fmt in ('png', 'pdf'):
+                subprocess.run(
+                    ['sumo-bandplot','--prefix',base,
+                     '--ymin', ymin, '--ymax', ymax,
+                     '--format', fmt] + label_args,
+                    capture_output=True, cwd=src)
             for f in os.listdir(src):
                 if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
     else:
@@ -389,20 +506,22 @@ def api_plot(slug, ptype):
                     for p in proj_data:
                         for orb in p.get('orbitals', []):
                             om[p['element']].append(orb)
-                    sumo_orb = ', '.join(f"{el} {' '.join(orbs)}" for el, orbs in om.items())
+                    sumo_orb = '; '.join(f"{el} {' '.join(orbs)}" for el, orbs in om.items())
                     if sumo_orb:
                         orb_flag = ['--orbitals', sumo_orb]
                 except Exception:
                     pass
-            subprocess.run(
-                ['sumo-dosplot','--prefix',f'{base}_total',
-                 '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'], '--format','png'],
-                capture_output=True, cwd=src)
-            if orb_flag:
+            for fmt in ('png', 'pdf'):
                 subprocess.run(
-                    ['sumo-dosplot','--prefix',f'{base}_proj',
-                     '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'], '--format','png']+orb_flag,
+                    ['sumo-dosplot','--prefix',f'{base}_total',
+                     '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'], '--format', fmt],
                     capture_output=True, cwd=src)
+                if orb_flag:
+                    subprocess.run(
+                        ['sumo-dosplot','--prefix',f'{base}_proj',
+                         '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'],
+                         '--format', fmt]+orb_flag,
+                        capture_output=True, cwd=src)
             for f in os.listdir(src):
                 if '_dos.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
 
@@ -431,10 +550,17 @@ def api_projects():
     """List existing project directories (have at least one run.sh step)."""
     projects = []
     try:
-        for name in sorted(os.listdir(AGENT_DIR)):
-            full = os.path.join(AGENT_DIR, name)
-            if os.path.isdir(full) and _steps(name):
-                projects.append({'slug': name, 'steps': _steps(name),
+        for name in sorted(os.listdir(PROJECTS_DIR)):
+            full = os.path.join(PROJECTS_DIR, name)
+            if not os.path.isdir(full):
+                continue
+            steps = _steps(name)
+            has_poscar_or_settings = (
+                os.path.isfile(os.path.join(full, 'POSCAR')) or
+                os.path.isfile(os.path.join(full, 'settings.json'))
+            )
+            if steps or has_poscar_or_settings:
+                projects.append({'slug': name, 'steps': steps,
                                  'has_convergence': os.path.isdir(
                                      os.path.join(full, '00_convergence'))})
     except Exception:
@@ -450,6 +576,134 @@ def api_clear_plots(slug):
             if f.endswith('.png') or f.endswith('.pdf'):
                 os.remove(os.path.join(ana, f))
     return jsonify(ok=True)
+
+@app.route('/api/plot_pdf/<slug>/<ptype>')
+def api_plot_pdf(slug, ptype):
+    """Serve a sumo plot PDF for download."""
+    pd_  = _pd(slug)
+    ana  = os.path.join(pd_, 'analysis')
+    base = _slug_base(slug)
+    if ptype == 'bands':
+        candidates = [os.path.join(ana, f'{base}_band.pdf'),
+                      os.path.join(pd_, '03_bands', f'{base}_band.pdf')]
+    elif ptype == 'dos_proj':
+        candidates = [os.path.join(ana, f'{base}_proj_dos.pdf'),
+                      os.path.join(pd_, '04_dos', f'{base}_proj_dos.pdf')]
+    else:
+        candidates = [os.path.join(ana, f'{base}_total_dos.pdf'),
+                      os.path.join(pd_, '04_dos', f'{base}_total_dos.pdf')]
+    for p in candidates:
+        if os.path.exists(p):
+            return send_file(p, mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(p))
+    return jsonify(error='PDF not found — run sumo first'), 404
+
+
+@app.route('/api/born_charges/<slug>')
+def api_born_charges(slug):
+    """Return Born charges summary text, extracting from OUTCAR if needed."""
+    step_dir = os.path.join(_pd(slug), '06_dfpt')
+    txt_file = os.path.join(step_dir, 'born_charges.txt')
+    if not os.path.exists(txt_file):
+        outcar = os.path.join(step_dir, 'OUTCAR')
+        if not os.path.exists(outcar):
+            return jsonify(error='06_dfpt not run yet — run DFPT step first'), 404
+        script = os.path.join(step_dir, 'extract_born.py')
+        if os.path.exists(script):
+            subprocess.run([sys.executable, script, outcar],
+                           capture_output=True, cwd=step_dir)
+    if os.path.exists(txt_file):
+        return jsonify(text=Path(txt_file).read_text())
+    return jsonify(error='Could not extract Born charges — check 06_dfpt/OUTCAR'), 404
+
+
+@app.route('/api/phonon_plot/<slug>/<ptype>')
+def api_phonon_plot(slug, ptype):
+    """Serve phonon band structure or DOS image from 07_phonons."""
+    step_dir = os.path.join(_pd(slug), '07_phonons')
+    fname = 'phonon_band' if ptype == 'band' else 'phonon_dos'
+    for ext, mime in [('png', 'image/png'), ('svg', 'image/svg+xml')]:
+        p = os.path.join(step_dir, f'{fname}.{ext}')
+        if os.path.exists(p):
+            return send_file(p, mimetype=mime)
+    return '', 404
+
+
+@app.route('/api/phonon_plot_pdf/<slug>/<ptype>')
+def api_phonon_plot_pdf(slug, ptype):
+    """Serve phonon plot PDF for download."""
+    step_dir = os.path.join(_pd(slug), '07_phonons')
+    fname = 'phonon_band' if ptype == 'band' else 'phonon_dos'
+    p = os.path.join(step_dir, f'{fname}.pdf')
+    if os.path.exists(p):
+        return send_file(p, mimetype='application/pdf', as_attachment=True,
+                         download_name=f'{fname}.pdf')
+    # Also check with phonopy default names
+    alt = os.path.join(step_dir, 'band.pdf' if ptype == 'band' else 'mesh.pdf')
+    if os.path.exists(alt):
+        return send_file(alt, mimetype='application/pdf', as_attachment=True,
+                         download_name=f'{fname}.pdf')
+    return jsonify(error='PDF not found — run 07_phonons first'), 404
+
+
+@app.route('/api/convergence_pdf/<slug>/<dtype>')
+def api_convergence_pdf(slug, dtype):
+    """Generate and serve convergence chart as a PDF using matplotlib."""
+    fname = 'encut_convergence.dat' if dtype == 'encut' else 'kpoint_convergence.dat'
+    dat   = os.path.join(_pd(slug), '00_convergence', dtype, fname)
+    if not os.path.exists(dat):
+        return jsonify(error='Data not found — run convergence first'), 404
+    rows = []
+    for line in Path(dat).read_text().splitlines():
+        p = line.strip().split()
+        if len(p) >= 2:
+            try: rows.append((p[0], float(p[1])))
+            except ValueError: pass
+    if not rows:
+        return jsonify(error='No data in file'), 404
+
+    import tempfile, matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    labels = [r[0] for r in rows]
+    values = [r[1] for r in rows]
+    color  = '#7c3aed' if dtype == 'encut' else '#0ea5e9'
+    xlabel = 'ENCUT (eV)' if dtype == 'encut' else 'K-mesh'
+    title  = 'ENCUT Convergence' if dtype == 'encut' else 'K-point Convergence'
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.plot(range(len(labels)), values, 'o-', color=color, lw=1.5, ms=5)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=30 if len(labels) > 5 else 0, ha='right')
+    ax.set_xlabel(xlabel, fontsize=11)
+    ax.set_ylabel('Energy (eV)', fontsize=11)
+    ax.set_title(title, fontsize=12)
+    plt.tight_layout()
+
+    tmp = tempfile.mktemp(suffix='.pdf')
+    fig.savefig(tmp, format='pdf', bbox_inches='tight')
+    plt.close(fig)
+    return send_file(tmp, mimetype='application/pdf', as_attachment=True,
+                     download_name=f'{slug}_{dtype}_convergence.pdf')
+
+
+@app.route('/api/profiles')
+def api_profiles():
+    """List available execution profiles from APP_DIR/profiles/*.json."""
+    profiles_dir = os.path.join(APP_DIR, 'profiles')
+    profiles = [{'id': 'default', 'name': 'Default (site.env)'}]
+    if os.path.isdir(profiles_dir):
+        for fname in sorted(os.listdir(profiles_dir)):
+            if fname.endswith('.json'):
+                pid = fname[:-5]
+                try:
+                    data = json.loads(Path(os.path.join(profiles_dir, fname)).read_text())
+                    profiles.append({'id': pid, 'name': data.get('name', pid),
+                                     'mpi_np': data.get('mpi_np', 0)})
+                except Exception:
+                    pass
+    return jsonify(profiles=profiles)
 
 @app.route('/api/potcar_variants', methods=['POST'])
 def api_potcar_variants():
@@ -511,12 +765,17 @@ def api_run_sumo(slug, stype):
                                 f'|<i name=\\"efermi\\">  {m[-1]}  </i>|" '
                                 f'"{src}/vasprun.xml"\n')
                         break
+            ymin, ymax, labels = _band_plot_opts(slug)
+            labels_flag = f'--labels "{labels}"' if labels else ''
             f.write(f'cd "{src}"\n')
             f.write(f'sumo-bandplot --prefix "{base}" '
-                    f'--ymin {CONFIG["band_ymin"]} --ymax {CONFIG["band_ymax"]} '
+                    f'--ymin {ymin} --ymax {ymax} {labels_flag} '
                     f'--format png\n')
+            f.write(f'sumo-bandplot --prefix "{base}" '
+                    f'--ymin {ymin} --ymax {ymax} {labels_flag} '
+                    f'--format pdf\n')
             f.write(f'mv *_band.* "{ana}/" 2>/dev/null || true\n')
-            f.write('echo "Band plot saved to analysis/"\n')
+            f.write('echo "Band plot (PNG + PDF) saved to analysis/"\n')
         else:
             src = os.path.join(pd_, '04_dos')
             orb_flag = ''
@@ -528,8 +787,8 @@ def api_run_sumo(slug, stype):
                     for p in proj_data:
                         for orb in p.get('orbitals', []):
                             om[p['element']].append(orb)
-                    sumo_orb = ', '.join(f"{el} {' '.join(orbs)}"
-                                        for el, orbs in om.items())
+                    sumo_orb = '; '.join(f"{el} {' '.join(orbs)}"
+                                       for el, orbs in om.items())
                     if sumo_orb:
                         orb_flag = f'--orbitals "{sumo_orb}"'
                 except Exception:
@@ -537,11 +796,15 @@ def api_run_sumo(slug, stype):
             f.write(f'cd "{src}"\n')
             f.write(f'sumo-dosplot --prefix "{base}_total" '
                     f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format png\n')
+            f.write(f'sumo-dosplot --prefix "{base}_total" '
+                    f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format pdf\n')
             if orb_flag:
                 f.write(f'sumo-dosplot --prefix "{base}_proj" {orb_flag} '
                         f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format png\n')
+                f.write(f'sumo-dosplot --prefix "{base}_proj" {orb_flag} '
+                        f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format pdf\n')
             f.write(f'mv *_dos.* "{ana}/" 2>/dev/null || true\n')
-            f.write('echo "DOS plots saved to analysis/"\n')
+            f.write('echo "DOS plots (PNG + PDF) saved to analysis/"\n')
     os.chmod(tmp, 0o755)
     return jsonify(job_key=_launch(tmp, slug, f'sumo_{stype}'))
 
@@ -567,27 +830,41 @@ def api_summary(slug):
 INPUT_FILES    = ['INCAR', 'KPOINTS', 'POSCAR']
 READONLY_FILES = {'OUTCAR', 'OSZICAR', 'vasp.out'}
 
+def _step_dir(slug, step):
+    """Resolve the filesystem directory for a step; '_root' maps to project root."""
+    if step == '_root':
+        return _pd(slug)
+    return os.path.join(_pd(slug), step)
+
+ROOT_INPUT_FILES = ['POSCAR', 'instructions.txt', 'settings.json']
+
 @app.route('/api/files/<slug>/<step>')
 def api_files(slug, step):
     """Return list of files available in a step directory."""
-    step_dir = os.path.join(_pd(slug), step)
+    step_dir = _step_dir(slug, step)
     if not os.path.isdir(step_dir):
         return jsonify(error='Step not found'), 404
     files = []
-    # Editable input files first
-    for name in INPUT_FILES:
-        p = os.path.join(step_dir, name)
-        if os.path.isfile(p) and not os.path.islink(p):
-            files.append({'name': name, 'readonly': False})
-    # Output / log files (read-only)
-    for name in ['OUTCAR', 'OSZICAR', 'vasp.out']:
-        p = os.path.join(step_dir, name)
-        if os.path.isfile(p):
-            files.append({'name': name, 'readonly': True})
-    # Shell scripts (read-only)
-    for name in sorted(os.listdir(step_dir)):
-        if name.endswith('.sh'):
-            files.append({'name': name, 'readonly': True})
+    if step == '_root':
+        for name in ROOT_INPUT_FILES:
+            p = os.path.join(step_dir, name)
+            if os.path.isfile(p):
+                files.append({'name': name, 'readonly': False})
+    else:
+        # Editable input files first
+        for name in INPUT_FILES:
+            p = os.path.join(step_dir, name)
+            if os.path.isfile(p) and not os.path.islink(p):
+                files.append({'name': name, 'readonly': False})
+        # Output / log files (read-only)
+        for name in ['OUTCAR', 'OSZICAR', 'vasp.out']:
+            p = os.path.join(step_dir, name)
+            if os.path.isfile(p):
+                files.append({'name': name, 'readonly': True})
+        # Shell scripts (read-only)
+        for name in sorted(os.listdir(step_dir)):
+            if name.endswith('.sh'):
+                files.append({'name': name, 'readonly': True})
     return jsonify(files=files)
 
 @app.route('/api/file/<slug>/<step>/<filename>', methods=['GET', 'POST'])
@@ -595,7 +872,7 @@ def api_file(slug, step, filename):
     """GET: read a file (last 500 lines for large files). POST {content}: write it back."""
     if not re.match(r'^[\w\.\-]+$', filename):
         return jsonify(error='Invalid filename'), 400
-    path = os.path.join(_pd(slug), step, filename)
+    path = os.path.join(_step_dir(slug, step), filename)
     if not os.path.isfile(path):
         return jsonify(error='File not found'), 404
 
@@ -674,6 +951,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
 .btn-ghost{background:var(--bg);border:1px solid var(--border);color:var(--text);}
 .btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
 .btn-red{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;}
+.btn-del{background:#f3f0ff;border:1px solid #c4b5fd;color:#5b21b6;font-size:11px;padding:2px 6px;}
 .btn-sm{padding:4px 10px;font-size:12px;}
 .btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none;}
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;}
@@ -779,13 +1057,16 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
 </nav>
 
 <div id="resume-bar" style="background:#f8fafc;border-bottom:1px solid var(--border);
-     padding:7px 24px;display:flex;align-items:center;gap:10px;font-size:13px;">
+     padding:7px 24px;display:flex;align-items:center;gap:10px;font-size:13px;flex-wrap:wrap;">
   <span style="color:var(--sub);font-weight:600;">Resume project:</span>
   <select id="resume-sel" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;
           font-size:13px;background:white;color:var(--text);min-width:220px;">
     <option value="">— select existing project —</option>
   </select>
-  <button class="btn btn-ghost btn-sm" onclick="resumeProject()">Load →</button>
+  <button class="btn btn-primary btn-sm" onclick="loadProjectSettings()"
+          title="Populate Setup page with this project's settings for editing">✏ Edit &amp; Regenerate</button>
+  <button class="btn btn-ghost btn-sm" onclick="resumeProject()"
+          title="Jump directly to Workflow page without regenerating">→ Workflow</button>
   <span id="resume-msg" style="font-size:12px;color:var(--sub);"></span>
 </div>
 
@@ -794,12 +1075,63 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
 <div id="p-setup" class="panel active">
 <div id="alert-top"></div>
 
+<!-- System Setup -->
+<div class="card" id="system-setup-card">
+  <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"
+       onclick="toggleSystemSetup()">
+    <div class="card-title" style="margin:0;">⚙ System Setup
+      <span id="system-setup-badge" style="font-size:11px;font-weight:400;margin-left:8px;"></span>
+    </div>
+    <span id="system-setup-chevron" style="font-size:16px;">▼</span>
+  </div>
+  <div id="system-setup-body" style="margin-top:14px;">
+    <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">
+      Enter the paths for your system once. Click <strong>Save Settings</strong> and they will be remembered across sessions.
+    </div>
+    <div class="g2" style="margin-bottom:10px;">
+      <div class="f"><label>VASP standard binary <span style="font-weight:400;color:var(--sub);">(collinear)</span></label>
+        <input id="cfg_vasp_std" placeholder="e.g. ~/bin/vasp_std or /opt/vasp/bin/vasp_std"></div>
+      <div class="f"><label>VASP non-collinear binary <span style="font-weight:400;color:var(--sub);">(SOC)</span></label>
+        <input id="cfg_vasp_ncl" placeholder="e.g. ~/bin/vasp_ncl"></div>
+      <div class="f"><label>VASP gamma-only binary <span style="font-weight:400;color:var(--sub);">(optional, large supercells)</span></label>
+        <input id="cfg_vasp_gam" placeholder="e.g. ~/bin/vasp_gam"></div>
+      <div class="f"><label>POTCAR library directory</label>
+        <input id="cfg_potcar_dir" placeholder="e.g. /opt/vasp/potpaw_PBE.54"
+               oninput="document.getElementById('potcar_dir').value=this.value; onPotcarDir()">
+        <div style="font-size:11px;color:var(--sub);margin-top:3px;">
+          Folder that contains element sub-folders (e.g. <code>Ga/</code>, <code>As/</code> …)
+        </div></div>
+      <div class="f"><label>MPI launch command</label>
+        <input id="cfg_mpi_launch" placeholder="e.g. mpirun -np  or  srun">
+        <div style="font-size:11px;color:var(--sub);margin-top:3px;">
+          Command used before the VASP binary. Leave blank for serial.
+        </div></div>
+      <div class="f"><label>Default MPI cores</label>
+        <input id="cfg_mpi_np" type="number" min="1" placeholder="e.g. 16"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+      <button class="btn btn-primary btn-sm" onclick="saveSystemConfig()">💾 Save Settings</button>
+      <span id="cfg-save-msg" style="font-size:12px;color:var(--ok);"></span>
+    </div>
+  </div>
+</div>
+
 <!-- Project -->
 <div class="card">
   <div class="card-title">Project</div>
   <div class="g3">
     <div class="f"><label>Project Name</label>
-      <input id="project_name" value="graphene test"></div>
+      <input id="project_name" value="graphene test">
+      <div style="font-size:11px;color:var(--sub);margin-top:3px;">
+        Each unique name creates a separate project folder. Change the name to start a new project without overwriting the previous one.
+      </div></div>
+    <div class="f"><label>Execution Profile</label>
+      <select id="profile" onchange="onProfileChange()">
+        <option value="default">Default (site.env)</option>
+      </select>
+      <div style="font-size:11px;color:var(--sub);margin-top:3px;">
+        Profiles live in <code>profiles/</code>. Edit the JSON to set partition, nodes, modules, etc.
+      </div></div>
     <div class="f"><label>MPI Cores</label>
       <input id="mpi_np" type="number" value="16" min="1"></div>
     <div class="f"><label>Description (optional)</label>
@@ -828,7 +1160,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
   <div class="card-title">POTCAR</div>
   <div class="f" style="margin-bottom:10px;">
     <label>POTCAR Directory</label>
-    <input id="potcar_dir" placeholder="/path/to/PAW_PBE" oninput="onPotcarDir()">
+    <input id="potcar_dir" placeholder="uses $VASP_POTCAR_DIR if blank" oninput="onPotcarDir()">
   </div>
   <div id="potcar-status" style="font-size:12px;color:var(--sub);margin-bottom:6px;"></div>
   <div id="potcar-variants"></div>
@@ -980,6 +1312,72 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     </div>
   </div>
 
+  <!-- DFPT -->
+  <div class="task-block" id="tb-dfpt">
+    <div class="task-header" id="th-dfpt">
+      <label class="ck"><input type="checkbox" id="t_dfpt" onchange="toggleTask('dfpt',this)"> Born Charges &amp; Dielectric Constant (DFPT)</label>
+    </div>
+    <div class="task-body" id="tbody-dfpt" style="display:none">
+      <div class="g3">
+        <div class="f"><label>EDIFF (SCF convergence)</label>
+          <input id="dfpt_ediff" value="1E-8" placeholder="1E-8"></div>
+      </div>
+      <div style="font-size:11px;color:var(--sub);margin-top:6px;">
+        Runs VASP DFPT (IBRION=8, LEPSILON=.TRUE.) to compute Born effective charges and the macroscopic static dielectric tensor. Results are written to OUTCAR and extracted to a <code>BORN</code> file for phonon LO-TO splitting.
+      </div>
+    </div>
+  </div>
+
+  <!-- Phonons -->
+  <div class="task-block" id="tb-phonons">
+    <div class="task-header" id="th-phonons">
+      <label class="ck"><input type="checkbox" id="t_phonons" onchange="toggleTask('phonons',this)"> Phonon Spectrum (phonopy)</label>
+    </div>
+    <div class="task-body" id="tbody-phonons" style="display:none">
+      <div class="g3">
+        <div class="f"><label>Supercell dimensions</label>
+          <input id="phonons_dim" value="2 2 2" placeholder="2 2 2"></div>
+        <div class="f"><label>DOS q-mesh</label>
+          <input id="phonons_mesh" value="20 20 20" placeholder="20 20 20"></div>
+        <div class="f"><label>Displacement (Å)</label>
+          <input id="phonons_disp" type="number" value="0.01" step="0.001" min="0.001"></div>
+      </div>
+      <div class="g3" style="margin-top:8px;">
+        <div class="f" style="grid-column:1/-1">
+          <label>Q-path for band structure (phonopy format, leave blank to use k-path above)</label>
+          <input id="phonons_band" placeholder="e.g.  0 0 0  0.5 0 0  0.5 0.5 0  0 0 0"></div>
+      </div>
+      <div style="margin-top:10px;">
+        <label class="ck"><input type="checkbox" id="phonons_nac" checked>
+          NAC correction (LO-TO splitting) — requires Born charges from DFPT step above</label>
+      </div>
+      <div style="font-size:11px;color:var(--sub);margin-top:6px;">
+        Requires <code>phonopy</code> (conda install -c conda-forge phonopy). Generates displaced supercells, runs VASP forces on each, then computes phonon band structure and DOS. For 2D: use dim <code>2 2 1</code>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Wannierization -->
+  <div class="task-block" id="tb-wannier">
+    <div class="task-header" id="th-wannier">
+      <label class="ck"><input type="checkbox" id="t_wannier" onchange="toggleTask('wannier',this)"> Wannierization (Wannier90)</label>
+    </div>
+    <div class="task-body" id="tbody-wannier" style="display:none">
+      <div class="g3">
+        <div class="f"><label>Num. Wannier functions</label>
+          <input id="wannier_num_wann" type="number" value="8" min="1"></div>
+        <div class="f"><label>Projections (e.g. Mo:d, S:p)</label>
+          <input id="wannier_proj" placeholder="Mo:d, S:p"></div>
+        <div class="f"><label>Energy window (eV, e.g. -4:12)</label>
+          <input id="wannier_ewin" placeholder="-4:12"></div>
+      </div>
+      <div style="font-size:11px;color:var(--sub);margin-top:6px;">
+        Requires Wannier90 installed. VASP writes .mmn/.amn/.eig via LWANNIER90=.TRUE.;
+        wannier90.win is auto-generated. Edit it before running 05_wannier.
+      </div>
+    </div>
+  </div>
+
 </div><!-- end tasks card -->
 
 <button class="btn btn-primary" id="btn-gen" onclick="generate()" style="margin-top:4px;">
@@ -1023,8 +1421,15 @@ let _charts={}, ELEMENTS=[];
 let POTCAR_VARIANTS={}, POTCAR_CHOICES={}, _potcarTimer=null, _sumoES=null;
 
 window.addEventListener('DOMContentLoaded', () => {
-  // Set form defaults from CONFIG
-  const s = (id,v) => { const el=document.getElementById(id); if(el) el.value=v; };
+  const s = (id,v) => { const el=document.getElementById(id); if(el&&v) el.value=v; };
+  // System Setup fields
+  s('cfg_vasp_std',    CFG.vasp_std);
+  s('cfg_vasp_ncl',    CFG.vasp_ncl);
+  s('cfg_vasp_gam',    CFG.vasp_gam);
+  s('cfg_mpi_launch',  CFG.mpi_launch);
+  s('cfg_mpi_np',      CFG.mpi_np);
+  s('cfg_potcar_dir',  CFG.potcar_dir);
+  // Calculation defaults
   s('potcar_dir',      CFG.potcar_dir);
   s('kpath',           CFG.kpath);
   s('nkpts_bands',     CFG.nkpts_bands);
@@ -1033,14 +1438,87 @@ window.addEventListener('DOMContentLoaded', () => {
   s('mpi_np',          CFG.mpi_np);
   s('manual_encut',    CFG.encut_manual);
   if(CFG.potcar_dir) fetchPotcarVariants();
+  // First-run: expand System Setup and show banner
+  if(CFG.first_run){
+    document.getElementById('system-setup-body').style.display='block';
+    document.getElementById('system-setup-chevron').textContent='▲';
+    alertTop('👋 First time? Fill in System Setup above and click Save Settings before generating a workflow.','info');
+  } else {
+    document.getElementById('system-setup-body').style.display='none';
+    document.getElementById('system-setup-chevron').textContent='▶';
+    const badge=document.getElementById('system-setup-badge');
+    if(badge) badge.textContent='(saved)';
+  }
   populateResumeList();
+  populateProfileList();
 });
+
+function toggleSystemSetup(){
+  const body=document.getElementById('system-setup-body');
+  const chev=document.getElementById('system-setup-chevron');
+  const hidden=body.style.display==='none';
+  body.style.display=hidden?'block':'none';
+  chev.textContent=hidden?'▲':'▶';
+}
+
+async function saveSystemConfig(){
+  const v=id=>document.getElementById(id)?.value||'';
+  const body={
+    vasp_std:    v('cfg_vasp_std'),
+    vasp_ncl:    v('cfg_vasp_ncl'),
+    vasp_gam:    v('cfg_vasp_gam'),
+    mpi_launch:  v('cfg_mpi_launch'),
+    mpi_np:      parseInt(v('cfg_mpi_np'))||1,
+    wannier90_x: 'wannier90.x',
+    potcar_dir:  v('cfg_potcar_dir'),
+  };
+  // Sync to the calculation fields too
+  document.getElementById('mpi_np').value   = body.mpi_np;
+  document.getElementById('potcar_dir').value = body.potcar_dir;
+  const r=await post('/api/config', body);
+  const msg=document.getElementById('cfg-save-msg');
+  if(r.ok){
+    msg.textContent='✓ Saved';
+    document.getElementById('system-setup-badge').textContent='(saved)';
+    setTimeout(()=>{msg.textContent='';},3000);
+    if(CFG.potcar_dir !== body.potcar_dir){ CFG.potcar_dir=body.potcar_dir; fetchPotcarVariants(); }
+  } else {
+    msg.style.color='var(--err)'; msg.textContent='✗ Save failed';
+  }
+}
+
+async function populateProfileList(){
+  try{
+    const{profiles}=await(await fetch('/api/profiles')).json();
+    const sel=document.getElementById('profile');
+    sel.innerHTML='';
+    profiles.forEach(p=>{
+      const opt=document.createElement('option');
+      opt.value=p.id; opt.textContent=p.name;
+      sel.appendChild(opt);
+    });
+  }catch{}
+}
+
+async function onProfileChange(){
+  const pid=document.getElementById('profile').value;
+  if(!pid||pid==='default') return;
+  try{
+    const{profiles}=await(await fetch('/api/profiles')).json();
+    const prof=profiles.find(p=>p.id===pid);
+    if(prof&&prof.mpi_np){
+      document.getElementById('mpi_np').value=prof.mpi_np;
+    }
+  }catch{}
+}
 
 async function populateResumeList(){
   try{
     const{projects}=await(await fetch('/api/projects')).json();
     const sel=document.getElementById('resume-sel');
     if(!sel) return;
+    const prev=sel.value;
+    sel.innerHTML='<option value="">— select existing project —</option>';
     projects.forEach(p=>{
       const opt=document.createElement('option');
       opt.value=p.slug;
@@ -1049,24 +1527,135 @@ async function populateResumeList(){
       opt.dataset.steps=JSON.stringify(p.steps);
       sel.appendChild(opt);
     });
+    if(prev) sel.value=prev;  // restore selection if still present
   }catch{}
 }
 
 async function resumeProject(){
+  // Jump directly to Workflow tab for an existing project (no regeneration)
   const sel=document.getElementById('resume-sel');
   const msg=document.getElementById('resume-msg');
   const slug=sel.value;
   if(!slug){if(msg) msg.textContent='Select a project first.'; return;}
-  const opt=sel.options[sel.selectedIndex];
-  const steps=JSON.parse(opt.dataset.steps||'[]');
-  const hasConv=opt.dataset.hasConv==='true';
-  PROJECT=slug;
-  HAS_CONV=hasConv;
-  document.getElementById('proj-label').textContent='Project: '+PROJECT+'/';
-  if(msg) msg.textContent='✓ loaded';
-  buildWorkflow(steps, hasConv);
-  goTab('workflow');
-  refreshStatus();
+  if(msg) msg.textContent='Loading…';
+  try{
+    const{projects}=await(await fetch('/api/projects')).json();
+    const proj=projects.find(p=>p.slug===slug);
+    if(!proj){if(msg) msg.textContent='Project not found on disk.'; return;}
+    PROJECT=slug; HAS_CONV=proj.has_convergence;
+    document.getElementById('proj-label').textContent='Project: '+PROJECT+'/';
+    if(msg) msg.textContent='✓ loaded';
+    buildWorkflow(proj.steps, proj.has_convergence);
+    goTab('workflow');
+    refreshStatus();
+  }catch(e){if(msg) msg.textContent='Error: '+e.message;}
+}
+
+async function loadProjectSettings(){
+  // Populate Setup page fields from saved settings.json, stay on Setup tab
+  const sel=document.getElementById('resume-sel');
+  const msg=document.getElementById('resume-msg');
+  const slug=sel.value;
+  if(!slug){if(msg) msg.textContent='Select a project first.'; return;}
+  if(msg) msg.textContent='Loading…';
+  try{
+    const r=await fetch(`/api/project_settings/${slug}`);
+    const{settings,poscar}=await r.json();
+    if(!r.ok){if(msg) msg.textContent='Error loading settings.'; return;}
+
+    const s=(id,val)=>{const el=document.getElementById(id);if(el&&val!==undefined&&val!==null)el.value=val;};
+    const c=(id,val)=>{const el=document.getElementById(id);if(el)el.checked=!!val;};
+
+    // Basic fields
+    if(poscar) s('poscar', poscar);
+    s('project_name', (settings.project_name||'') + '_new');
+    s('potcar_dir',   settings.potcar_dir);
+    s('functional',   settings.functional);
+    s('spin_mode',    settings.spin_mode);
+    c('hexagonal',    settings.hexagonal);
+    c('is_2d',        settings.is_2d);
+    s('mpi_np',       settings.mpi_np);
+
+    // GGA+U
+    c('use_u', settings.use_u);
+    toggleU(document.getElementById('use_u'));
+    if(settings.use_u && settings.u_entries?.length){
+      document.getElementById('u-rows').innerHTML='';
+      settings.u_entries.forEach(e=>addURow(e.element||'',e.orbital||'d',e.U||'3.0'));
+    }
+
+    // Param mode
+    if(settings.param_mode) setMode(settings.param_mode);
+    s('conv_kp',         settings.conv_kp);
+    s('conv_encut',      settings.conv_encut);
+    s('manual_encut',    settings.manual_encut);
+    s('manual_kmesh_scf',settings.manual_kmesh_scf);
+    s('manual_kmesh_dos',settings.manual_kmesh_dos);
+
+    // Task checkboxes + body visibility
+    const tasks=['relax','scf','bands','dos','dfpt','phonons','wannier'];
+    tasks.forEach(t=>{
+      const cb=document.getElementById('t_'+t);
+      if(cb){
+        const on=!!settings[t];
+        cb.checked=on;
+        const body=document.getElementById('tbody-'+t);
+        if(body) body.style.display=on?'block':'none';
+      }
+    });
+
+    // Relaxation params
+    s('relax_type', settings.relax_type);
+    s('nsw',        settings.nsw);
+    s('ediffg',     settings.ediffg);
+
+    // Bands params
+    s('kpath',       settings.kpath);
+    s('nkpts_bands', settings.nkpts_bands);
+    s('ewin',        settings.ewin || '-4 to 4');
+
+    // DOS projections
+    document.getElementById('proj-rows').innerHTML='';
+    if(settings.dos_proj?.length){
+      settings.dos_proj.forEach(p=>{
+        addProjRow();
+        const rows=document.querySelectorAll('#proj-rows .proj-row');
+        const row=rows[rows.length-1];
+        const sel2=row.querySelector('.proj-el-sel');
+        if(sel2){
+          // Add element option if not already present
+          if(![...sel2.options].some(o=>o.value===p.element)){
+            sel2.innerHTML+=`<option>${p.element}</option>`;
+          }
+          sel2.value=p.element;
+        }
+        row.querySelectorAll('[data-orb]').forEach(cb2=>{
+          cb2.checked=p.orbitals?.includes(cb2.dataset.orb)||false;
+        });
+      });
+    }
+
+    // DFPT params
+    s('dfpt_ediff', settings.dfpt_ediff);
+
+    // Phonons params
+    s('phonons_dim',  settings.phonons_dim);
+    s('phonons_mesh', settings.phonons_mesh);
+    s('phonons_disp', settings.phonons_disp);
+    s('phonons_band', settings.phonons_band);
+    c('phonons_nac',  settings.phonons_nac !== false);
+
+    // Wannier params
+    s('wannier_num_wann', settings.wannier_num_wann);
+    s('wannier_proj',     settings.wannier_proj);
+    s('wannier_ewin',     settings.wannier_ewin);
+
+    if(poscar) onPoscar();
+    if(settings.potcar_dir) fetchPotcarVariants();
+
+    if(msg) msg.textContent='✓ settings restored — edit then click Generate Workflow';
+    goTab('setup');
+  }catch(e){if(msg) msg.textContent='Error: '+e.message;}
 }
 
 // ── tabs ───────────────────────────────────────────────────────────────────
@@ -1195,7 +1784,7 @@ function addURow(el='',orb='d',U='3.0'){
       </select></div>
     <div class="f"><label>U (eV)</label>
       <input type="number" value="${U}" step="0.5" min="0"></div>
-    <button class="btn btn-red btn-sm" onclick="this.parentElement.remove()" style="margin-bottom:2px;">✕</button>`;
+    <button class="btn btn-del" onclick="this.parentElement.remove()" style="margin-bottom:2px;">✕</button>`;
   c.appendChild(div);
 }
 function getUEntries(){
@@ -1232,7 +1821,7 @@ function addProjRow(){
         <label class="ck"><input type="checkbox" data-orb="d"> d</label>
         <label class="ck"><input type="checkbox" data-orb="f"> f</label>
       </div></div>
-    <button class="btn btn-red btn-sm" onclick="this.parentElement.remove()" style="align-self:end;">✕</button>`;
+    <button class="btn btn-del" onclick="this.parentElement.remove()" style="align-self:end;">✕</button>`;
   c.appendChild(div);
 }
 function getProjEntries(){
@@ -1287,9 +1876,26 @@ async function generate(){
     // bands
     kpath:        v('kpath'),
     nkpts_bands:  parseInt(v('nkpts_bands'))||60,
+    ewin:         v('ewin'),
     // dos
     dos_proj:     getProjEntries(),
+    // dfpt
+    dfpt:       chk('t_dfpt'),
+    dfpt_ediff: v('dfpt_ediff')||'1E-8',
+    // phonons
+    phonons:       chk('t_phonons'),
+    phonons_dim:   v('phonons_dim')||'2 2 2',
+    phonons_mesh:  v('phonons_mesh')||'20 20 20',
+    phonons_disp:  parseFloat(v('phonons_disp'))||0.01,
+    phonons_band:  v('phonons_band'),
+    phonons_nac:   chk('phonons_nac'),
+    // wannier
+    wannier:          chk('t_wannier'),
+    wannier_num_wann: parseInt(v('wannier_num_wann'))||8,
+    wannier_proj:     v('wannier_proj'),
+    wannier_ewin:     v('wannier_ewin'),
     mpi_np:       parseInt(v('mpi_np'))||1,
+    profile:      v('profile'),
   };
 
   try{
@@ -1299,6 +1905,7 @@ async function generate(){
     PROJECT=d.project; HAS_CONV=d.has_convergence;
     document.getElementById('proj-label').textContent='Project: '+PROJECT+'/';
     buildWorkflow(d.steps,d.has_convergence);
+    populateResumeList();
     goTab('workflow');
   }catch(e){alertTop('Error: '+e.message,'error');}
   finally{
@@ -1309,6 +1916,16 @@ async function generate(){
 
 // ── build workflow panel ───────────────────────────────────────────────────
 function buildWorkflow(steps,hasConv){
+  if(!steps.length){
+    document.getElementById('wf').innerHTML=`
+      <div class="alert alert-info" style="margin-bottom:14px;">
+        Folder: <strong>${PROJECT}/</strong> &nbsp;·&nbsp; No workflow steps yet
+      </div>
+      <div>
+        <button class="btn btn-ghost btn-sm" onclick="openFiles('_root')">📂 Browse / Edit Files</button>
+      </div>`;
+    return;
+  }
   const prod=steps.filter(s=>!s.startsWith('00'));
   let h=`<div class="alert alert-info" style="margin-bottom:14px;">
     Output: <strong>${PROJECT}/</strong> &nbsp;·&nbsp; ${steps.length} step(s) generated
@@ -1354,10 +1971,19 @@ function buildWorkflow(steps,hasConv){
 
 function stepRow(step,num,label){
   const showFiles = !step.startsWith('00') && step !== 'convergence';
+  const extraFiles =
+    step === '05_wannier'
+      ? `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','wannier90.win')">🔧 wannier90.win</button>`
+    : step === '06_dfpt'
+      ? `<button class="btn btn-ghost btn-sm" onclick="showBornCharges()">⚛ Born charges</button>`
+    : step === '07_phonons'
+      ? `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','band.conf')">🎵 band.conf</button>` +
+        `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','mesh.conf')">📊 mesh.conf</button>`
+    : '';
   const fileBtns  = showFiles
     ? STEP_FILES.map(f =>
         `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','${f.name}')">${f.icon} ${f.name}</button>`
-      ).join('')
+      ).join('') + extraFiles
     : '';
   return `<div class="step-row" id="row-${step}">
     <div class="step-icon">${num}</div>
@@ -1447,10 +2073,16 @@ setInterval(()=>{
 // ── convergence charts ─────────────────────────────────────────────────────
 async function loadConvPlots(suffix){
   const el=document.getElementById(`conv-plots-${suffix}`);
-  if(!el) return;
+  if(!el||!PROJECT) return;
   el.innerHTML=`
-    <div class="card"><div class="card-title">ENCUT</div><div style="position:relative;height:180px;"><canvas id="cc-encut-${suffix}"></canvas></div></div>
-    <div class="card"><div class="card-title">K-points</div><div style="position:relative;height:180px;"><canvas id="cc-kp-${suffix}"></canvas></div></div>`;
+    <div class="card"><div class="card-title">ENCUT</div>
+      <div style="position:relative;height:180px;"><canvas id="cc-encut-${suffix}"></canvas></div>
+      <a href="/api/convergence_pdf/${PROJECT}/encut" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ PDF</a>
+    </div>
+    <div class="card"><div class="card-title">K-points</div>
+      <div style="position:relative;height:180px;"><canvas id="cc-kp-${suffix}"></canvas></div>
+      <a href="/api/convergence_pdf/${PROJECT}/kpoints" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ PDF</a>
+    </div>`;
   convChart('encut',  `cc-encut-${suffix}`,'#7c3aed');
   convChart('kpoints',`cc-kp-${suffix}`,  '#0ea5e9');
 }
@@ -1493,8 +2125,9 @@ async function buildResults(){
   // ── band structure ─────────────────────────────────────────────────────
   h+=`<div class="card">
     <div class="card-title">Band Structure</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="runSumo('bands')">▶ Run sumo-bandplot</button>
+      <a href="/api/plot_pdf/${PROJECT}/bands" class="btn btn-ghost btn-sm" download title="Download PDF">⬇ PDF</a>
     </div>
     <div id="log-sumo-bands" class="term hidden sumo-log"></div>
     <div style="text-align:center;">
@@ -1507,8 +2140,10 @@ async function buildResults(){
   // ── DOS (total + projected side by side) ──────────────────────────────
   h+=`<div class="card">
     <div class="card-title">Density of States</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="runSumo('dos')">▶ Run sumo-dosplot</button>
+      <a href="/api/plot_pdf/${PROJECT}/dos_total" class="btn btn-ghost btn-sm" download title="Download total DOS PDF">⬇ Total PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/dos_proj"  class="btn btn-ghost btn-sm" download title="Download projected DOS PDF">⬇ Proj PDF</a>
     </div>
     <div id="log-sumo-dos" class="term hidden sumo-log"></div>
     <div class="plot-grid">
@@ -1529,12 +2164,54 @@ async function buildResults(){
     </div>
   </div>`;
 
+  // ── Born charges + dielectric ──────────────────────────────────────────
+  h+=`<div class="card" id="card-born">
+    <div class="card-title">Born Effective Charges &amp; Dielectric Tensor</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="loadBornCharges()">▶ Extract from OUTCAR</button>
+    </div>
+    <div id="born-output" style="font-family:monospace;font-size:12px;white-space:pre;
+         background:var(--code-bg,#f5f5f5);padding:10px;border-radius:6px;
+         max-height:300px;overflow:auto;display:none;"></div>
+    <div id="born-placeholder" style="color:var(--sub);font-size:12px;">
+      Run 06_dfpt then click Extract to view Born charges and dielectric tensor.</div>
+  </div>`;
+
+  // ── Phonon spectrum ─────────────────────────────────────────────────────
+  h+=`<div class="card">
+    <div class="card-title">Phonon Spectrum</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <a href="/api/phonon_plot_pdf/${PROJECT}/band" class="btn btn-ghost btn-sm" download>⬇ Band PDF</a>
+      <a href="/api/phonon_plot_pdf/${PROJECT}/dos"  class="btn btn-ghost btn-sm" download>⬇ DOS PDF</a>
+    </div>
+    <div class="plot-grid">
+      <div class="plot-card">
+        <h4>Phonon Band Structure</h4>
+        <img src="/api/phonon_plot/${PROJECT}/band?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Phonon Band Structure</h4><div class=no-plot>Not available — run 07_phonons</div>'">
+      </div>
+      <div class="plot-card">
+        <h4>Phonon DOS</h4>
+        <img src="/api/phonon_plot/${PROJECT}/dos?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Phonon DOS</h4><div class=no-plot>Not available — run 07_phonons</div>'">
+      </div>
+    </div>
+  </div>`;
+
   // ── convergence ────────────────────────────────────────────────────────
   if(HAS_CONV){
     h+=`<div class="card"><div class="card-title">Convergence</div>
       <div class="g2">
-        <div style="position:relative;height:200px;"><canvas id="rc-encut"></canvas></div>
-        <div style="position:relative;height:200px;"><canvas id="rc-kp"></canvas></div>
+        <div>
+          <div style="position:relative;height:200px;"><canvas id="rc-encut"></canvas></div>
+          <a href="/api/convergence_pdf/${PROJECT}/encut" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ ENCUT PDF</a>
+        </div>
+        <div>
+          <div style="position:relative;height:200px;"><canvas id="rc-kp"></canvas></div>
+          <a href="/api/convergence_pdf/${PROJECT}/kpoints" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ K-points PDF</a>
+        </div>
       </div></div>`;
   }
 
@@ -1569,6 +2246,25 @@ async function rerunSumo(){
   if(!PROJECT) return;
   await fetch('/api/clear_plots/'+PROJECT);
   buildResults();
+}
+
+async function loadBornCharges(){
+  if(!PROJECT) return;
+  const out=document.getElementById('born-output');
+  const ph =document.getElementById('born-placeholder');
+  if(out) out.textContent='Loading…';
+  if(out) out.style.display='block';
+  if(ph)  ph.style.display='none';
+  try{
+    const d=await(await fetch(`/api/born_charges/${PROJECT}`)).json();
+    if(d.error){if(out) out.textContent='ERROR: '+d.error; return;}
+    if(out) out.textContent=d.text;
+  }catch(e){if(out) out.textContent='Error: '+e.message;}
+}
+
+function showBornCharges(){
+  goTab('results');
+  buildResults().then(()=>loadBornCharges());
 }
 
 async function runSumo(stype){

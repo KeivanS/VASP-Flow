@@ -63,9 +63,24 @@ def link_potcar(calc_dir, potcar_path):
 
 
 # ── agent ─────────────────────────────────────────────────────────────────
+def load_profile(profile_name: str) -> dict:
+    """Load a JSON profile from the profiles/ directory next to this script."""
+    if not profile_name:
+        return {}
+    profiles_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profiles')
+    path = os.path.join(profiles_dir, f'{profile_name}.json')
+    if not os.path.isfile(path):
+        print(f"WARNING: profile '{profile_name}' not found at {path}; using defaults.")
+        return {}
+    with open(path) as f:
+        data = json.load(f)
+    # Strip comment keys
+    return {k: v for k, v in data.items() if not k.startswith('_')}
+
+
 class VASPWorkflowAgent:
 
-    def __init__(self, instructions_file, poscar_file):
+    def __init__(self, instructions_file, poscar_file, profile: dict = None):
         self.cwd = os.getcwd()
 
         print("\n" + "="*58)
@@ -88,7 +103,8 @@ class VASPWorkflowAgent:
 
         self.poscar_file = os.path.abspath(poscar_file)
         self.inst_file   = os.path.abspath(instructions_file)
-        self.generator   = VASPInputGenerator(self.poscar_file, inst)
+        self.profile     = profile or {}
+        self.generator   = VASPInputGenerator(self.poscar_file, inst, profile=self.profile)
 
         os.makedirs(self.project_dir, exist_ok=True)
         shutil.copy(self.inst_file,   self.project_dir)
@@ -150,6 +166,31 @@ class VASPWorkflowAgent:
             link_potcar(d, potcar_path)
             calc_dirs['dos'] = d
             print(f"  04_dos/      INCAR  KPOINTS  POTCAR  run.sh")
+
+        if 'wannier' in tasks:
+            d = os.path.join(pd, '05_wannier')
+            scf_d = calc_dirs.get('scf', os.path.join(pd, '02_scf'))
+            self.generator.generate_wannier_input(d, scf_d)
+            link_potcar(d, potcar_path)
+            calc_dirs['wannier'] = d
+            print(f"  05_wannier/  INCAR  KPOINTS  wannier90.win  POTCAR  run.sh")
+
+        if 'dfpt' in tasks:
+            d = os.path.join(pd, '06_dfpt')
+            scf_d = calc_dirs.get('scf', os.path.join(pd, '02_scf'))
+            self.generator.generate_dfpt_input(d, scf_d)
+            link_potcar(d, potcar_path)
+            calc_dirs['dfpt'] = d
+            print(f"  06_dfpt/     INCAR  KPOINTS  POTCAR  run.sh  extract_born.py")
+
+        if 'phonons' in tasks:
+            d = os.path.join(pd, '07_phonons')
+            scf_d   = calc_dirs.get('scf',  os.path.join(pd, '02_scf'))
+            dfpt_d  = calc_dirs.get('dfpt', None)
+            self.generator.generate_phonons_input(d, scf_d, dfpt_d)
+            link_potcar(d, potcar_path)
+            calc_dirs['phonons'] = d
+            print(f"  07_phonons/  INCAR  KPOINTS  POTCAR  band.conf  mesh.conf  run.sh")
 
         # ── convergence tests ─────────────────────────────────────────────
         conv = inst.get('convergence', {})
@@ -217,7 +258,7 @@ class VASPWorkflowAgent:
     def _gen_run_all(self, calc_dirs):
         """Single run_all.sh for the no-convergence case."""
         path = os.path.join(self.project_dir, 'run_all.sh')
-        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos'] if k in calc_dirs]
+        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons'] if k in calc_dirs]
         with open(path, 'w') as f:
             f.write("#!/bin/bash\n")
             f.write(f"# Run all calculations for: {self.project_label}\n\n")
@@ -273,10 +314,10 @@ class VASPWorkflowAgent:
     def _gen_run_calculations(self, calc_dirs):
         """PHASE 2 script — patches ENCUT/KPOINTS from user input then runs calculations."""
         path = os.path.join(self.project_dir, 'run_calculations.sh')
-        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos'] if k in calc_dirs]
+        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons'] if k in calc_dirs]
         # directories that use an automatic k-mesh (not line-mode)
         auto_kpoints_dirs = [os.path.basename(calc_dirs[k])
-                             for k in ordered_keys if k != 'bands']
+                             for k in ordered_keys if k not in ('bands',)]
 
         with open(path, 'w') as f:
             f.write("#!/bin/bash\n")
@@ -643,6 +684,9 @@ POTCAR is built once from $VASP_POTCAR_DIR (set in ~/.bash_profile).
                     help='Instruction file (default: instructions.txt)')
     ap.add_argument('-s','--poscar',       default='POSCAR',
                     help='POSCAR file       (default: POSCAR)')
+    ap.add_argument('-p','--profile',      default='',
+                    help='Execution profile name (e.g. slurm, workstation). '
+                         'Loads profiles/<name>.json next to this script.')
     args = ap.parse_args()
 
     for fpath, label in [(args.instructions,'instructions'), (args.poscar,'POSCAR')]:
@@ -650,8 +694,9 @@ POTCAR is built once from $VASP_POTCAR_DIR (set in ~/.bash_profile).
             print(f"ERROR: {label} file not found: {os.path.abspath(fpath)}")
             sys.exit(1)
 
+    profile = load_profile(args.profile)
     try:
-        VASPWorkflowAgent(args.instructions, args.poscar).run()
+        VASPWorkflowAgent(args.instructions, args.poscar, profile=profile).run()
     except SystemExit:
         raise
     except Exception as e:
