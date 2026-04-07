@@ -25,32 +25,48 @@ _jlock = threading.Lock()
 
 # ── defaults: env vars first, then hardcoded fallbacks ───────────────────────
 CONFIG = {
-    # system — overridden by config.json if present
-    'vasp_std':     os.environ.get('VASP_STD',    ''),
-    'vasp_ncl':     os.environ.get('VASP_NCL',    ''),
-    'vasp_gam':     os.environ.get('VASP_GAM',    ''),
-    'mpi_launch':   os.environ.get('MPI_LAUNCH',  'mpirun -np'),
-    'mpi_np':       int(os.environ.get('MPI_NP',  '1')),
-    'wannier90_x':  os.environ.get('WANNIER90_X', 'wannier90.x'),
-    'potcar_dir':   os.environ.get('VASP_POTCAR_DIR', ''),
-    # calculation defaults
-    'kpath':        'G-M-K-G',
-    'nkpts_bands':  60,
-    'nsw':          100,
-    'ediffg':       '-0.01',
-    'encut_manual': 520,
-    'band_ymin':    '-4',
-    'band_ymax':    '4',
-    'dos_xmin':     '-6',
-    'dos_xmax':     '6',
+    # execution mode
+    'profile_mode':           'workstation',   # 'workstation' | 'slurm'
+    # system paths
+    'vasp_std':               os.environ.get('VASP_STD',        ''),
+    'vasp_ncl':               os.environ.get('VASP_NCL',        ''),
+    'vasp_gam':               os.environ.get('VASP_GAM',        ''),
+    'mpi_launch':             os.environ.get('MPI_LAUNCH',      'mpirun -np'),
+    'mpi_np':                 int(os.environ.get('MPI_NP',      '1')),
+    'wannier90_x':            os.environ.get('WANNIER90_X',     'wannier90.x'),
+    'potcar_dir':             os.environ.get('VASP_POTCAR_DIR', ''),
+    # SLURM settings
+    'slurm_partition':        'standard',
+    'slurm_nodes':            2,
+    'slurm_ntasks_per_node':  64,
+    'slurm_time':             '12:00:00',
+    'slurm_account':          '',
+    'slurm_mpi_cmd':          'srun',
+    # physics defaults
+    'kpath':                  'G-M-K-G',
+    'nkpts_bands':            60,
+    'nsw':                    100,
+    'ediffg':                 '-0.01',
+    'encut_manual':           520,
+    'band_ymin':              '-4',
+    'band_ymax':              '4',
+    'dos_xmin':               '-6',
+    'dos_xmax':               '6',
 }
 
-# ── load saved user config (config.json in working directory) ─────────────────
-_config_path = os.path.join(PROJECTS_DIR, 'config.json')
-_first_run   = not os.path.isfile(_config_path)
+# ── load saved settings (settings.json in working directory) ──────────────────
+_settings_path = os.path.join(PROJECTS_DIR, 'settings.json')
+# Migrate legacy config.json → settings.json on first startup after upgrade
+_legacy_config = os.path.join(PROJECTS_DIR, 'config.json')
+if not os.path.isfile(_settings_path) and os.path.isfile(_legacy_config):
+    try:
+        shutil.copy2(_legacy_config, _settings_path)
+    except Exception:
+        pass
+_first_run = not os.path.isfile(_settings_path)
 if not _first_run:
     try:
-        _saved = json.loads(Path(_config_path).read_text())
+        _saved = json.loads(Path(_settings_path).read_text())
         CONFIG.update({k: v for k, v in _saved.items() if k in CONFIG})
     except Exception:
         pass
@@ -98,16 +114,42 @@ def index():
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
-    """GET: return current system config. POST {key:val}: save to config.json."""
-    sys_keys = ['vasp_std','vasp_ncl','vasp_gam','mpi_launch','mpi_np',
-                'wannier90_x','potcar_dir']
+    """GET: return full config. POST {key:val}: save all keys to settings.json."""
     if request.method == 'GET':
-        return jsonify({k: CONFIG[k] for k in sys_keys})
+        return jsonify(dict(CONFIG))
     data = request.json or {}
-    for k in sys_keys:
+    for k in CONFIG:
         if k in data:
-            CONFIG[k] = data[k]
-    Path(_config_path).write_text(json.dumps({k: CONFIG[k] for k in sys_keys}, indent=2))
+            try:
+                CONFIG[k] = type(CONFIG[k])(data[k])
+            except (TypeError, ValueError):
+                CONFIG[k] = data[k]
+    Path(_settings_path).write_text(json.dumps(CONFIG, indent=2))
+    # Keep profiles/slurm.json in sync so vasp-agent.py can still read it
+    slurm_profile = {
+        '_comment': 'Auto-generated from settings.json — edit settings.json instead.',
+        'name':            'SLURM HPC',
+        'vasp_std':        CONFIG['vasp_std'],
+        'vasp_ncl':        CONFIG['vasp_ncl'],
+        'vasp_gam':        CONFIG['vasp_gam'],
+        'wannier90_x':     CONFIG['wannier90_x'],
+        'mpi_cmd':         CONFIG['slurm_mpi_cmd'],
+        'mpi_np':          CONFIG['slurm_nodes'] * CONFIG['slurm_ntasks_per_node'],
+        'modules':         [],
+        'slurm': {
+            'partition':        CONFIG['slurm_partition'],
+            'nodes':            CONFIG['slurm_nodes'],
+            'ntasks_per_node':  CONFIG['slurm_ntasks_per_node'],
+            'time':             CONFIG['slurm_time'],
+            'account':          CONFIG['slurm_account'],
+            'output':           'slurm-%j.out',
+            'error':            'slurm-%j.err',
+        },
+    }
+    profiles_dir = os.path.join(APP_DIR, 'profiles')
+    os.makedirs(profiles_dir, exist_ok=True)
+    Path(os.path.join(profiles_dir, 'slurm.json')).write_text(
+        json.dumps(slurm_profile, indent=2))
     return jsonify(ok=True)
 
 @app.route('/api/generate', methods=['POST'])
@@ -264,24 +306,24 @@ def api_generate():
     if dos_proj and os.path.isdir(_pd(slug)):
         Path(os.path.join(_pd(slug), 'dos_proj.json')).write_text(json.dumps(dos_proj))
 
-    # Save full settings so the Setup page can be restored on resume
+    # Save project form data so the Setup page can be restored on resume
     if os.path.isdir(_pd(slug)):
-        Path(os.path.join(_pd(slug), 'settings.json')).write_text(json.dumps(d))
+        Path(os.path.join(_pd(slug), 'project.json')).write_text(json.dumps(d))
 
     return jsonify(ok=True, project=slug, steps=_steps(slug),
                    has_convergence=has_conv, output=result.stdout)
 
 @app.route('/api/project_settings/<slug>')
 def api_project_settings(slug):
-    """Return saved settings.json + POSCAR for a project so Setup can be pre-populated."""
+    """Return saved project.json + POSCAR for a project so Setup can be pre-populated."""
     pd_ = _pd(slug)
-    settings_file = os.path.join(pd_, 'settings.json')
-    poscar_file   = os.path.join(pd_, 'POSCAR')
+    proj_file   = os.path.join(pd_, 'project.json')
+    poscar_file = os.path.join(pd_, 'POSCAR')
     if not os.path.isdir(pd_):
         return jsonify(error='Project not found'), 404
     settings = {}
-    if os.path.exists(settings_file):
-        try: settings = json.loads(Path(settings_file).read_text())
+    if os.path.exists(proj_file):
+        try: settings = json.loads(Path(proj_file).read_text())
         except Exception: pass
     poscar = ''
     if os.path.exists(poscar_file):
@@ -413,9 +455,9 @@ def api_outcar(slug, step):
     return jsonify(tail=tail, info=info)
 
 def _band_plot_opts(slug):
-    """Return (ymin, ymax, labels_str|None) from project settings.json."""
+    """Return (ymin, ymax, labels_str|None) from project.json."""
     ymin, ymax, labels = CONFIG['band_ymin'], CONFIG['band_ymax'], None
-    sf = os.path.join(_pd(slug), 'settings.json')
+    sf = os.path.join(_pd(slug), 'project.json')
     if os.path.exists(sf):
         try:
             d = json.loads(Path(sf).read_text())
@@ -557,7 +599,7 @@ def api_projects():
             steps = _steps(name)
             has_poscar_or_settings = (
                 os.path.isfile(os.path.join(full, 'POSCAR')) or
-                os.path.isfile(os.path.join(full, 'settings.json'))
+                os.path.isfile(os.path.join(full, 'project.json'))
             )
             if steps or has_poscar_or_settings:
                 projects.append({'slug': name, 'steps': steps,
@@ -971,7 +1013,7 @@ def _step_dir(slug, step):
         return _pd(slug)
     return os.path.join(_pd(slug), step)
 
-ROOT_INPUT_FILES = ['POSCAR', 'instructions.txt', 'settings.json']
+ROOT_INPUT_FILES = ['POSCAR', 'instructions.txt', 'project.json']
 
 @app.route('/api/files/<slug>/<step>')
 def api_files(slug, step):
@@ -1221,29 +1263,99 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
   </div>
   <div id="system-setup-body" style="margin-top:14px;">
     <div style="font-size:12px;color:var(--sub);margin-bottom:12px;">
-      Enter the paths for your system once. Click <strong>Save Settings</strong> and they will be remembered across sessions.
+      All defaults are stored in <code>settings.json</code> in your working directory. Fill in once and click <strong>Save Settings</strong>.
     </div>
-    <div class="g2" style="margin-bottom:10px;">
+
+    <!-- Execution mode -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Execution Mode</div>
+    <div style="display:flex;gap:16px;margin-bottom:14px;">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="radio" name="cfg_profile_mode" value="workstation" id="cfg_pm_ws" onchange="onCfgProfileMode()">
+        <span>Workstation <span style="font-size:11px;color:var(--sub);">(local mpirun)</span></span>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="radio" name="cfg_profile_mode" value="slurm" id="cfg_pm_slurm" onchange="onCfgProfileMode()">
+        <span>SLURM HPC <span style="font-size:11px;color:var(--sub);">(batch queue)</span></span>
+      </label>
+    </div>
+
+    <!-- VASP paths -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">VASP Paths</div>
+    <div class="g2" style="margin-bottom:14px;">
       <div class="f"><label>VASP standard binary <span style="font-weight:400;color:var(--sub);">(collinear)</span></label>
         <input id="cfg_vasp_std" placeholder="e.g. ~/bin/vasp_std or /opt/vasp/bin/vasp_std"></div>
       <div class="f"><label>VASP non-collinear binary <span style="font-weight:400;color:var(--sub);">(SOC)</span></label>
         <input id="cfg_vasp_ncl" placeholder="e.g. ~/bin/vasp_ncl"></div>
-      <div class="f"><label>VASP gamma-only binary <span style="font-weight:400;color:var(--sub);">(optional, large supercells)</span></label>
+      <div class="f"><label>VASP gamma-only binary <span style="font-weight:400;color:var(--sub);">(optional)</span></label>
         <input id="cfg_vasp_gam" placeholder="e.g. ~/bin/vasp_gam"></div>
-      <div class="f"><label>POTCAR library directory</label>
+      <div class="f"><label>Wannier90 binary</label>
+        <input id="cfg_wannier90_x" placeholder="wannier90.x"></div>
+      <div class="f" style="grid-column:1/-1;"><label>POTCAR library directory</label>
         <input id="cfg_potcar_dir" placeholder="e.g. /opt/vasp/potpaw_PBE.54"
                oninput="document.getElementById('potcar_dir').value=this.value; onPotcarDir()">
         <div style="font-size:11px;color:var(--sub);margin-top:3px;">
           Folder that contains element sub-folders (e.g. <code>Ga/</code>, <code>As/</code> …)
         </div></div>
-      <div class="f"><label>MPI launch command</label>
-        <input id="cfg_mpi_launch" placeholder="e.g. mpirun -np  or  srun">
-        <div style="font-size:11px;color:var(--sub);margin-top:3px;">
-          Command used before the VASP binary. Leave blank for serial.
-        </div></div>
-      <div class="f"><label>Default MPI cores</label>
-        <input id="cfg_mpi_np" type="number" min="1" placeholder="e.g. 16"></div>
     </div>
+
+    <!-- Workstation MPI -->
+    <div id="cfg_ws_section">
+      <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Workstation MPI</div>
+      <div class="g2" style="margin-bottom:14px;">
+        <div class="f"><label>MPI launch command</label>
+          <input id="cfg_mpi_launch" placeholder="e.g. mpirun -np">
+          <div style="font-size:11px;color:var(--sub);margin-top:3px;">Command used before the VASP binary.</div></div>
+        <div class="f"><label>MPI cores</label>
+          <input id="cfg_mpi_np" type="number" min="1" placeholder="e.g. 16"></div>
+      </div>
+    </div>
+
+    <!-- SLURM settings -->
+    <div id="cfg_slurm_section">
+      <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">SLURM Settings</div>
+      <div class="g2" style="margin-bottom:14px;">
+        <div class="f"><label>Partition</label>
+          <input id="cfg_slurm_partition" placeholder="e.g. standard"></div>
+        <div class="f"><label>Account <span style="font-weight:400;color:var(--sub);">(optional)</span></label>
+          <input id="cfg_slurm_account" placeholder="your-project-account"></div>
+        <div class="f"><label>Nodes</label>
+          <input id="cfg_slurm_nodes" type="number" min="1" placeholder="2"></div>
+        <div class="f"><label>Tasks per node</label>
+          <input id="cfg_slurm_ntasks_per_node" type="number" min="1" placeholder="64"></div>
+        <div class="f"><label>Wall time</label>
+          <input id="cfg_slurm_time" placeholder="12:00:00"></div>
+        <div class="f"><label>MPI command <span style="font-weight:400;color:var(--sub);">(usually srun)</span></label>
+          <input id="cfg_slurm_mpi_cmd" placeholder="srun"></div>
+      </div>
+    </div>
+
+    <!-- Physics defaults -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Calculation Defaults</div>
+    <div class="g2" style="margin-bottom:14px;">
+      <div class="f"><label>K-path for bands</label>
+        <input id="cfg_kpath" placeholder="e.g. G-M-K-G"></div>
+      <div class="f"><label>K-points along path</label>
+        <input id="cfg_nkpts_bands" type="number" min="10" placeholder="60"></div>
+      <div class="f"><label>NSW (ionic steps)</label>
+        <input id="cfg_nsw" type="number" min="1" placeholder="100"></div>
+      <div class="f"><label>EDIFFG (eV/Å)</label>
+        <input id="cfg_ediffg" placeholder="-0.01"></div>
+      <div class="f"><label>Default ENCUT (eV)</label>
+        <input id="cfg_encut_manual" type="number" min="100" placeholder="520"></div>
+      <div class="f"><label>Band plot energy window (eV)</label>
+        <div style="display:flex;gap:6px;">
+          <input id="cfg_band_ymin" type="number" placeholder="-4" style="flex:1;">
+          <span style="align-self:center;color:var(--sub);">to</span>
+          <input id="cfg_band_ymax" type="number" placeholder="4" style="flex:1;">
+        </div></div>
+      <div class="f"><label>DOS plot energy window (eV)</label>
+        <div style="display:flex;gap:6px;">
+          <input id="cfg_dos_xmin" type="number" placeholder="-6" style="flex:1;">
+          <span style="align-self:center;color:var(--sub);">to</span>
+          <input id="cfg_dos_xmax" type="number" placeholder="6" style="flex:1;">
+        </div></div>
+    </div>
+
     <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
       <button class="btn btn-primary btn-sm" onclick="saveSystemConfig()">💾 Save Settings</button>
       <span id="cfg-save-msg" style="font-size:12px;color:var(--ok);"></span>
@@ -1556,15 +1668,39 @@ let _charts={}, ELEMENTS=[];
 let POTCAR_VARIANTS={}, POTCAR_CHOICES={}, _potcarTimer=null, _sumoES=null;
 
 window.addEventListener('DOMContentLoaded', () => {
-  const s = (id,v) => { const el=document.getElementById(id); if(el&&v) el.value=v; };
-  // System Setup fields
-  s('cfg_vasp_std',    CFG.vasp_std);
-  s('cfg_vasp_ncl',    CFG.vasp_ncl);
-  s('cfg_vasp_gam',    CFG.vasp_gam);
-  s('cfg_mpi_launch',  CFG.mpi_launch);
-  s('cfg_mpi_np',      CFG.mpi_np);
-  s('cfg_potcar_dir',  CFG.potcar_dir);
-  // Calculation defaults
+  const s = (id,v) => { const el=document.getElementById(id); if(el!=null&&v!=null&&v!=='') el.value=v; };
+  // System Setup — paths
+  s('cfg_vasp_std',             CFG.vasp_std);
+  s('cfg_vasp_ncl',             CFG.vasp_ncl);
+  s('cfg_vasp_gam',             CFG.vasp_gam);
+  s('cfg_wannier90_x',          CFG.wannier90_x);
+  s('cfg_potcar_dir',           CFG.potcar_dir);
+  // System Setup — workstation MPI
+  s('cfg_mpi_launch',           CFG.mpi_launch);
+  s('cfg_mpi_np',               CFG.mpi_np);
+  // System Setup — SLURM
+  s('cfg_slurm_partition',      CFG.slurm_partition);
+  s('cfg_slurm_account',        CFG.slurm_account);
+  s('cfg_slurm_nodes',          CFG.slurm_nodes);
+  s('cfg_slurm_ntasks_per_node',CFG.slurm_ntasks_per_node);
+  s('cfg_slurm_time',           CFG.slurm_time);
+  s('cfg_slurm_mpi_cmd',        CFG.slurm_mpi_cmd);
+  // System Setup — physics defaults
+  s('cfg_kpath',       CFG.kpath);
+  s('cfg_nkpts_bands', CFG.nkpts_bands);
+  s('cfg_nsw',         CFG.nsw);
+  s('cfg_ediffg',      CFG.ediffg);
+  s('cfg_encut_manual',CFG.encut_manual);
+  s('cfg_band_ymin',   CFG.band_ymin);
+  s('cfg_band_ymax',   CFG.band_ymax);
+  s('cfg_dos_xmin',    CFG.dos_xmin);
+  s('cfg_dos_xmax',    CFG.dos_xmax);
+  // Execution mode radio
+  const pm = CFG.profile_mode || 'workstation';
+  const pmEl = document.getElementById(pm==='slurm'?'cfg_pm_slurm':'cfg_pm_ws');
+  if(pmEl) pmEl.checked = true;
+  onCfgProfileMode();
+  // Calculation defaults (project form)
   s('potcar_dir',      CFG.potcar_dir);
   s('kpath',           CFG.kpath);
   s('nkpts_bands',     CFG.nkpts_bands);
@@ -1588,6 +1724,14 @@ window.addEventListener('DOMContentLoaded', () => {
   populateProfileList();
 });
 
+function onCfgProfileMode(){
+  const isSlurm = document.getElementById('cfg_pm_slurm')?.checked;
+  const ws = document.getElementById('cfg_ws_section');
+  const sl = document.getElementById('cfg_slurm_section');
+  if(ws) ws.style.display = isSlurm ? 'none' : 'block';
+  if(sl) sl.style.display = isSlurm ? 'block' : 'none';
+}
+
 function toggleSystemSetup(){
   const body=document.getElementById('system-setup-body');
   const chev=document.getElementById('system-setup-chevron');
@@ -1597,18 +1741,40 @@ function toggleSystemSetup(){
 }
 
 async function saveSystemConfig(){
-  const v=id=>document.getElementById(id)?.value||'';
+  const v  = id => document.getElementById(id)?.value || '';
+  const vi = id => parseInt(document.getElementById(id)?.value) || 0;
+  const isSlurm = document.getElementById('cfg_pm_slurm')?.checked;
   const body={
-    vasp_std:    v('cfg_vasp_std'),
-    vasp_ncl:    v('cfg_vasp_ncl'),
-    vasp_gam:    v('cfg_vasp_gam'),
-    mpi_launch:  v('cfg_mpi_launch'),
-    mpi_np:      parseInt(v('cfg_mpi_np'))||1,
-    wannier90_x: 'wannier90.x',
-    potcar_dir:  v('cfg_potcar_dir'),
+    profile_mode:           isSlurm ? 'slurm' : 'workstation',
+    // paths
+    vasp_std:               v('cfg_vasp_std'),
+    vasp_ncl:               v('cfg_vasp_ncl'),
+    vasp_gam:               v('cfg_vasp_gam'),
+    wannier90_x:            v('cfg_wannier90_x') || 'wannier90.x',
+    potcar_dir:             v('cfg_potcar_dir'),
+    // workstation MPI
+    mpi_launch:             v('cfg_mpi_launch') || 'mpirun -np',
+    mpi_np:                 vi('cfg_mpi_np') || 1,
+    // SLURM
+    slurm_partition:        v('cfg_slurm_partition') || 'standard',
+    slurm_account:          v('cfg_slurm_account'),
+    slurm_nodes:            vi('cfg_slurm_nodes') || 2,
+    slurm_ntasks_per_node:  vi('cfg_slurm_ntasks_per_node') || 64,
+    slurm_time:             v('cfg_slurm_time') || '12:00:00',
+    slurm_mpi_cmd:          v('cfg_slurm_mpi_cmd') || 'srun',
+    // physics defaults
+    kpath:        v('cfg_kpath') || 'G-M-K-G',
+    nkpts_bands:  vi('cfg_nkpts_bands') || 60,
+    nsw:          vi('cfg_nsw') || 100,
+    ediffg:       v('cfg_ediffg') || '-0.01',
+    encut_manual: vi('cfg_encut_manual') || 520,
+    band_ymin:    v('cfg_band_ymin') || '-4',
+    band_ymax:    v('cfg_band_ymax') || '4',
+    dos_xmin:     v('cfg_dos_xmin') || '-6',
+    dos_xmax:     v('cfg_dos_xmax') || '6',
   };
-  // Sync to the calculation fields too
-  document.getElementById('mpi_np').value   = body.mpi_np;
+  // Sync calculation fields to new defaults
+  document.getElementById('mpi_np').value    = body.mpi_np;
   document.getElementById('potcar_dir').value = body.potcar_dir;
   const r=await post('/api/config', body);
   const msg=document.getElementById('cfg-save-msg');
@@ -1617,12 +1783,14 @@ async function saveSystemConfig(){
     document.getElementById('system-setup-badge').textContent='(saved)';
     setTimeout(()=>{msg.textContent='';},3000);
     if(CFG.potcar_dir !== body.potcar_dir){ CFG.potcar_dir=body.potcar_dir; fetchPotcarVariants(); }
+    // Update profile dropdown to match saved mode
+    populateProfileList(body.profile_mode);
   } else {
     msg.style.color='var(--err)'; msg.textContent='✗ Save failed';
   }
 }
 
-async function populateProfileList(){
+async function populateProfileList(selectMode){
   try{
     const{profiles}=await(await fetch('/api/profiles')).json();
     const sel=document.getElementById('profile');
@@ -1632,6 +1800,12 @@ async function populateProfileList(){
       opt.value=p.id; opt.textContent=p.name;
       sel.appendChild(opt);
     });
+    // Auto-select based on profile_mode from settings
+    const mode = selectMode || CFG.profile_mode || 'workstation';
+    if(mode==='slurm'){
+      const slurmOpt=[...sel.options].find(o=>o.value==='slurm');
+      if(slurmOpt) slurmOpt.selected=true;
+    }
   }catch{}
 }
 
@@ -1687,7 +1861,7 @@ async function resumeProject(){
 }
 
 async function loadProjectSettings(){
-  // Populate Setup page fields from saved settings.json, stay on Setup tab
+  // Populate Setup page fields from saved project.json, stay on Setup tab
   const sel=document.getElementById('resume-sel');
   const msg=document.getElementById('resume-msg');
   const slug=sel.value;

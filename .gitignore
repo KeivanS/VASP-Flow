@@ -22,6 +22,7 @@ potcar_choices.json
 
 # ── User-saved system configuration (contains local paths) ──────────────────
 config.json
+settings.json
 
 # ── VASP calculation directories (can be large / contain binaries) ───────────
 # Keep only examples/; exclude all project run directories
