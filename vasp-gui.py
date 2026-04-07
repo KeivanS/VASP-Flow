@@ -646,6 +646,141 @@ def api_phonon_plot_pdf(slug, ptype):
     return jsonify(error='PDF not found — run 07_phonons first'), 404
 
 
+def _convergence_subdirs(base_dir, dtype):
+    """Return sorted (label, path) pairs for subdirs that have a completed OUTCAR."""
+    if not os.path.isdir(base_dir):
+        return []
+    entries = []
+    for name in os.listdir(base_dir):
+        path   = os.path.join(base_dir, name)
+        outcar = os.path.join(path, 'OUTCAR')
+        if os.path.isdir(path) and os.path.isfile(outcar):
+            entries.append((name, path))
+
+    def _sort_key(item):
+        label = item[0]
+        if dtype == 'encut':
+            try: return int(label)
+            except: return 0
+        else:                           # kpoints  "NxNxN"
+            try: return int(label.split('x')[0])
+            except: return 0
+
+    return sorted(entries, key=_sort_key)
+
+
+def _make_convergence_plot(slug, dtype, ptype):
+    """Build and return a matplotlib Figure for one convergence plot type.
+
+    dtype : 'encut' | 'kpoints'
+    ptype : 'energy' | 'pressure' | 'forces' | 'eigenvalues'
+    Returns None if no data are available.
+    """
+    from outcar_parser import (parse_energy, parse_fermi_energy,
+                                parse_pressure_diagonal,
+                                parse_forces_first_atom,
+                                parse_eigenvalues_near_fermi)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    base_dir = os.path.join(_pd(slug), '00_convergence', dtype)
+    entries  = _convergence_subdirs(base_dir, dtype)
+    if not entries:
+        return None
+
+    labels = [e[0] for e in entries]
+    xs     = list(range(len(labels)))
+    xlabel = 'ENCUT (eV)' if dtype == 'encut' else 'K-mesh'
+    titles = {'energy':      'Total Energy',
+              'pressure':    'Pressure Diagonal',
+              'forces':      'Forces on Atom 1',
+              'eigenvalues': 'Eigenvalues near E\u209f'}
+
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+
+    if ptype == 'energy':
+        ys = []
+        for _, path in entries:
+            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
+            ys.append(parse_energy(txt))
+        ys = [y if y is not None else float('nan') for y in ys]
+        ax.plot(xs, ys, 'o-', color='#7c3aed', lw=1.5, ms=5)
+        ax.set_ylabel('Total energy (eV)', fontsize=10)
+
+    elif ptype == 'pressure':
+        pxx, pyy, pzz = [], [], []
+        for _, path in entries:
+            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
+            p = parse_pressure_diagonal(txt)
+            if p:
+                pxx.append(p[0]); pyy.append(p[1]); pzz.append(p[2])
+            else:
+                pxx.append(float('nan')); pyy.append(float('nan')); pzz.append(float('nan'))
+        ax.plot(xs, pxx, 'o-', color='#3b82f6', lw=1.5, ms=4, label='P$_{xx}$')
+        ax.plot(xs, pyy, 's-', color='#10b981', lw=1.5, ms=4, label='P$_{yy}$')
+        ax.plot(xs, pzz, '^-', color='#f59e0b', lw=1.5, ms=4, label='P$_{zz}$')
+        ax.legend(fontsize=9)
+        ax.set_ylabel('Pressure (kBar)', fontsize=10)
+
+    elif ptype == 'forces':
+        fx, fy, fz = [], [], []
+        for _, path in entries:
+            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
+            f = parse_forces_first_atom(txt)
+            if f:
+                fx.append(f[0]); fy.append(f[1]); fz.append(f[2])
+            else:
+                fx.append(float('nan')); fy.append(float('nan')); fz.append(float('nan'))
+        ax.plot(xs, fx, 'o-', color='#ef4444', lw=1.5, ms=4, label='F$_x$')
+        ax.plot(xs, fy, 's-', color='#10b981', lw=1.5, ms=4, label='F$_y$')
+        ax.plot(xs, fz, '^-', color='#3b82f6', lw=1.5, ms=4, label='F$_z$')
+        ax.legend(fontsize=9)
+        ax.set_ylabel('Force on atom 1 (eV/Å)', fontsize=10)
+
+    elif ptype == 'eigenvalues':
+        for i, (_, path) in enumerate(entries):
+            txt  = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
+            eigs = parse_eigenvalues_near_fermi(txt, window=2.0)
+            ax.scatter([i] * len(eigs), eigs, c='#6366f1', s=10, alpha=0.5, linewidths=0)
+        ax.axhline(0, color='#ef4444', lw=0.8, ls='--', alpha=0.8)
+        ax.set_ylim(-2.3, 2.3)
+        ax.set_ylabel('E − E$_F$ (eV)', fontsize=10)
+
+    else:
+        plt.close(fig)
+        return None
+
+    ax.set_xticks(xs)
+    ax.set_xticklabels(labels, rotation=30 if len(labels) > 4 else 0,
+                       ha='right', fontsize=9)
+    ax.set_xlabel(xlabel, fontsize=10)
+    ax.set_title(titles.get(ptype, ptype), fontsize=11)
+    ax.grid(True, alpha=0.25, lw=0.5)
+    plt.tight_layout()
+    return fig
+
+
+@app.route('/api/convergence_plot/<slug>/<dtype>/<ptype>.png')
+def api_convergence_plot_img(slug, dtype, ptype):
+    """Return a PNG image for the requested convergence plot."""
+    import io, matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    if dtype not in ('encut', 'kpoints') or \
+       ptype not in ('energy', 'pressure', 'forces', 'eigenvalues'):
+        return jsonify(error='invalid type'), 400
+    fig = _make_convergence_plot(slug, dtype, ptype)
+    if fig is None:
+        return jsonify(error='no data — run convergence first'), 404
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return Response(buf.read(), mimetype='image/png',
+                    headers={'Cache-Control': 'no-store'})
+
+
 @app.route('/api/convergence_pdf/<slug>/<dtype>')
 def api_convergence_pdf(slug, dtype):
     """Generate and serve convergence chart as a PDF using matplotlib."""
@@ -2071,38 +2206,44 @@ setInterval(()=>{
 },4000);
 
 // ── convergence charts ─────────────────────────────────────────────────────
+const CONV_PTYPES = [
+  {key:'energy',      label:'Total Energy'},
+  {key:'pressure',    label:'Pressure (kBar)'},
+  {key:'forces',      label:'Forces atom 1 (eV/Å)'},
+  {key:'eigenvalues', label:'Eigenvalues near E\u209f'},
+];
+
+function _convImgGrid(dtype){
+  const t = Date.now();
+  return CONV_PTYPES.map(pt => `
+    <div>
+      <div style="font-size:11px;font-weight:600;color:var(--sub);margin-bottom:3px;">${pt.label}</div>
+      <img src="/api/convergence_plot/${PROJECT}/${dtype}/${pt.key}.png?t=${t}"
+           style="width:100%;border-radius:4px;display:block;"
+           onerror="this.closest('div').style.display='none'">
+    </div>`).join('');
+}
+
 async function loadConvPlots(suffix){
   const el=document.getElementById(`conv-plots-${suffix}`);
   if(!el||!PROJECT) return;
   el.innerHTML=`
-    <div class="card"><div class="card-title">ENCUT</div>
-      <div style="position:relative;height:180px;"><canvas id="cc-encut-${suffix}"></canvas></div>
-      <a href="/api/convergence_pdf/${PROJECT}/encut" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ PDF</a>
+    <div class="card">
+      <div class="card-title">ENCUT Convergence</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+        ${_convImgGrid('encut')}
+      </div>
+      <a href="/api/convergence_pdf/${PROJECT}/encut" class="btn btn-ghost btn-sm"
+         download style="display:inline-block;margin-top:8px;">⬇ PDF (energy)</a>
     </div>
-    <div class="card"><div class="card-title">K-points</div>
-      <div style="position:relative;height:180px;"><canvas id="cc-kp-${suffix}"></canvas></div>
-      <a href="/api/convergence_pdf/${PROJECT}/kpoints" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ PDF</a>
+    <div class="card">
+      <div class="card-title">K-point Convergence</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+        ${_convImgGrid('kpoints')}
+      </div>
+      <a href="/api/convergence_pdf/${PROJECT}/kpoints" class="btn btn-ghost btn-sm"
+         download style="display:inline-block;margin-top:8px;">⬇ PDF (energy)</a>
     </div>`;
-  convChart('encut',  `cc-encut-${suffix}`,'#7c3aed');
-  convChart('kpoints',`cc-kp-${suffix}`,  '#0ea5e9');
-}
-async function convChart(dtype,canvasId,color){
-  try{
-    const{data}=await(await fetch(`/api/convergence_data/${PROJECT}/${dtype}`)).json();
-    if(!data.length) return;
-    const ctx=document.getElementById(canvasId)?.getContext('2d');
-    if(!ctx) return;
-    if(_charts[canvasId]) _charts[canvasId].destroy();
-    _charts[canvasId]=new Chart(ctx,{
-      type:'line',
-      data:{labels:data.map(r=>r.x),datasets:[{
-        data:data.map(r=>r.y),borderColor:color,backgroundColor:color+'20',
-        tension:.3,pointRadius:5,pointBackgroundColor:color}]},
-      options:{plugins:{legend:{display:false}},
-        scales:{x:{title:{display:true,text:dtype==='encut'?'ENCUT (eV)':'K-mesh',font:{size:11}}},
-                y:{title:{display:true,text:'Energy (eV)',font:{size:11}}}},
-        responsive:true,maintainAspectRatio:false}});
-  }catch{}
 }
 
 // ── results ────────────────────────────────────────────────────────────────
@@ -2203,16 +2344,7 @@ async function buildResults(){
   // ── convergence ────────────────────────────────────────────────────────
   if(HAS_CONV){
     h+=`<div class="card"><div class="card-title">Convergence</div>
-      <div class="g2">
-        <div>
-          <div style="position:relative;height:200px;"><canvas id="rc-encut"></canvas></div>
-          <a href="/api/convergence_pdf/${PROJECT}/encut" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ ENCUT PDF</a>
-        </div>
-        <div>
-          <div style="position:relative;height:200px;"><canvas id="rc-kp"></canvas></div>
-          <a href="/api/convergence_pdf/${PROJECT}/kpoints" class="btn btn-ghost btn-sm" download style="display:inline-block;margin-top:6px;">⬇ K-points PDF</a>
-        </div>
-      </div></div>`;
+      <div id="conv-plots-rc"></div></div>`;
   }
 
   h+=`<div style="margin-top:8px;display:flex;gap:8px;">
@@ -2239,7 +2371,7 @@ async function buildResults(){
       </tr>`).join('');
   }catch{}
 
-  if(HAS_CONV){convChart('encut','rc-encut','#7c3aed'); convChart('kpoints','rc-kp','#0ea5e9');}
+  if(HAS_CONV){ loadConvPlots('rc'); }
 }
 
 async function rerunSumo(){
