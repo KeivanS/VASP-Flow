@@ -27,6 +27,8 @@ _jlock = threading.Lock()
 CONFIG = {
     # execution mode
     'profile_mode':           'workstation',   # 'workstation' | 'slurm'
+    # projects location
+    'projects_dir':           os.environ.get('VASP_PROJECTS_DIR', PROJECTS_DIR),
     # system paths
     'vasp_std':               os.environ.get('VASP_STD',        ''),
     'vasp_ncl':               os.environ.get('VASP_NCL',        ''),
@@ -74,7 +76,7 @@ if not _first_run:
 def _slug(name):
     return re.sub(r'[^\w\-]', '_', name.strip()).strip('_') or 'vasp_project'
 
-def _pd(slug):    return os.path.join(PROJECTS_DIR, slug)
+def _pd(slug):    return os.path.join(CONFIG['projects_dir'], slug)
 
 def _steps(slug):
     pd = _pd(slug)
@@ -124,6 +126,10 @@ def api_config():
                 CONFIG[k] = type(CONFIG[k])(data[k])
             except (TypeError, ValueError):
                 CONFIG[k] = data[k]
+    # Resolve projects_dir to an absolute path
+    if CONFIG['projects_dir']:
+        CONFIG['projects_dir'] = os.path.abspath(
+            os.path.expanduser(CONFIG['projects_dir']))
     Path(_settings_path).write_text(json.dumps(CONFIG, indent=2))
     # Keep profiles/slurm.json in sync so vasp-agent.py can still read it
     slurm_profile = {
@@ -249,11 +255,13 @@ def api_generate():
         encut_m = d.get('manual_encut','').strip()
         if encut_m: lines.append(f'ENCUT: {encut_m}')
 
-    Path(os.path.join(PROJECTS_DIR,'instructions.txt')).write_text('\n'.join(lines))
-    Path(os.path.join(PROJECTS_DIR,'POSCAR')).write_text(poscar)
+    run_dir = CONFIG['projects_dir']
+    os.makedirs(run_dir, exist_ok=True)
+    Path(os.path.join(run_dir,'instructions.txt')).write_text('\n'.join(lines))
+    Path(os.path.join(run_dir,'POSCAR')).write_text(poscar)
 
     # Write POTCAR choices for the agent; clear if none
-    choices_file = os.path.join(PROJECTS_DIR, 'potcar_choices.json')
+    choices_file = os.path.join(run_dir, 'potcar_choices.json')
     if potcar_choices:
         Path(choices_file).write_text(json.dumps(potcar_choices))
     elif os.path.exists(choices_file):
@@ -276,7 +284,7 @@ def api_generate():
     if profile and profile != 'default':
         agent_cmd += ['--profile', profile]
     result = subprocess.run(agent_cmd,
-        capture_output=True, text=True, cwd=PROJECTS_DIR, env=env)
+        capture_output=True, text=True, cwd=run_dir, env=env)
 
     if result.returncode != 0:
         return jsonify(error=(result.stderr or result.stdout or 'Error').strip()), 500
@@ -592,8 +600,9 @@ def api_projects():
     """List existing project directories (have at least one run.sh step)."""
     projects = []
     try:
-        for name in sorted(os.listdir(PROJECTS_DIR)):
-            full = os.path.join(PROJECTS_DIR, name)
+        pd_root = CONFIG['projects_dir']
+        for name in sorted(os.listdir(pd_root)):
+            full = os.path.join(pd_root, name)
             if not os.path.isdir(full):
                 continue
             steps = _steps(name)
@@ -1279,6 +1288,16 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       </label>
     </div>
 
+    <!-- Projects directory -->
+    <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Projects Directory</div>
+    <div class="f" style="margin-bottom:14px;">
+      <label>Folder where calculation projects are stored</label>
+      <input id="cfg_projects_dir" placeholder="e.g. /home/user/vasp_runs  or  ./  (relative to launch dir)">
+      <div style="font-size:11px;color:var(--sub);margin-top:3px;">
+        All project sub-folders live here. Change this to point to a different disk or HPC scratch area.
+      </div>
+    </div>
+
     <!-- VASP paths -->
     <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">VASP Paths</div>
     <div class="g2" style="margin-bottom:14px;">
@@ -1669,6 +1688,8 @@ let POTCAR_VARIANTS={}, POTCAR_CHOICES={}, _potcarTimer=null, _sumoES=null;
 
 window.addEventListener('DOMContentLoaded', () => {
   const s = (id,v) => { const el=document.getElementById(id); if(el!=null&&v!=null&&v!=='') el.value=v; };
+  // System Setup — projects directory
+  s('cfg_projects_dir',         CFG.projects_dir);
   // System Setup — paths
   s('cfg_vasp_std',             CFG.vasp_std);
   s('cfg_vasp_ncl',             CFG.vasp_ncl);
@@ -1746,6 +1767,7 @@ async function saveSystemConfig(){
   const isSlurm = document.getElementById('cfg_pm_slurm')?.checked;
   const body={
     profile_mode:           isSlurm ? 'slurm' : 'workstation',
+    projects_dir:           v('cfg_projects_dir') || CFG.projects_dir,
     // paths
     vasp_std:               v('cfg_vasp_std'),
     vasp_ncl:               v('cfg_vasp_ncl'),
@@ -1783,8 +1805,10 @@ async function saveSystemConfig(){
     document.getElementById('system-setup-badge').textContent='(saved)';
     setTimeout(()=>{msg.textContent='';},3000);
     if(CFG.potcar_dir !== body.potcar_dir){ CFG.potcar_dir=body.potcar_dir; fetchPotcarVariants(); }
-    // Update profile dropdown to match saved mode
+    CFG.projects_dir = body.projects_dir;
+    // Update profile dropdown and refresh project list with new directory
     populateProfileList(body.profile_mode);
+    populateResumeList();
   } else {
     msg.style.color='var(--err)'; msg.textContent='✗ Save failed';
   }
