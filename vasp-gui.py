@@ -753,51 +753,62 @@ def _make_convergence_plot(slug, dtype, ptype):
 
     fig, ax = plt.subplots(figsize=(5, 3.5))
 
+    nan = float('nan')
+
+    def _read_outcar(path):
+        try:
+            return Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
+        except OSError:
+            return ''
+
     if ptype == 'energy':
-        ys = []
-        for _, path in entries:
-            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
-            ys.append(parse_energy(txt))
-        ys = [y if y is not None else float('nan') for y in ys]
+        ys = [parse_energy(_read_outcar(p)) for _, p in entries]
+        ys = [y if y is not None else nan for y in ys]
         ax.plot(xs, ys, 'o-', color='#7c3aed', lw=1.5, ms=5)
         ax.set_ylabel('Total energy (eV)', fontsize=10)
+        if all(y != y for y in ys):   # all NaN
+            ax.text(0.5, 0.5, 'No data in OUTCAR', ha='center', va='center',
+                    fontsize=9, color='#94a3b8', transform=ax.transAxes)
 
     elif ptype == 'pressure':
         pxx, pyy, pzz = [], [], []
         for _, path in entries:
-            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
-            p = parse_pressure_diagonal(txt)
-            if p:
-                pxx.append(p[0]); pyy.append(p[1]); pzz.append(p[2])
-            else:
-                pxx.append(float('nan')); pyy.append(float('nan')); pzz.append(float('nan'))
+            p = parse_pressure_diagonal(_read_outcar(path))
+            pxx.append(p[0] if p else nan)
+            pyy.append(p[1] if p else nan)
+            pzz.append(p[2] if p else nan)
         ax.plot(xs, pxx, 'o-', color='#3b82f6', lw=1.5, ms=4, label='P$_{xx}$')
         ax.plot(xs, pyy, 's-', color='#10b981', lw=1.5, ms=4, label='P$_{yy}$')
         ax.plot(xs, pzz, '^-', color='#f59e0b', lw=1.5, ms=4, label='P$_{zz}$')
         ax.legend(fontsize=9)
         ax.set_ylabel('Pressure (kBar)', fontsize=10)
+        if all(v != v for v in pxx):
+            ax.text(0.5, 0.5, 'Stress not in OUTCAR\n(add ISIF=2 to INCAR)',
+                    ha='center', va='center', fontsize=9, color='#94a3b8',
+                    transform=ax.transAxes)
 
     elif ptype == 'forces':
         fx, fy, fz = [], [], []
         for _, path in entries:
-            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
-            f = parse_forces_first_atom(txt)
-            if f:
-                fx.append(f[0]); fy.append(f[1]); fz.append(f[2])
-            else:
-                fx.append(float('nan')); fy.append(float('nan')); fz.append(float('nan'))
+            f = parse_forces_first_atom(_read_outcar(path))
+            fx.append(f[0] if f else nan)
+            fy.append(f[1] if f else nan)
+            fz.append(f[2] if f else nan)
         ax.plot(xs, fx, 'o-', color='#ef4444', lw=1.5, ms=4, label='F$_x$')
         ax.plot(xs, fy, 's-', color='#10b981', lw=1.5, ms=4, label='F$_y$')
         ax.plot(xs, fz, '^-', color='#3b82f6', lw=1.5, ms=4, label='F$_z$')
         ax.legend(fontsize=9)
         ax.set_ylabel('Force on atom 1 (eV/Å)', fontsize=10)
+        if all(v != v for v in fx):
+            ax.text(0.5, 0.5, 'Forces not found in OUTCAR',
+                    ha='center', va='center', fontsize=9, color='#94a3b8',
+                    transform=ax.transAxes)
 
     elif ptype == 'eigenvalues':
         # Read all datasets keyed by band index
         all_by_band = []
         for _, path in entries:
-            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
-            all_by_band.append(parse_eigenvalues_by_band(txt))
+            all_by_band.append(parse_eigenvalues_by_band(_read_outcar(path)))
 
         # Determine reference band set from the first dataset (within ±2 eV)
         ref_bands = sorted(
@@ -817,6 +828,10 @@ def _make_convergence_plot(slug, dtype, ptype):
         if finite:
             margin = 0.3
             ax.set_ylim(min(finite) - margin, max(finite) + margin)
+        if not ref_bands:
+            ax.text(0.5, 0.5, 'No eigenvalues found\n(E-fermi missing in OUTCAR?)',
+                    ha='center', va='center', fontsize=9, color='#94a3b8',
+                    transform=ax.transAxes)
         ax.set_ylabel('E − E$_F$ (eV)', fontsize=10)
 
     else:
@@ -833,6 +848,23 @@ def _make_convergence_plot(slug, dtype, ptype):
     return fig
 
 
+def _placeholder_png(msg):
+    """Return a small PNG with a centred message (for missing / error states)."""
+    import io, matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+    ax.text(0.5, 0.5, msg, ha='center', va='center', fontsize=10,
+            color='#94a3b8', transform=ax.transAxes, wrap=True)
+    ax.set_axis_off()
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return Response(buf.read(), mimetype='image/png',
+                    headers={'Cache-Control': 'no-store'})
+
+
 @app.route('/api/convergence_plot/<slug>/<dtype>/<ptype>.png')
 def api_convergence_plot_img(slug, dtype, ptype):
     """Return a PNG image for the requested convergence plot."""
@@ -841,10 +873,14 @@ def api_convergence_plot_img(slug, dtype, ptype):
     import matplotlib.pyplot as plt
     if dtype not in ('encut', 'kpoints') or \
        ptype not in ('energy', 'pressure', 'forces', 'eigenvalues'):
-        return jsonify(error='invalid type'), 400
-    fig = _make_convergence_plot(slug, dtype, ptype)
+        return _placeholder_png('invalid type'), 400
+    try:
+        fig = _make_convergence_plot(slug, dtype, ptype)
+    except Exception as exc:
+        app.logger.exception('convergence_plot %s/%s/%s failed', slug, dtype, ptype)
+        return _placeholder_png(f'Error: {exc}')
     if fig is None:
-        return jsonify(error='no data — run convergence first'), 404
+        return _placeholder_png('No data yet\nRun convergence first')
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -2438,8 +2474,7 @@ function _convImgGrid(dtype){
     <div>
       <div style="font-size:11px;font-weight:600;color:var(--sub);margin-bottom:3px;">${pt.label}</div>
       <img src="/api/convergence_plot/${PROJECT}/${dtype}/${pt.key}.png?t=${t}"
-           style="width:100%;border-radius:4px;display:block;"
-           onerror="this.closest('div').style.display='none'">
+           style="width:100%;border-radius:4px;display:block;">
     </div>`).join('');
 }
 

@@ -397,8 +397,12 @@ class VASPWorkflowAgent:
             os.makedirs(d, exist_ok=True)
             link_potcar(d, potcar_path)
             shutil.copy(self.poscar_file, os.path.join(d, 'POSCAR'))
+            incar_text = self.generator._generate_incar_scf()
+            # ISIF=2 ensures stress tensor is written to OUTCAR (needed for pressure plots)
+            if 'ISIF' not in incar_text:
+                incar_text += '\nISIF = 2\n'
             with open(os.path.join(d, 'INCAR'), 'w') as f:
-                f.write(self.generator._generate_incar_scf())
+                f.write(incar_text)
 
             script = os.path.join(d, 'run.sh')
             with open(script, 'w') as f:
@@ -465,8 +469,11 @@ class VASPWorkflowAgent:
             shutil.copy(self.poscar_file, os.path.join(d, 'POSCAR'))
             with open(os.path.join(d, 'KPOINTS'), 'w') as f:
                 f.write(self.generator._generate_kpoints_auto('medium'))
+            incar_text = self.generator._generate_incar_scf()
+            if 'ISIF' not in incar_text:
+                incar_text += '\nISIF = 2\n'
             with open(os.path.join(d, 'INCAR'), 'w') as f:
-                f.write(self.generator._generate_incar_scf())
+                f.write(incar_text)
             script = os.path.join(d, 'run.sh')
             with open(script, 'w') as f:
                 f.write("#!/bin/bash\n")
