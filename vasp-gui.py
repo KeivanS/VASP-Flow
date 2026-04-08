@@ -706,7 +706,9 @@ def _convergence_subdirs(base_dir, dtype):
         path   = os.path.join(base_dir, name)
         outcar = os.path.join(path, 'OUTCAR')
         if os.path.isdir(path) and os.path.isfile(outcar):
-            entries.append((name, path))
+            # Strip leading word prefix (e.g. "encut_300" → "300", "kpoints_4x4x4" → "4x4x4")
+            label = re.sub(r'^[A-Za-z]+_', '', name)
+            entries.append((label, path))
 
     def _sort_key(item):
         label = item[0]
