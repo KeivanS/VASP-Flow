@@ -732,7 +732,8 @@ def _make_convergence_plot(slug, dtype, ptype):
     from outcar_parser import (parse_energy, parse_fermi_energy,
                                 parse_pressure_diagonal,
                                 parse_forces_first_atom,
-                                parse_eigenvalues_near_fermi)
+                                parse_eigenvalues_near_fermi,
+                                parse_eigenvalues_by_band)
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -792,22 +793,30 @@ def _make_convergence_plot(slug, dtype, ptype):
         ax.set_ylabel('Force on atom 1 (eV/Å)', fontsize=10)
 
     elif ptype == 'eigenvalues':
-        all_eigs = []
+        # Read all datasets keyed by band index
+        all_by_band = []
         for _, path in entries:
             txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
-            all_eigs.append(parse_eigenvalues_near_fermi(txt, window=2.0))
-        # Draw connecting lines per eigenvalue rank (same sorted index across x-points)
-        if len(all_eigs) > 1:
-            n_common = min(len(e) for e in all_eigs)
-            for j in range(n_common):
-                ys = [all_eigs[i][j] for i in range(len(all_eigs))]
-                ax.plot(xs, ys, '-', color='#6366f1', lw=0.8, alpha=0.35)
-        # Scatter dots on top
-        for i, eigs in enumerate(all_eigs):
-            ax.scatter([i] * len(eigs), eigs, c='#6366f1', s=14, alpha=0.7,
-                       linewidths=0, zorder=3)
+            all_by_band.append(parse_eigenvalues_by_band(txt))
+
+        # Determine reference band set from the first dataset (within ±2 eV)
+        ref_bands = sorted(
+            idx for idx, e in all_by_band[0].items() if abs(e) <= 2.0
+        ) if all_by_band else []
+
+        # Connect each reference band across all x-points; extend beyond ±2 eV
+        for band_idx in ref_bands:
+            ys = [d.get(band_idx, float('nan')) for d in all_by_band]
+            ax.plot(xs, ys, '-o', color='#6366f1', lw=0.9, ms=5, alpha=0.6)
+
         ax.axhline(0, color='#ef4444', lw=0.8, ls='--', alpha=0.8)
-        ax.set_ylim(-2.3, 2.3)
+        # Y-axis spans actual data range (may exceed ±2 if bands drift)
+        all_vals = [all_by_band[i].get(b, float('nan'))
+                    for b in ref_bands for i in range(len(all_by_band))]
+        finite = [v for v in all_vals if v == v]  # drop NaN
+        if finite:
+            margin = 0.3
+            ax.set_ylim(min(finite) - margin, max(finite) + margin)
         ax.set_ylabel('E − E$_F$ (eV)', fontsize=10)
 
     else:

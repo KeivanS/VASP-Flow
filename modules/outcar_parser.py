@@ -76,6 +76,33 @@ def parse_forces_first_atom(text: str) -> Optional[Tuple[float, float, float]]:
     return (float(m.group(4)), float(m.group(5)), float(m.group(6)))
 
 
+def parse_eigenvalues_by_band(text: str) -> dict:
+    """Return {band_index: mean_energy_relative_to_Fermi} averaged over all k-points.
+
+    Band indices are 1-based (as printed by VASP).
+    Returns an empty dict if eigenvalue blocks or Fermi energy are not found.
+    """
+    efermi = parse_fermi_energy(text)
+    if efermi is None:
+        return {}
+
+    # Accumulate (sum, count) per band index across all k-point blocks
+    sums:   dict = {}
+    counts: dict = {}
+    for header in re.finditer(r'band No\.\s+band energies\s+occupation\s*\n', text):
+        block_start = header.end()
+        for line in text[block_start:].splitlines():
+            m = re.match(r'^\s+(\d+)\s+([-\d.]+)\s+[-\d.]+\s*$', line)
+            if not m:
+                break
+            idx = int(m.group(1))
+            e_rel = float(m.group(2)) - efermi
+            sums[idx]   = sums.get(idx, 0.0)   + e_rel
+            counts[idx] = counts.get(idx, 0)   + 1
+
+    return {idx: round(sums[idx] / counts[idx], 4) for idx in sums}
+
+
 def parse_eigenvalues_near_fermi(
     text: str, window: float = 2.0
 ) -> List[float]:
