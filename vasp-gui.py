@@ -777,9 +777,9 @@ def _make_convergence_plot(slug, dtype, ptype):
             pxx.append(p[0] if p else nan)
             pyy.append(p[1] if p else nan)
             pzz.append(p[2] if p else nan)
-        ax.plot(xs, pxx, 'o-', color='#3b82f6', lw=1.5, ms=4, label='P$_{xx}$')
-        ax.plot(xs, pyy, 's-', color='#10b981', lw=1.5, ms=4, label='P$_{yy}$')
-        ax.plot(xs, pzz, '^-', color='#f59e0b', lw=1.5, ms=4, label='P$_{zz}$')
+        ax.plot(xs, pxx, 'o-', color='#3b82f6', lw=1.5, ms=4, label='Pxx')
+        ax.plot(xs, pyy, 's-', color='#10b981', lw=1.5, ms=4, label='Pyy')
+        ax.plot(xs, pzz, '^-', color='#f59e0b', lw=1.5, ms=4, label='Pzz')
         ax.legend(fontsize=9)
         ax.set_ylabel('Pressure (kBar)', fontsize=10)
         if all(v != v for v in pxx):
@@ -794,9 +794,9 @@ def _make_convergence_plot(slug, dtype, ptype):
             fx.append(f[0] if f else nan)
             fy.append(f[1] if f else nan)
             fz.append(f[2] if f else nan)
-        ax.plot(xs, fx, 'o-', color='#ef4444', lw=1.5, ms=4, label='F$_x$')
-        ax.plot(xs, fy, 's-', color='#10b981', lw=1.5, ms=4, label='F$_y$')
-        ax.plot(xs, fz, '^-', color='#3b82f6', lw=1.5, ms=4, label='F$_z$')
+        ax.plot(xs, fx, 'o-', color='#ef4444', lw=1.5, ms=4, label='Fx')
+        ax.plot(xs, fy, 's-', color='#10b981', lw=1.5, ms=4, label='Fy')
+        ax.plot(xs, fz, '^-', color='#3b82f6', lw=1.5, ms=4, label='Fz')
         ax.legend(fontsize=9)
         ax.set_ylabel('Force on atom 1 (eV/Å)', fontsize=10)
         if all(v != v for v in fx):
@@ -832,7 +832,7 @@ def _make_convergence_plot(slug, dtype, ptype):
             ax.text(0.5, 0.5, 'No eigenvalues found\n(E-fermi missing in OUTCAR?)',
                     ha='center', va='center', fontsize=9, color='#94a3b8',
                     transform=ax.transAxes)
-        ax.set_ylabel('E − E$_F$ (eV)', fontsize=10)
+        ax.set_ylabel('E \u2212 E\u209f (eV)', fontsize=10)
 
     else:
         plt.close(fig)
