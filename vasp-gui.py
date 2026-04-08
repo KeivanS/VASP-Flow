@@ -749,7 +749,7 @@ def _make_convergence_plot(slug, dtype, ptype):
     titles = {'energy':      'Total Energy',
               'pressure':    'Pressure Diagonal',
               'forces':      'Forces on Atom 1',
-              'eigenvalues': 'Eigenvalues near E\u209f'}
+              'eigenvalues': 'Eigenvalues near Ef'}
 
     fig, ax = plt.subplots(figsize=(5, 3.5))
 
@@ -832,7 +832,7 @@ def _make_convergence_plot(slug, dtype, ptype):
             ax.text(0.5, 0.5, 'No eigenvalues found\n(E-fermi missing in OUTCAR?)',
                     ha='center', va='center', fontsize=9, color='#94a3b8',
                     transform=ax.transAxes)
-        ax.set_ylabel('E \u2212 E\u209f (eV)', fontsize=10)
+        ax.set_ylabel('E - Ef (eV)', fontsize=10)
 
     else:
         plt.close(fig)
@@ -2442,7 +2442,7 @@ const CONV_PTYPES = [
   {key:'energy',      label:'Total Energy'},
   {key:'pressure',    label:'Pressure (kBar)'},
   {key:'forces',      label:'Forces atom 1 (eV/Å)'},
-  {key:'eigenvalues', label:'Eigenvalues near E\u209f'},
+  {key:'eigenvalues', label:'Eigenvalues near Ef'},
 ];
 
 function _convImgGrid(dtype){
