@@ -792,10 +792,20 @@ def _make_convergence_plot(slug, dtype, ptype):
         ax.set_ylabel('Force on atom 1 (eV/Å)', fontsize=10)
 
     elif ptype == 'eigenvalues':
-        for i, (_, path) in enumerate(entries):
-            txt  = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
-            eigs = parse_eigenvalues_near_fermi(txt, window=2.0)
-            ax.scatter([i] * len(eigs), eigs, c='#6366f1', s=10, alpha=0.5, linewidths=0)
+        all_eigs = []
+        for _, path in entries:
+            txt = Path(os.path.join(path, 'OUTCAR')).read_text(errors='replace')
+            all_eigs.append(parse_eigenvalues_near_fermi(txt, window=2.0))
+        # Draw connecting lines per eigenvalue rank (same sorted index across x-points)
+        if len(all_eigs) > 1:
+            n_common = min(len(e) for e in all_eigs)
+            for j in range(n_common):
+                ys = [all_eigs[i][j] for i in range(len(all_eigs))]
+                ax.plot(xs, ys, '-', color='#6366f1', lw=0.8, alpha=0.35)
+        # Scatter dots on top
+        for i, eigs in enumerate(all_eigs):
+            ax.scatter([i] * len(eigs), eigs, c='#6366f1', s=14, alpha=0.7,
+                       linewidths=0, zorder=3)
         ax.axhline(0, color='#ef4444', lw=0.8, ls='--', alpha=0.8)
         ax.set_ylim(-2.3, 2.3)
         ax.set_ylabel('E − E$_F$ (eV)', fontsize=10)
