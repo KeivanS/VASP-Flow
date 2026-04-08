@@ -1332,19 +1332,6 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       All defaults are stored in <code>settings.json</code> in your working directory. Fill in once and click <strong>Save Settings</strong>.
     </div>
 
-    <!-- Execution mode -->
-    <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Execution Mode</div>
-    <div style="display:flex;gap:16px;margin-bottom:14px;">
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="radio" name="cfg_profile_mode" value="workstation" id="cfg_pm_ws" onchange="onCfgProfileMode()">
-        <span>Workstation <span style="font-size:11px;color:var(--sub);">(local mpirun)</span></span>
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="radio" name="cfg_profile_mode" value="slurm" id="cfg_pm_slurm" onchange="onCfgProfileMode()">
-        <span>SLURM HPC <span style="font-size:11px;color:var(--sub);">(batch queue)</span></span>
-      </label>
-    </div>
-
     <!-- Projects directory -->
     <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Projects Directory</div>
     <div class="f" style="margin-bottom:14px;">
@@ -1375,19 +1362,15 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     </div>
 
     <!-- Workstation MPI -->
-    <div id="cfg_ws_section">
-      <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Workstation MPI</div>
-      <div class="g2" style="margin-bottom:14px;">
-        <div class="f"><label>MPI launch command</label>
-          <input id="cfg_mpi_launch" placeholder="e.g. mpirun -np">
-          <div style="font-size:11px;color:var(--sub);margin-top:3px;">Command used before the VASP binary.</div></div>
-        <div class="f"><label>MPI cores</label>
-          <input id="cfg_mpi_np" type="number" min="1" placeholder="e.g. 16"></div>
-      </div>
+    <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Workstation MPI</div>
+    <div class="g2" style="margin-bottom:14px;">
+      <div class="f"><label>MPI launch command</label>
+        <input id="cfg_mpi_launch" placeholder="e.g. mpirun -np">
+        <div style="font-size:11px;color:var(--sub);margin-top:3px;">Command used before the VASP binary (workstation).</div></div>
     </div>
 
     <!-- SLURM settings -->
-    <div id="cfg_slurm_section">
+    <div>
       <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">SLURM Settings</div>
       <div class="g2" style="margin-bottom:14px;">
         <div class="f"><label>Partition</label>
@@ -1450,13 +1433,17 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       </div></div>
     <div class="f"><label>Execution Profile</label>
       <select id="profile" onchange="onProfileChange()">
-        <option value="default">Default (site.env)</option>
+        <option value="default">Workstation</option>
       </select>
       <div style="font-size:11px;color:var(--sub);margin-top:3px;">
-        Profiles live in <code>profiles/</code>. Edit the JSON to set partition, nodes, modules, etc.
+        Workstation runs VASP locally; SLURM submits a batch job.
+        MPI cores below are set automatically when you switch profiles.
       </div></div>
     <div class="f"><label>MPI Cores</label>
-      <input id="mpi_np" type="number" value="16" min="1"></div>
+      <input id="mpi_np" type="number" value="16" min="1">
+      <div style="font-size:11px;color:var(--sub);margin-top:3px;">
+        Auto-filled from System Setup when you switch profiles.
+      </div></div>
     <div class="f"><label>Description (optional)</label>
       <input id="description" placeholder="brief note for records"></div>
   </div>
@@ -1755,7 +1742,6 @@ window.addEventListener('DOMContentLoaded', () => {
   s('cfg_potcar_dir',           CFG.potcar_dir);
   // System Setup — workstation MPI
   s('cfg_mpi_launch',           CFG.mpi_launch);
-  s('cfg_mpi_np',               CFG.mpi_np);
   // System Setup — SLURM
   s('cfg_slurm_partition',      CFG.slurm_partition);
   s('cfg_slurm_account',        CFG.slurm_account);
@@ -1773,11 +1759,6 @@ window.addEventListener('DOMContentLoaded', () => {
   s('cfg_band_ymax',   CFG.band_ymax);
   s('cfg_dos_xmin',    CFG.dos_xmin);
   s('cfg_dos_xmax',    CFG.dos_xmax);
-  // Execution mode radio
-  const pm = CFG.profile_mode || 'workstation';
-  const pmEl = document.getElementById(pm==='slurm'?'cfg_pm_slurm':'cfg_pm_ws');
-  if(pmEl) pmEl.checked = true;
-  onCfgProfileMode();
   // Calculation defaults (project form)
   s('potcar_dir',      CFG.potcar_dir);
   s('kpath',           CFG.kpath);
@@ -1802,13 +1783,6 @@ window.addEventListener('DOMContentLoaded', () => {
   populateProfileList();
 });
 
-function onCfgProfileMode(){
-  const isSlurm = document.getElementById('cfg_pm_slurm')?.checked;
-  const ws = document.getElementById('cfg_ws_section');
-  const sl = document.getElementById('cfg_slurm_section');
-  if(ws) ws.style.display = isSlurm ? 'none' : 'block';
-  if(sl) sl.style.display = isSlurm ? 'block' : 'none';
-}
 
 function toggleSystemSetup(){
   const body=document.getElementById('system-setup-body');
@@ -1821,9 +1795,13 @@ function toggleSystemSetup(){
 async function saveSystemConfig(){
   const v  = id => document.getElementById(id)?.value || '';
   const vi = id => parseInt(document.getElementById(id)?.value) || 0;
-  const isSlurm = document.getElementById('cfg_pm_slurm')?.checked;
+  // Persist profile_mode and mpi_np from the Project section (authoritative)
+  const profileSel = document.getElementById('profile');
+  const curProfile = profileSel?.value || 'workstation';
+  const curMpiNp   = parseInt(document.getElementById('mpi_np')?.value) || 1;
   const body={
-    profile_mode:           isSlurm ? 'slurm' : 'workstation',
+    profile_mode:           curProfile === 'slurm' ? 'slurm' : 'workstation',
+    mpi_np:                 curMpiNp,
     projects_dir:           v('cfg_projects_dir') || CFG.projects_dir,
     // paths
     vasp_std:               v('cfg_vasp_std'),
@@ -1831,9 +1809,8 @@ async function saveSystemConfig(){
     vasp_gam:               v('cfg_vasp_gam'),
     wannier90_x:            v('cfg_wannier90_x') || 'wannier90.x',
     potcar_dir:             v('cfg_potcar_dir'),
-    // workstation MPI
+    // workstation MPI (launch command only; core count is set per-project)
     mpi_launch:             v('cfg_mpi_launch') || 'mpirun -np',
-    mpi_np:                 vi('cfg_mpi_np') || 1,
     // SLURM
     slurm_partition:        v('cfg_slurm_partition') || 'standard',
     slurm_account:          v('cfg_slurm_account'),
@@ -1863,15 +1840,14 @@ async function saveSystemConfig(){
     setTimeout(()=>{msg.textContent='';},3000);
     if(CFG.potcar_dir !== body.potcar_dir){ CFG.potcar_dir=body.potcar_dir; fetchPotcarVariants(); }
     CFG.projects_dir = body.projects_dir;
-    // Update profile dropdown and refresh project list with new directory
-    populateProfileList(body.profile_mode);
+    // Refresh project list with (possibly new) projects directory
     populateResumeList();
   } else {
     msg.style.color='var(--err)'; msg.textContent='✗ Save failed';
   }
 }
 
-async function populateProfileList(selectMode){
+async function populateProfileList(){
   try{
     const{profiles}=await(await fetch('/api/profiles')).json();
     const sel=document.getElementById('profile');
@@ -1881,25 +1857,26 @@ async function populateProfileList(selectMode){
       opt.value=p.id; opt.textContent=p.name;
       sel.appendChild(opt);
     });
-    // Auto-select based on profile_mode from settings
-    const mode = selectMode || CFG.profile_mode || 'workstation';
-    if(mode==='slurm'){
+    // Auto-select based on saved profile_mode
+    if(CFG.profile_mode==='slurm'){
       const slurmOpt=[...sel.options].find(o=>o.value==='slurm');
-      if(slurmOpt) slurmOpt.selected=true;
+      if(slurmOpt){ slurmOpt.selected=true; onProfileChange(); }
     }
   }catch{}
 }
 
-async function onProfileChange(){
-  const pid=document.getElementById('profile').value;
-  if(!pid||pid==='default') return;
-  try{
-    const{profiles}=await(await fetch('/api/profiles')).json();
-    const prof=profiles.find(p=>p.id===pid);
-    if(prof&&prof.mpi_np){
-      document.getElementById('mpi_np').value=prof.mpi_np;
-    }
-  }catch{}
+function onProfileChange(){
+  const pid = document.getElementById('profile')?.value || '';
+  const mpiEl = document.getElementById('mpi_np');
+  if(!mpiEl) return;
+  if(pid === 'slurm'){
+    // Auto-fill MPI cores = nodes × tasks-per-node from system config
+    const np = (CFG.slurm_nodes||2) * (CFG.slurm_ntasks_per_node||64);
+    mpiEl.value = np;
+  } else {
+    // Workstation: use saved workstation MPI core count
+    if(CFG.mpi_np) mpiEl.value = CFG.mpi_np;
+  }
 }
 
 async function populateResumeList(){
