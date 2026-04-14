@@ -844,6 +844,12 @@ def _make_convergence_plot(slug, dtype, ptype):
     ax.set_xlabel(xlabel, fontsize=10)
     ax.set_title(titles.get(ptype, ptype), fontsize=11)
     ax.grid(True, alpha=0.25, lw=0.5)
+    # Disable scientific notation on y-axis — avoids MathText/pyparsing errors
+    # when matplotlib renders tick labels like "1.5×10³" for large energy values.
+    from matplotlib.ticker import ScalarFormatter
+    fmt = ScalarFormatter(useOffset=False, useMathText=False)
+    fmt.set_scientific(False)
+    ax.yaxis.set_major_formatter(fmt)
     plt.tight_layout()
     return fig
 
