@@ -409,6 +409,50 @@ def api_stream(job_key):
     return Response(gen(), mimetype='text/event-stream',
                     headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
 
+@app.route('/api/check_overwrite', methods=['POST'])
+def api_check_overwrite():
+    """Return info about what would be overwritten.
+
+    For 'generate': reports whether the project directory already exists and
+    which step subdirectories contain files.
+    For 'run': reports whether the target step already has an OUTCAR.
+    """
+    d    = request.json or {}
+    mode = d.get('mode', 'generate')   # 'generate' | 'run'
+    slug = _slug(d.get('project_name', d.get('project', '')))
+    pd   = _pd(slug)
+
+    if mode == 'generate':
+        if not os.path.isdir(pd):
+            return jsonify(exists=False)
+        # Collect step subdirs that contain any files
+        existing_steps = []
+        for step in _steps(slug):
+            step_dir = os.path.join(pd, step)
+            if os.path.isdir(step_dir) and any(
+                f for f in os.listdir(step_dir) if not f.startswith('.')
+            ):
+                existing_steps.append(step)
+        return jsonify(exists=True, steps=existing_steps)
+
+    elif mode == 'run':
+        step = d.get('step', '')
+        special_scripts = {'convergence', 'all', 'calculations', 'analyze'}
+        if step in special_scripts:
+            # For 'all'/'convergence'/'calculations': list steps with OUTCARs
+            steps_with_outcar = []
+            for s in _steps(slug):
+                if os.path.exists(os.path.join(pd, s, 'OUTCAR')):
+                    steps_with_outcar.append(s)
+            return jsonify(has_outcar=bool(steps_with_outcar),
+                           steps=steps_with_outcar)
+        else:
+            outcar = os.path.join(pd, step, 'OUTCAR')
+            return jsonify(has_outcar=os.path.exists(outcar), steps=[step] if os.path.exists(outcar) else [])
+
+    return jsonify(exists=False, has_outcar=False)
+
+
 @app.route('/api/status/<slug>')
 def api_status(slug):
     pd = _pd(slug)
@@ -1941,7 +1985,7 @@ async function loadProjectSettings(){
 
     // Basic fields
     if(poscar) s('poscar', poscar);
-    s('project_name', (settings.project_name||'') + '_new');
+    s('project_name', settings.project_name||'');
     s('potcar_dir',   settings.potcar_dir);
     s('functional',   settings.functional);
     s('spin_mode',    settings.spin_mode);
@@ -2212,6 +2256,26 @@ function alertTop(msg,type){
     msg?`<div class="alert alert-${type}">${msg}</div>`:'';
 }
 
+// ── overwrite confirmation dialog ─────────────────────────────────────────
+function confirmOverwrite(title, lines, onConfirm){
+  const existing=document.getElementById('overwrite-modal');
+  if(existing) existing.remove();
+  const modal=document.createElement('div');
+  modal.id='overwrite-modal';
+  modal.style.cssText='position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55)';
+  modal.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:28px 32px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4)">
+    <div style="font-size:15px;font-weight:700;margin-bottom:10px;color:var(--warn,#f59e0b)">\u26a0\ufe0f ${title}</div>
+    <div style="font-size:13px;color:var(--sub);margin-bottom:16px;line-height:1.6">${lines.join('<br>')}</div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button id="owCancel" class="btn btn-ghost btn-sm">Cancel</button>
+      <button id="owConfirm" class="btn" style="background:#ef4444;color:#fff;font-size:12px;padding:6px 16px">Overwrite</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('#owCancel').onclick=()=>modal.remove();
+  modal.querySelector('#owConfirm').onclick=()=>{modal.remove();onConfirm();};
+}
+
 // ── generate ───────────────────────────────────────────────────────────────
 async function generate(){
   const btn=document.getElementById('btn-gen');
@@ -2271,6 +2335,30 @@ async function generate(){
     profile:      v('profile'),
   };
 
+  // Check if project directory already has files that would be overwritten
+  let doGenerate=false;
+  try{
+    const chk=await post('/api/check_overwrite',{mode:'generate',project_name:body.project_name});
+    const cd=await chk.json();
+    if(cd.exists && cd.steps && cd.steps.length>0){
+      btn.disabled=false; btn.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Generate Workflow';
+      confirmOverwrite(
+        'Existing files will be overwritten',
+        [`Project <strong>${body.project_name}</strong> already exists with the following steps:`,
+         cd.steps.map(s=>`&nbsp;&nbsp;• ${s}`).join('<br>'),
+         'Input files (INCAR, KPOINTS, run.sh, etc.) in these folders will be replaced.<br>Existing <strong>OUTCAR / WAVECAR / CHGCAR</strong> files are not touched.'],
+        ()=>_doGenerate(body)
+      );
+      return;
+    }
+  }catch(e){/* network error — proceed anyway */}
+
+  await _doGenerate(body);
+}
+
+async function _doGenerate(body){
+  const btn=document.getElementById('btn-gen');
+  btn.disabled=true; btn.textContent='⏳ Generating…';
   try{
     const r=await post('/api/generate',body);
     const d=await r.json();
@@ -2374,6 +2462,23 @@ function stepRow(step,num,label){
 // ── run controls ───────────────────────────────────────────────────────────
 async function runStep(step){
   if(!PROJECT) return;
+  try{
+    const chk=await post('/api/check_overwrite',{mode:'run',project:PROJECT,step});
+    const cd=await chk.json();
+    if(cd.has_outcar){
+      confirmOverwrite(
+        'OUTCAR already exists — re-run this step?',
+        [`Step <strong>${step}</strong> already has an OUTCAR from a previous run.`,
+         'Running again will overwrite OUTCAR and any other output files in this folder.',
+         'Existing WAVECAR / CHGCAR are also overwritten by VASP.'],
+        ()=>_doRunStep(step)
+      );
+      return;
+    }
+  }catch(e){/* proceed */}
+  _doRunStep(step);
+}
+async function _doRunStep(step){
   setBadge(step,'running');
   const r=await post('/api/run',{project:PROJECT,step});
   const d=await r.json();
@@ -2382,6 +2487,23 @@ async function runStep(step){
 }
 async function runAll(){
   if(!PROJECT) return;
+  try{
+    const chk=await post('/api/check_overwrite',{mode:'run',project:PROJECT,step:'all'});
+    const cd=await chk.json();
+    if(cd.has_outcar){
+      confirmOverwrite(
+        'Existing output will be overwritten',
+        [`The following steps already have OUTCAR files:`,
+         cd.steps.map(s=>`&nbsp;&nbsp;• ${s}`).join('<br>'),
+         'Running all steps will overwrite these results.'],
+        ()=>_doRunAll()
+      );
+      return;
+    }
+  }catch(e){/* proceed */}
+  _doRunAll();
+}
+async function _doRunAll(){
   const r=await post('/api/run',{project:PROJECT,step:'all'});
   const d=await r.json();
   if(!r.ok){alert(d.error);return;}
@@ -2390,6 +2512,23 @@ async function runAll(){
 async function runPhase2(){
   const encut=v('encut_p2'),kmesh=v('kmesh_p2'),kmesh_dos=v('kmesh_dos_p2');
   if(!encut||!kmesh){alert('Enter ENCUT and k-mesh first.');return;}
+  try{
+    const chk=await post('/api/check_overwrite',{mode:'run',project:PROJECT,step:'calculations'});
+    const cd=await chk.json();
+    if(cd.has_outcar){
+      confirmOverwrite(
+        'Existing output will be overwritten',
+        [`The following steps already have OUTCAR files:`,
+         cd.steps.map(s=>`&nbsp;&nbsp;• ${s}`).join('<br>'),
+         'Running Phase 2 will overwrite these results.'],
+        ()=>_doRunPhase2(encut,kmesh,kmesh_dos)
+      );
+      return;
+    }
+  }catch(e){/* proceed */}
+  _doRunPhase2(encut,kmesh,kmesh_dos);
+}
+async function _doRunPhase2(encut,kmesh,kmesh_dos){
   const r=await post('/api/run_phase2',{project:PROJECT,encut,kmesh,kmesh_dos});
   const d=await r.json();
   if(!r.ok){alert(d.error);return;}
