@@ -1501,7 +1501,15 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <input id="project_name" value="graphene test">
       <div style="font-size:11px;color:var(--sub);margin-top:3px;">
         Each unique name creates a separate project folder. Change the name to start a new project without overwriting the previous one.
-      </div></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+        <button class="btn btn-ghost btn-sm" id="btn-save-proj" onclick="saveProjectSettings()"
+                title="Save settings now — project appears in the resume dropdown without generating">
+          💾 Save Project Settings
+        </button>
+        <span id="save-proj-msg" style="font-size:12px;color:var(--sub);"></span>
+      </div>
+    </div>
     <div class="f"><label>Execution Profile</label>
       <select id="profile" onchange="onProfileChange()">
         <option value="default">Workstation</option>
@@ -1761,19 +1769,12 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
 
 </div><!-- end tasks card -->
 
-<div style="display:flex;gap:10px;align-items:center;margin-top:4px;flex-wrap:wrap;">
-  <button class="btn btn-primary" id="btn-gen" onclick="generate()">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-      <polygon points="5 3 19 12 5 21 5 3"/>
-    </svg>
-    Generate Workflow
-  </button>
-  <button class="btn btn-ghost" id="btn-save-proj" onclick="saveProjectSettings()"
-          title="Save project settings without running the agent — makes this project available in the resume dropdown">
-    💾 Save Project Settings
-  </button>
-  <span id="save-proj-msg" style="font-size:12px;color:var(--sub);"></span>
-</div>
+<button class="btn btn-primary" id="btn-gen" onclick="generate()" style="margin-top:4px;">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+    <polygon points="5 3 19 12 5 21 5 3"/>
+  </svg>
+  Generate Workflow
+</button>
 </div>
 
 <!-- ════════ WORKFLOW ════════ -->
