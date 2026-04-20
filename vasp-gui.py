@@ -1977,8 +1977,8 @@ async function loadProjectSettings(){
   if(msg) msg.textContent='Loading…';
   try{
     const r=await fetch(`/api/project_settings/${slug}`);
-    const{settings,poscar}=await r.json();
     if(!r.ok){if(msg) msg.textContent='Error loading settings.'; return;}
+    const{settings,poscar}=await r.json();
 
     const s=(id,val)=>{const el=document.getElementById(id);if(el&&val!==undefined&&val!==null)el.value=val;};
     const c=(id,val)=>{const el=document.getElementById(id);if(el)el.checked=!!val;};
