@@ -662,10 +662,15 @@ def _slug_base(slug):
 
 @app.route('/api/projects')
 def api_projects():
-    """List existing project directories (have at least one run.sh step)."""
+    """List existing project directories (have at least one run.sh step).
+
+    Optional query param ?dir=<path> overrides CONFIG['projects_dir'] so the
+    client can preview a new directory before saving settings.
+    """
     projects = []
     try:
-        pd_root = CONFIG['projects_dir']
+        raw = request.args.get('dir', '').strip()
+        pd_root = os.path.abspath(os.path.expanduser(raw)) if raw else CONFIG['projects_dir']
         for name in sorted(os.listdir(pd_root)):
             full = os.path.join(pd_root, name)
             if not os.path.isdir(full):
@@ -1407,7 +1412,8 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Projects Directory</div>
     <div class="f" style="margin-bottom:14px;">
       <label>Folder where calculation projects are stored</label>
-      <input id="cfg_projects_dir" placeholder="e.g. /home/user/vasp_runs  or  ./  (relative to launch dir)">
+      <input id="cfg_projects_dir" placeholder="e.g. /home/user/vasp_runs  or  ./  (relative to launch dir)"
+             onblur="populateResumeList()">
       <div style="font-size:11px;color:var(--sub);margin-top:3px;">
         All project sub-folders live here. Change this to point to a different disk or HPC scratch area.
       </div>
@@ -1960,7 +1966,12 @@ function onProfileChange(){
 
 async function populateResumeList(){
   try{
-    const{projects}=await(await fetch('/api/projects')).json();
+    // If the Projects Directory field has a value different from the saved
+    // config, preview that directory without requiring a Save first.
+    const dirEl=document.getElementById('cfg_projects_dir');
+    const dir=(dirEl&&dirEl.value.trim()!==CFG.projects_dir)?dirEl.value.trim():'';
+    const url='/api/projects'+(dir?'?dir='+encodeURIComponent(dir):'');
+    const{projects}=await(await fetch(url)).json();
     const sel=document.getElementById('resume-sel');
     if(!sel) return;
     const prev=sel.value;
