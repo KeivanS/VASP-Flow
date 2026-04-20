@@ -340,6 +340,27 @@ def api_project_settings(slug):
     return jsonify(settings=settings, poscar=poscar)
 
 
+@app.route('/api/save_project', methods=['POST'])
+def api_save_project():
+    """Save project form data to project.json (and POSCAR) without running the agent.
+
+    Creates the project directory if it does not exist, so the project
+    appears in the resume dropdown immediately.
+    """
+    d    = request.json or {}
+    name = d.get('project_name', '').strip()
+    if not name:
+        return jsonify(error='Project name is required'), 400
+    slug = _slug(name)
+    pd_  = _pd(slug)
+    os.makedirs(pd_, exist_ok=True)
+    poscar = d.get('poscar', '').strip()
+    if poscar:
+        Path(os.path.join(pd_, 'POSCAR')).write_text(poscar)
+    Path(os.path.join(pd_, 'project.json')).write_text(json.dumps(d))
+    return jsonify(ok=True, project=slug)
+
+
 @app.route('/api/run', methods=['POST'])
 def api_run():
     d    = request.json or {}
@@ -1740,12 +1761,19 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
 
 </div><!-- end tasks card -->
 
-<button class="btn btn-primary" id="btn-gen" onclick="generate()" style="margin-top:4px;">
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-    <polygon points="5 3 19 12 5 21 5 3"/>
-  </svg>
-  Generate Workflow
-</button>
+<div style="display:flex;gap:10px;align-items:center;margin-top:4px;flex-wrap:wrap;">
+  <button class="btn btn-primary" id="btn-gen" onclick="generate()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+    Generate Workflow
+  </button>
+  <button class="btn btn-ghost" id="btn-save-proj" onclick="saveProjectSettings()"
+          title="Save project settings without running the agent — makes this project available in the resume dropdown">
+    💾 Save Project Settings
+  </button>
+  <span id="save-proj-msg" style="font-size:12px;color:var(--sub);"></span>
+</div>
 </div>
 
 <!-- ════════ WORKFLOW ════════ -->
@@ -2256,6 +2284,51 @@ function alertTop(msg,type){
     msg?`<div class="alert alert-${type}">${msg}</div>`:'';
 }
 
+// ── save project settings (without generating) ───────────────────────────
+async function saveProjectSettings(){
+  const btn=document.getElementById('btn-save-proj');
+  const msg=document.getElementById('save-proj-msg');
+  btn.disabled=true; msg.textContent='Saving…';
+  const body={
+    project_name:   v('project_name'),
+    poscar:         v('poscar'),
+    potcar_dir:     v('potcar_dir'),
+    potcar_choices: POTCAR_CHOICES,
+    functional:     v('functional'),
+    spin_mode:      v('spin_mode'),
+    hexagonal:      chk('hexagonal'),
+    is_2d:          chk('is_2d'),
+    use_u:          chk('use_u'),
+    u_entries:      getUEntries(),
+    param_mode:     PARAM_MODE,
+    conv_kp:        v('conv_kp'),
+    conv_encut:     v('conv_encut'),
+    manual_encut:   v('manual_encut'),
+    manual_kmesh_scf:v('manual_kmesh_scf'),
+    manual_kmesh_dos:v('manual_kmesh_dos'),
+    relax:  chk('t_relax'), scf:  chk('t_scf'),
+    bands:  chk('t_bands'), dos:  chk('t_dos'),
+    dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
+    wannier:chk('t_wannier'),
+    relax_type:   v('relax_type'),
+    nsw:          parseInt(v('nsw'))||100,
+    ediffg:       parseFloat(v('ediffg'))||-0.01,
+    kpath:        v('kpath'),
+    nkpts_bands:  parseInt(v('nkpts_bands'))||60,
+    mpi_np:       parseInt(v('mpi_np'))||1,
+    profile:      v('profile'),
+  };
+  if(!body.project_name){msg.textContent='Enter a project name first.';btn.disabled=false;return;}
+  try{
+    const r=await post('/api/save_project',body);
+    if(!r.ok){const e=await r.json();msg.style.color='var(--err)';msg.textContent='Error: '+(e.error||r.status);return;}
+    msg.style.color='var(--ok)'; msg.textContent='✓ Saved';
+    populateResumeList();
+    setTimeout(()=>{msg.textContent='';},3000);
+  }catch(e){msg.style.color='var(--err)';msg.textContent='Error: '+e.message;}
+  finally{btn.disabled=false;}
+}
+
 // ── overwrite confirmation dialog ─────────────────────────────────────────
 function confirmOverwrite(title, lines, onConfirm){
   const existing=document.getElementById('overwrite-modal');
@@ -2481,8 +2554,8 @@ async function runStep(step){
 async function _doRunStep(step){
   setBadge(step,'running');
   const r=await post('/api/run',{project:PROJECT,step});
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'Run failed ('+r.status+')');setBadge(step,'error');return;}
   const d=await r.json();
-  if(!r.ok){alert(d.error);setBadge(step,'error');return;}
   showLog(step); stream(d.job_key,step);
 }
 async function runAll(){
@@ -2505,8 +2578,8 @@ async function runAll(){
 }
 async function _doRunAll(){
   const r=await post('/api/run',{project:PROJECT,step:'all'});
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'Run failed ('+r.status+')');return;}
   const d=await r.json();
-  if(!r.ok){alert(d.error);return;}
   showLog('all'); stream(d.job_key,'all');
 }
 async function runPhase2(){
@@ -2530,8 +2603,8 @@ async function runPhase2(){
 }
 async function _doRunPhase2(encut,kmesh,kmesh_dos){
   const r=await post('/api/run_phase2',{project:PROJECT,encut,kmesh,kmesh_dos});
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'Run failed ('+r.status+')');return;}
   const d=await r.json();
-  if(!r.ok){alert(d.error);return;}
   showLog('phase2'); stream(d.job_key,'phase2');
 }
 function toggleLog(step){document.getElementById('log-'+step)?.classList.toggle('hidden');}
@@ -2781,8 +2854,8 @@ async function runSumo(stype){
   const logEl=document.getElementById(logId);
   if(logEl){logEl.classList.remove('hidden'); logEl.textContent='';}
   const r=await fetch(`/api/run_sumo/${PROJECT}/${stype}`);
+  if(!r.ok){const e=await r.json().catch(()=>({}));if(logEl) logEl.textContent='ERROR: '+(e.error||r.status); return;}
   const d=await r.json();
-  if(!r.ok){if(logEl) logEl.textContent='ERROR: '+d.error; return;}
   if(_sumoES){_sumoES.close(); _sumoES=null;}
   _sumoES=new EventSource('/api/stream/'+d.job_key);
   _sumoES.onmessage=e=>{
@@ -2816,8 +2889,8 @@ async function runAnalyze(){
   const logEl=document.getElementById('log-analyze');
   if(logEl){logEl.classList.remove('hidden'); logEl.textContent='';}
   const r=await post('/api/run',{project:PROJECT,step:'analyze'});
+  if(!r.ok){const e=await r.json().catch(()=>({}));if(logEl) logEl.textContent='ERROR: '+(e.error||r.status); return;}
   const d=await r.json();
-  if(!r.ok){if(logEl) logEl.textContent='ERROR: '+d.error; return;}
   stream(d.job_key,'analyze');
 }
 
@@ -2828,8 +2901,8 @@ async function openFiles(step){
   if(!PROJECT) return;
   _editorStep=step;
   const r=await fetch(`/api/files/${PROJECT}/${step}`);
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'Could not list files ('+r.status+')');return;}
   const d=await r.json();
-  if(!r.ok){alert(d.error);return;}
   _editorFiles=d.files;   // [{name, readonly}]
   if(!_editorFiles.length){alert('No files found in '+step);return;}
   document.getElementById('modal-title').textContent=step+' — files';
@@ -2845,8 +2918,8 @@ async function openFileModal(step, filename){
   if(!PROJECT) return;
   _editorStep=step;
   const r=await fetch(`/api/files/${PROJECT}/${step}`);
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert('Could not list files: '+(e.error||r.status));return;}
   const d=await r.json();
-  if(!r.ok){alert('Could not list files: '+d.error);return;}
   _editorFiles=d.files;
   const target=_editorFiles.find(f=>f.name===filename);
   if(!target){
@@ -2878,8 +2951,8 @@ async function loadFileTab(filename, readonly){
   document.getElementById('ftab-'+filename)?.classList.add('active');
 
   const r=await fetch(`/api/file/${PROJECT}/${_editorStep}/${filename}`);
+  if(!r.ok){const e=await r.json().catch(()=>({}));document.getElementById('file-editor').value='Error: '+(e.error||r.status);return;}
   const d=await r.json();
-  if(!r.ok){document.getElementById('file-editor').value='Error: '+d.error;return;}
 
   _origContent=d.content;
   const editor=document.getElementById('file-editor');
@@ -2908,15 +2981,15 @@ async function loadFileTab(filename, readonly){
 async function saveFile(){
   const content=document.getElementById('file-editor').value;
   const r=await post(`/api/file/${PROJECT}/${_editorStep}/${_editorFile}`,{content});
-  const d=await r.json();
   const msg=document.getElementById('save-msg');
   if(r.ok){
     _origContent=content;
     msg.style.color='var(--ok)';
     msg.textContent='✓ Saved  (original backed up as '+_editorFile+'.bak)';
   }else{
+    const e=await r.json().catch(()=>({}));
     msg.style.color='var(--err)';
-    msg.textContent='✗ '+d.error;
+    msg.textContent='✗ '+(e.error||r.status);
   }
 }
 
