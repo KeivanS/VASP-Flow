@@ -38,6 +38,18 @@ class InstructionParser:
             'mpi_np':         self._extract_int_key(content, r'MPI\s*[:,=]?\s*(\d+)', default=1),
             'kpar':           self._extract_int_key(content, r'KPAR\s*[:,=]\s*(\d+)', default=None),
             'ncore':          self._extract_int_key(content, r'NCORE\s*[:,=]\s*(\d+)', default=None),
+            # SLURM / HPC settings (override profile defaults when present)
+            'slurm_nodes':          self._extract_int_key(content,
+                                    r'NODES?\s*[:,=]\s*(\d+)', default=None),
+            'slurm_ntasks_per_node':self._extract_int_key(content,
+                                    r'(?:NTASKS?_PER_NODE|TASKS?_PER_NODE|CORES?_PER_NODE)\s*[:,=]\s*(\d+)',
+                                    default=None),
+            'slurm_partition':      self._extract_str_key(content,
+                                    r'PARTITION\s*[:,=]\s*(\S+)', default=None),
+            'slurm_walltime':       self._extract_str_key(content,
+                                    r'(?:WALLTIME|WALL_TIME|TIME)\s*[:,=]\s*(\S+)', default=None),
+            'slurm_account':        self._extract_str_key(content,
+                                    r'ACCOUNT\s*[:,=]\s*(\S+)', default=None),
             # Geometry hints
             'is_2d':          self._extract_bool_key(content, r'\b2[Dd]\b|\bmonolayer\b|\bslab\b'),
             'is_hex':         self._extract_bool_key(content, r'\bhex\w*\b|\btrigonal\b|\bhexagonal\b'),
@@ -52,6 +64,11 @@ class InstructionParser:
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
         }
+
+    def _extract_str_key(self, content: str, pattern: str, default=None):
+        """Extract a single string token from a regex pattern."""
+        m = re.search(pattern, content, re.IGNORECASE)
+        return m.group(1).strip() if m else default
 
     def _extract_int_key(self, content: str, pattern: str, default=None):
         """Extract a single integer from a regex pattern."""

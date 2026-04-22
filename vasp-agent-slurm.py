@@ -104,18 +104,29 @@ class SLURMVASPAgent:
         inst           = self.parser.instructions
         self.profile   = profile or {}
 
-        # ── SLURM settings from profile ───────────────────────────────────
+        # ── SLURM settings: instructions override profile, profile overrides defaults ──
         slurm = self.profile.get('slurm', {})
-        self.partition       = slurm.get('partition',       'standard')
-        self.nodes           = int(slurm.get('nodes',       1))
-        self.ntasks_per_node = int(slurm.get('ntasks_per_node', 16))
-        self.slurm_time      = slurm.get('time',            '12:00:00')
-        self.account         = slurm.get('account',         '')
+
+        # Helper: instruction value → profile value → built-in default
+        def _get(inst_key, prof_key, default):
+            v = inst.get(inst_key)
+            return v if v is not None else slurm.get(prof_key, default)
+
+        self.partition       = _get('slurm_partition',      'partition',       'standard')
+        self.nodes           = int(_get('slurm_nodes',      'nodes',           1))
+        self.ntasks_per_node = int(_get('slurm_ntasks_per_node', 'ntasks_per_node', 16))
+        self.slurm_time      = _get('slurm_walltime',       'time',            '12:00:00')
+        self.account         = _get('slurm_account',        'account',         '')
         self.slurm_output    = slurm.get('output',          'slurm-%j.out')
         self.slurm_error     = slurm.get('error',           'slurm-%j.err')
         self.modules         = self.profile.get('modules',  [])
         self.mpi_cmd         = self.profile.get('mpi_cmd',  'srun')
         self.ntasks          = self.nodes * self.ntasks_per_node
+
+        # ── Propagate total MPI ranks to instructions so the generator
+        #    computes correct KPAR/NCORE defaults (unless MPI was explicit) ──
+        if not inst.get('mpi_np') or inst.get('mpi_np') == 1:
+            inst['mpi_np'] = self.ntasks
 
         # ── VASP binaries from profile ────────────────────────────────────
         soc = inst.get('soc', False)
@@ -132,15 +143,23 @@ class SLURMVASPAgent:
         print(f"  Functional: {inst.get('functional')}")
         print(f"  SOC       : {inst.get('soc')}")
         print(f"  Tasks     : {', '.join(inst.get('tasks', []))}")
-        print(f"\n  SLURM settings:")
+        # ── KPAR / NCORE: instruction → auto-computed by generator later ──
+        kpar  = inst.get('kpar')
+        ncore = inst.get('ncore')
+        kpar_note  = f"{kpar} (from instructions)" if kpar  else f"auto ({self.nodes}, one per node)"
+        ncore_note = f"{ncore} (from instructions)" if ncore else f"auto (√{self.ntasks_per_node} ≈ {self._default_ncore()})"
+
+        print(f"\n  SLURM settings (instructions override profile):")
         print(f"    partition        : {self.partition}")
         print(f"    nodes            : {self.nodes}")
-        print(f"    ntasks-per-node  : {self.ntasks_per_node}  (total: {self.ntasks})")
+        print(f"    ntasks-per-node  : {self.ntasks_per_node}  →  total MPI ranks: {self.ntasks}")
         print(f"    wall time        : {self.slurm_time}")
         if self.account:
             print(f"    account          : {self.account}")
         if self.modules:
             print(f"    modules          : {', '.join(self.modules)}")
+        print(f"    KPAR             : {kpar_note}")
+        print(f"    NCORE            : {ncore_note}")
 
         self.poscar_file = os.path.abspath(poscar_file)
         self.inst_file   = os.path.abspath(instructions_file)
@@ -149,6 +168,16 @@ class SLURMVASPAgent:
         os.makedirs(self.project_dir, exist_ok=True)
         shutil.copy(self.inst_file,   self.project_dir)
         shutil.copy(self.poscar_file, os.path.join(self.project_dir, 'POSCAR'))
+
+    def _default_ncore(self) -> int:
+        """Return the nearest power-of-2 ≤ sqrt(ntasks_per_node), minimum 1."""
+        import math
+        s = int(math.isqrt(self.ntasks_per_node))
+        # round down to nearest power of 2
+        p = 1
+        while p * 2 <= s:
+            p *= 2
+        return max(1, p)
 
     # ── SLURM script builders ─────────────────────────────────────────────
 
