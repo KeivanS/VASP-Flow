@@ -195,7 +195,7 @@ class SLURMVASPAgent:
             f"#SBATCH --error={self.slurm_error}",
         ]
         if self.account:
-            lines.append(f"#SBATCH --account={self.account}")
+            lines.append(f"#SBATCH --account {self.account}")
         lines.append("")
         if self.modules:
             for mod in self.modules:
