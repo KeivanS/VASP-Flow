@@ -172,7 +172,7 @@ class SLURMVASPAgent:
     def _default_ncore(self) -> int:
         """Return the nearest power-of-2 ≤ sqrt(ntasks_per_node), minimum 1."""
         import math
-        s = int(math.isqrt(self.ntasks_per_node))
+        s = int(math.floor(math.sqrt(self.ntasks_per_node)))
         # round down to nearest power of 2
         p = 1
         while p * 2 <= s:
