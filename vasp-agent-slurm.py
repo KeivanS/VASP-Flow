@@ -198,11 +198,10 @@ class SLURMVASPAgent:
             lines.append(f"#SBATCH --account {self.account}")
         lines.append("")
         if self.modules:
+            lines.append("module purge")
             for mod in self.modules:
                 lines.append(f"module load {mod}")
             lines.append("")
-        lines.append('cd "$(dirname "$0")"')
-        lines.append("")
         return "\n".join(lines)
 
     def _vasp_run_line(self) -> str:
@@ -219,6 +218,8 @@ class SLURMVASPAgent:
         script = os.path.join(step_dir, 'run.sh')
         with open(script, 'w') as f:
             f.write(self._sbatch_header(job_name, time_override))
+            f.write(f"cd {os.path.abspath(step_dir)}\n")
+            f.write(f"echo \"Working directory: $(pwd)\"\n\n")
             f.write(f"{self._vasp_run_line()}\n")
             f.write('\necho "Exit status: $?"\n')
         chmod_x(script)
