@@ -216,10 +216,16 @@ class SLURMVASPAgent:
                            time_override: str = None):
         """Replace the VASPInputGenerator-produced run.sh with a SLURM batch script."""
         script = os.path.join(step_dir, 'run.sh')
+        abs_dir = os.path.abspath(step_dir)
         with open(script, 'w') as f:
             f.write(self._sbatch_header(job_name, time_override))
-            f.write(f"cd {os.path.abspath(step_dir)}\n")
+            f.write(f"cd {abs_dir}\n")
             f.write(f"echo \"Working directory: $(pwd)\"\n\n")
+            # Call pre-run copy scripts if they exist (copy POSCAR/CHGCAR from previous step)
+            for copy_script in ('copy_from_relax.sh', 'copy_from_scf.sh'):
+                if os.path.isfile(os.path.join(step_dir, copy_script)):
+                    f.write(f'echo "Copying input files..."\n')
+                    f.write(f'bash {abs_dir}/{copy_script}\n\n')
             f.write(f"{self._vasp_run_line()}\n")
             f.write('\necho "Exit status: $?"\n')
         chmod_x(script)
