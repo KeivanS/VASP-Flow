@@ -34,10 +34,24 @@ class InstructionParser:
             'dfpt':           self._extract_dfpt(content),
             'phonons':        self._extract_phonons(content),
             'dos_projections': self._extract_dos_projections(content),
-            # MPI / parallelization
+            # MPI / parallelization (global)
             'mpi_np':         self._extract_int_key(content, r'MPI\s*[:,=]?\s*(\d+)', default=1),
-            'kpar':           self._extract_int_key(content, r'KPAR\s*[:,=]\s*(\d+)', default=None),
-            'ncore':          self._extract_int_key(content, r'NCORE\s*[:,=]\s*(\d+)', default=None),
+            'kpar':           self._extract_int_key(content, r'(?<!_)KPAR\s*[:,=]\s*(\d+)', default=None),
+            'ncore':          self._extract_int_key(content, r'(?<!_)NCORE\s*[:,=]\s*(\d+)', default=None),
+            # Per-task KPAR overrides
+            'relax_kpar':     self._extract_int_key(content, r'RELAX_KPAR\s*[:,=]\s*(\d+)', default=None),
+            'scf_kpar':       self._extract_int_key(content, r'SCF_KPAR\s*[:,=]\s*(\d+)', default=None),
+            'bands_kpar':     self._extract_int_key(content, r'BANDS?_KPAR\s*[:,=]\s*(\d+)', default=None),
+            'dos_kpar':       self._extract_int_key(content, r'DOS_KPAR\s*[:,=]\s*(\d+)', default=None),
+            'dfpt_kpar':      self._extract_int_key(content, r'DFPT_KPAR\s*[:,=]\s*(\d+)', default=None),
+            'phonons_kpar':   self._extract_int_key(content, r'PHONONS?_KPAR\s*[:,=]\s*(\d+)', default=None),
+            # Per-task NCORE overrides
+            'relax_ncore':    self._extract_int_key(content, r'RELAX_NCORE\s*[:,=]\s*(\d+)', default=None),
+            'scf_ncore':      self._extract_int_key(content, r'SCF_NCORE\s*[:,=]\s*(\d+)', default=None),
+            'bands_ncore':    self._extract_int_key(content, r'BANDS?_NCORE\s*[:,=]\s*(\d+)', default=None),
+            'dos_ncore':      self._extract_int_key(content, r'DOS_NCORE\s*[:,=]\s*(\d+)', default=None),
+            'dfpt_ncore':     self._extract_int_key(content, r'DFPT_NCORE\s*[:,=]\s*(\d+)', default=None),
+            'phonons_ncore':  self._extract_int_key(content, r'PHONONS?_NCORE\s*[:,=]\s*(\d+)', default=None),
             # SLURM / HPC settings (override profile defaults when present)
             'slurm_nodes':          self._extract_int_key(content,
                                     r'NODES?\s*[:,=]\s*(\d+)', default=None),

@@ -562,7 +562,7 @@ fi
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('scf'))
+        lines.extend(self._get_parallel_lines('dfpt'))
         lines.extend(["LWAVE  = .FALSE.", "LCHARG = .FALSE."])
         return '\n'.join(lines) + '\n'
 
@@ -868,45 +868,52 @@ echo "      Data:  band.yaml  FORCE_SETS"
     def _get_parallel_lines(self, calc_type: str = 'scf') -> list:
         """Return INCAR lines for MPI parallelization.
 
-        Hardwired defaults for a 16-core machine (KPAR * NCORE = N):
+        Smart defaults scale with mpi_np (N = total MPI tasks):
 
-          relax / scf / dos  →  KPAR=2, NCORE=8
-            Dense k-mesh: split cores into 2 k-groups of 8 cores each.
+          relax / scf / dos  →  KPAR = floor(sqrt(N)), NCORE = N // KPAR
+          bands              →  KPAR = 1  (line-mode k-points), NCORE = N
+          dfpt               →  KPAR = 1  (IBRION=8 requires KPAR=1), NCORE = N
+          phonons            →  KPAR = 1, NCORE = floor(sqrt(N))
 
-          bands              →  KPAR=1, NCORE=16
-            Line-mode k-points cannot be parallelised over k; give all
-            cores to band-orbital groups.
-
-          ncl (SOC, vasp_ncl) → KPAR=2, NCORE=8
-            NCL doubles memory per band so keep NCORE moderate.
-
-        Any value explicitly set in the instruction file (kpar / ncore)
-        overrides the hardwired defaults for every calc type.
+        Per-task overrides in instructions.txt (e.g. SCF_KPAR, DOS_NCORE)
+        take priority over the global KPAR / NCORE keys, which in turn
+        take priority over the computed defaults.
         """
+        import math
         np = self.instructions.get('mpi_np', 1) or 1
         if np <= 1:
             return []
 
-        # Hardwired per-type defaults
-        defaults = {
-            'relax': (2, np // 2),
-            'scf':   (4, np // 4),
-            'bands': (1, np),        # KPAR=1 for line-mode
-            'dos':   (4, np // 4),
-        }
-        # If SOC (vasp_ncl), cap NCORE at np//2 regardless of calc type
         soc = self.instructions.get('soc', False)
+        kpar_sqrt = max(1, int(math.floor(math.sqrt(np))))
+
+        # Per-type auto defaults
+        defaults = {
+            'relax':   (kpar_sqrt,  max(1, np // kpar_sqrt)),
+            'scf':     (kpar_sqrt,  max(1, np // kpar_sqrt)),
+            'bands':   (1,          np),
+            'dos':     (kpar_sqrt,  max(1, np // kpar_sqrt)),
+            'dfpt':    (1,          np),      # KPAR=1 required for IBRION=8
+            'phonons': (1,          max(1, int(math.floor(math.sqrt(np))))),
+        }
         if soc:
-            defaults = {k: (2, np // 2) for k in defaults}
-            defaults['bands'] = (1, np // 2)  # still KPAR=1 for bands
+            # NCL doubles memory per band — cap NCORE to avoid OOM
+            for k in defaults:
+                kd, nd = defaults[k]
+                defaults[k] = (kd, max(1, nd // 2))
+            defaults['bands'] = (1, max(1, np // 2))
 
-        kpar_def, ncore_def = defaults.get(calc_type, (2, np // 2))
+        kpar_def, ncore_def = defaults.get(calc_type, (kpar_sqrt, max(1, np // kpar_sqrt)))
 
-        # Instruction-file overrides win if explicitly set
-        kpar  = self.instructions.get('kpar')  or kpar_def
-        ncore = self.instructions.get('ncore') or ncore_def
+        # Priority: per-task key > global key > auto default
+        kpar  = (self.instructions.get(f'{calc_type}_kpar')
+                 or self.instructions.get('kpar')
+                 or kpar_def)
+        ncore = (self.instructions.get(f'{calc_type}_ncore')
+                 or self.instructions.get('ncore')
+                 or ncore_def)
 
-        # Safety: ensure KPAR * NCORE never exceeds np
+        # Safety: KPAR * NCORE must not exceed np
         kpar  = max(1, min(kpar,  np))
         ncore = max(1, min(ncore, np // kpar))
 

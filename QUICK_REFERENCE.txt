@@ -113,16 +113,47 @@
 │   grep "E-fermi" OUTCAR | tail -1                                             │
 └───────────────────────────────────────────────────────────────────────────────┘
 
-┌─ SLURM CLUSTER USAGE ─────────────────────────────────────────────────────────┐
-│ Modify run.sh to add SLURM directives:                                       │
-│   #!/bin/bash                                                                 │
-│   #SBATCH --job-name=vasp_calc                                               │
-│   #SBATCH --nodes=1                                                           │
-│   #SBATCH --ntasks=16                                                         │
-│   #SBATCH --time=24:00:00                                                     │
+┌─ MPI / PARALLELIZATION SETTINGS ──────────────────────────────────────────────┐
+│ Global (applies to all tasks unless overridden):                              │
+│   MPI: 128              Total MPI tasks (nodes × cores_per_node)             │
+│   KPAR: 4               k-point parallelization (global override)            │
+│   NCORE: 8              Cores per orbital (global override)                   │
 │                                                                               │
-│   module load vasp                                                            │
-│   srun vasp_std > vasp.out 2>&1                                              │
+│ Per-task overrides (take priority over global KPAR / NCORE):                 │
+│   SCF_KPAR:    4        KPAR for SCF step only                               │
+│   BANDS_KPAR:  1        KPAR for band structure (usually 1 for line-mode)    │
+│   DOS_KPAR:    8        KPAR for DOS step                                     │
+│   DFPT_KPAR:   1        KPAR for DFPT (IBRION=8 requires KPAR=1)            │
+│   PHONONS_KPAR: 1       KPAR for phonon force calculations                   │
+│   RELAX_KPAR:  2        KPAR for relaxation                                  │
+│   SCF_NCORE:   8        NCORE for SCF step only                              │
+│   BANDS_NCORE: 16       NCORE for band structure                             │
+│   DOS_NCORE:   8        NCORE for DOS step                                   │
+│   DFPT_NCORE:  16       NCORE for DFPT                                       │
+│   PHONONS_NCORE: 8      NCORE for phonon calculations                        │
+│   RELAX_NCORE: 8        NCORE for relaxation                                 │
+│                                                                               │
+│ Auto-defaults (when not specified, scale with MPI task count N):             │
+│   SCF / DOS / relax  →  KPAR = floor(√N),  NCORE = N / KPAR                 │
+│   bands              →  KPAR = 1,           NCORE = N                        │
+│   dfpt               →  KPAR = 1,           NCORE = N  (KPAR=1 required)    │
+│   phonons            →  KPAR = 1,           NCORE = floor(√N)               │
+│                                                                               │
+│ Rule: KPAR × NCORE must divide N evenly. Agent enforces this automatically.  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SLURM CLUSTER SETTINGS ──────────────────────────────────────────────────────┐
+│ Set once in profiles/slurm.json, override per-project in instructions.txt:  │
+│   NODES: 2              Number of compute nodes                              │
+│   NTASKS_PER_NODE: 64   MPI tasks per node                                   │
+│   PARTITION: standard   SLURM partition name                                 │
+│   WALLTIME: 24:00:00    Job time limit                                       │
+│   ACCOUNT: mygroup      SLURM account / allocation                           │
+│                                                                               │
+│ Submit jobs:                                                                  │
+│   sbatch run.sh                   Single step                                │
+│   ./submit_all.sh                 All steps (dependency chained)             │
+│   ./submit_convergence.sh         Convergence tests (parallel)               │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ EXAMPLE INSTRUCTIONS ────────────────────────────────────────────────────────┐
