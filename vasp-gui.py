@@ -527,6 +527,85 @@ def api_outcar(slug, step):
 
     return jsonify(tail=tail, info=info)
 
+def _cumulative_dos_plot(dos_dir, out_png, project_label):
+    """Read DOSCAR + POSCAR and save a cumulative DOS PNG. No pymatgen needed."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import ScalarFormatter
+    import numpy as np
+    from collections import defaultdict
+
+    # Map ions → elements from POSCAR/CONTCAR
+    ion_elements = []
+    for fname in ('CONTCAR', 'POSCAR'):
+        p = os.path.join(dos_dir, fname)
+        if os.path.isfile(p):
+            ls = open(p).readlines()
+            elements = ls[5].split()
+            counts   = [int(x) for x in ls[6].split()]
+            for el, cnt in zip(elements, counts):
+                ion_elements.extend([el] * cnt)
+            break
+    if not ion_elements:
+        return False
+
+    doscar = os.path.join(dos_dir, 'DOSCAR')
+    if not os.path.isfile(doscar):
+        return False
+
+    raw    = open(doscar).readlines()
+    nions  = int(raw[0].split()[0])
+    parts  = raw[5].split()
+    nedos  = int(parts[2])
+    efermi = float(parts[3])
+
+    tot      = np.array([[float(x) for x in l.split()] for l in raw[6:6+nedos]])
+    energies = tot[:,0] - efermi
+    spin_pol = tot.shape[1] == 5
+
+    el_dos = defaultdict(lambda: np.zeros(nedos))
+    offset = 6 + nedos
+    for i in range(nions):
+        start = offset + i * (nedos + 1) + 1
+        d = np.array([[float(x) for x in l.split()] for l in raw[start:start+nedos]])
+        ion_total = (d[:,1::2].sum(axis=1) + d[:,2::2].sum(axis=1)) if spin_pol else d[:,1:].sum(axis=1)
+        el = ion_elements[i] if i < len(ion_elements) else f'ion{i}'
+        el_dos[el] += ion_total
+
+    xmin = float(CONFIG.get('dos_xmin', -6))
+    xmax = float(CONFIG.get('dos_xmax',  6))
+    mask = (energies >= xmin) & (energies <= xmax)
+    en   = energies[mask]
+
+    elements_ordered = list(dict.fromkeys(ion_elements))
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    fig, ax = plt.subplots(figsize=(7, 5))
+    cumulative = np.zeros(mask.sum())
+    for i, el in enumerate(elements_ordered):
+        prev       = cumulative.copy()
+        cumulative = cumulative + el_dos[el][mask]
+        color = colors[i % len(colors)]
+        ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)
+        ax.plot(en, cumulative, color=color, lw=1.2)
+
+    sc = ScalarFormatter(useOffset=False, useMathText=False)
+    sc.set_scientific(False)
+    ax.yaxis.set_major_formatter(sc)
+    ax.axvline(0, color='k', ls='--', lw=0.8)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
+    ax.set_ylabel('Cumulative DOS (states/eV)', fontsize=12)
+    ax.set_title(f'Cumulative DOS — {project_label}')
+    ax.legend(fontsize=9, loc='upper left')
+    ax.grid(True, alpha=0.2)
+    plt.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    return True
+
+
 def _band_plot_opts(slug):
     """Return (ymin, ymax, labels_str|None) from project.json."""
     ymin, ymax, labels = CONFIG['band_ymin'], CONFIG['band_ymax'], None
@@ -570,11 +649,12 @@ def api_plot(slug, ptype):
             os.path.join(pd_,'04_dos', f'{base}_proj_dos.png'),
             # no fallback to total DOS — show "not available" if proj doesn't exist
         ]
-    else:  # dos_total
+    else:  # dos_total → cumulative
         candidates = [
-            os.path.join(ana,             f'{base}_total_dos.png'),
-            os.path.join(pd_,'04_dos',    f'{base}_total_dos.png'),
-            os.path.join(ana,             'dos.png'),
+            os.path.join(ana,          f'{base}_cumulative_dos.png'),
+            os.path.join(ana,          f'{base}_total_dos.png'),
+            os.path.join(pd_,'04_dos', f'{base}_total_dos.png'),
+            os.path.join(ana,          'dos.png'),
         ]
 
     for p in candidates:
@@ -626,11 +706,9 @@ def api_plot(slug, ptype):
                         orb_flag = ['--orbitals', sumo_orb]
                 except Exception:
                     pass
+            # Cumulative DOS (replaces sumo total-DOS plot)
+            _cumulative_dos_plot(src, os.path.join(ana, f'{base}_cumulative_dos.png'), slug)
             for fmt in ('png', 'pdf'):
-                subprocess.run(
-                    ['sumo-dosplot','--prefix',f'{base}_total',
-                     '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'], '--format', fmt],
-                    capture_output=True, cwd=src)
                 if orb_flag:
                     subprocess.run(
                         ['sumo-dosplot','--prefix',f'{base}_proj',
