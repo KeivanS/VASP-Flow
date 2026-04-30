@@ -636,7 +636,9 @@ class VASPWorkflowAgent:
 
     # ── cumulative DOS script ────────────────────────────────────────────────
     def _gen_cumulative_dos_script(self, dos_dir):
-        """Generate 04_dos/plot_cumulative_dos.py — stacked-area cumulative DOS."""
+        """Generate 04_dos/plot_cumulative_dos.py — reads DOSCAR directly,
+        no pymatgen needed. Produces a stacked filled-area cumulative DOS
+        grouped by element, replacing the sumo total-DOS plot."""
         slug  = slugify(self.project_label)
         label = self.project_label
         py = os.path.join(dos_dir, 'plot_cumulative_dos.py')
@@ -644,86 +646,93 @@ class VASPWorkflowAgent:
             '#!/usr/bin/env python3',
             f'"""Cumulative DOS plot for: {label}',
             '',
-            'Each filled band = contribution of one element-orbital pair.',
-            'Top of each band = running sum up to that contribution.',
+            'Reads DOSCAR and POSCAR directly — no pymatgen needed.',
+            'Each filled band = summed contribution of one element.',
             'Top of the topmost band = total DOS.',
             '',
-            'Requires: pymatgen  (pip install pymatgen)',
-            f'Output:   analysis/{slug}_cumulative_dos.png',
+            f'Output: analysis/{slug}_cumulative_dos.png',
             '"""',
             'import sys, os',
             'import matplotlib',
             'matplotlib.use("Agg")',
             'import matplotlib.pyplot as plt',
+            'from matplotlib.ticker import ScalarFormatter',
             'import numpy as np',
             '',
             'HERE = os.path.dirname(os.path.abspath(__file__))',
             'ANA  = os.path.normpath(os.path.join(HERE, "..", "analysis"))',
             'os.makedirs(ANA, exist_ok=True)',
             '',
-            'try:',
-            '    from pymatgen.io.vasp import Vasprun',
-            '    from pymatgen.electronic_structure.core import OrbitalType, Spin',
-            'except ImportError:',
-            '    print("ERROR: pymatgen not installed.  Run: pip install pymatgen")',
-            '    sys.exit(1)',
+            '# ── read POSCAR to map ions → elements ───────────────────────',
+            'ion_elements = []',
+            'for fname in ("CONTCAR", "POSCAR"):',
+            '    p = os.path.join(HERE, fname)',
+            '    if os.path.isfile(p):',
+            '        ls = open(p).readlines()',
+            '        elements = ls[5].split()',
+            '        counts   = [int(x) for x in ls[6].split()]',
+            '        for el, cnt in zip(elements, counts):',
+            '            ion_elements.extend([el] * cnt)',
+            '        break',
+            'if not ion_elements:',
+            '    print("ERROR: POSCAR/CONTCAR not found"); sys.exit(1)',
             '',
-            'vxml = os.path.join(HERE, "vasprun.xml")',
-            'if not os.path.isfile(vxml):',
-            '    print(f"ERROR: {vxml} not found"); sys.exit(1)',
+            '# ── read DOSCAR ──────────────────────────────────────────────',
+            'doscar = os.path.join(HERE, "DOSCAR")',
+            'if not os.path.isfile(doscar):',
+            '    print(f"ERROR: DOSCAR not found in {HERE}"); sys.exit(1)',
             '',
-            'print("Reading vasprun.xml ...")',
-            'vr   = Vasprun(vxml, parse_projected_eigen=False)',
-            'cdos = vr.complete_dos',
-            'ef   = cdos.efermi',
-            'energies = cdos.energies - ef',
+            'raw = open(doscar).readlines()',
+            'nions  = int(raw[0].split()[0])',
+            'parts  = raw[5].split()',
+            'nedos  = int(parts[2])',
+            'efermi = float(parts[3])',
             '',
+            '# Total DOS block',
+            'tot = np.array([[float(x) for x in l.split()] for l in raw[6:6+nedos]])',
+            'energies = tot[:,0] - efermi',
+            'spin_pol = tot.shape[1] == 5',
+            '',
+            '# Per-ion partial DOS: each block has 1 header + nedos lines',
+            'from collections import defaultdict',
+            'el_dos = defaultdict(lambda: np.zeros(nedos))',
+            'offset = 6 + nedos',
+            'for i in range(nions):',
+            '    start = offset + i * (nedos + 1) + 1',
+            '    d = np.array([[float(x) for x in l.split()] for l in raw[start:start+nedos]])',
+            '    if spin_pol:',
+            '        ion_total = d[:,1::2].sum(axis=1) + d[:,2::2].sum(axis=1)',
+            '    else:',
+            '        ion_total = d[:,1:].sum(axis=1)',
+            '    el = ion_elements[i] if i < len(ion_elements) else f"ion{i}"',
+            '    el_dos[el] += ion_total',
+            '',
+            '# ── plot ─────────────────────────────────────────────────────',
             'EMIN, EMAX = -6.0, 6.0',
             'mask = (energies >= EMIN) & (energies <= EMAX)',
             'en   = energies[mask]',
             '',
-            'has_both = Spin.down in cdos.densities',
-            'elements = list(dict.fromkeys(s.specie.symbol for s in cdos.structure))',
-            'ORB_TYPES = [OrbitalType.s, OrbitalType.p, OrbitalType.d, OrbitalType.f]',
-            'ORB_NAMES = ["s", "p", "d", "f"]',
-            '',
-            'contributions = []',
-            'for el_sym in elements:',
-            '    try:',
-            '        spd = cdos.get_element_spd_dos(el_sym)',
-            '    except Exception:',
-            '        continue',
-            '    for orb, oname in zip(ORB_TYPES, ORB_NAMES):',
-            '        if orb not in spd:',
-            '            continue',
-            '        d      = spd[orb]',
-            '        dos_up   = d.densities.get(Spin.up,   np.zeros(len(energies)))[mask]',
-            '        dos_down = d.densities.get(Spin.down,  np.zeros(len(energies)))[mask]',
-            '        total  = dos_up + dos_down if has_both else dos_up',
-            '        if total.max() < 0.01:',
-            '            continue',
-            '        contributions.append((f"{el_sym}-{oname}", total))',
-            '',
-            'if not contributions:',
-            '    print("No significant orbital contributions found."); sys.exit(0)',
-            '',
+            'elements_ordered = list(dict.fromkeys(ion_elements))',
             'colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]',
             'fig, ax = plt.subplots(figsize=(7, 5))',
-            'cumulative = np.zeros(len(en))',
-            'for i, (label, dos) in enumerate(contributions):',
+            'cumulative = np.zeros(mask.sum())',
+            'for i, el in enumerate(elements_ordered):',
             '    prev       = cumulative.copy()',
-            '    cumulative = cumulative + dos',
+            '    cumulative = cumulative + el_dos[el][mask]',
             '    color = colors[i % len(colors)]',
-            '    ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=label)',
-            '    ax.plot(en, cumulative, color=color, lw=1.0)',
+            '    ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)',
+            '    ax.plot(en, cumulative, color=color, lw=1.2)',
             '',
+            'sc = ScalarFormatter(useOffset=False, useMathText=False)',
+            'sc.set_scientific(False)',
+            'ax.yaxis.set_major_formatter(sc)',
             'ax.axvline(0, color="k", ls="--", lw=0.8)',
             'ax.set_xlim(EMIN, EMAX)',
             'ax.set_ylim(bottom=0)',
             'ax.set_xlabel("Energy − $E_F$ (eV)", fontsize=12)',
             'ax.set_ylabel("Cumulative DOS (states/eV)", fontsize=12)',
             f'ax.set_title("Cumulative DOS — {label}")',
-            'ax.legend(fontsize=8, ncol=2, loc="upper left")',
+            'ax.legend(fontsize=9, loc="upper left")',
             'ax.grid(True, alpha=0.2)',
             'plt.tight_layout()',
             '',
@@ -809,15 +818,13 @@ class VASPWorkflowAgent:
 
             # ── DOS with sumo ────────────────────────────────────────────
             if has_dos:
-                f.write('echo "=== DOS (sumo) ==="\n')
+                f.write('echo "=== DOS ==="\n')
+                # Cumulative DOS (replaces sumo total-DOS plot)
+                f.write('echo "  Cumulative DOS (by element, from DOSCAR)..."\n')
+                f.write('python3 "$HERE/04_dos/plot_cumulative_dos.py"\n\n')
+                # Projected DOS with sumo
                 f.write('if command -v sumo-dosplot &>/dev/null; then\n')
                 f.write('    cd "$HERE/04_dos"\n')
-                f.write('    # Total DOS\n')
-                f.write('    sumo-dosplot \\\n')
-                f.write('        --prefix "$(basename $HERE)_total" \\\n')
-                f.write('        --xmin -6 --xmax 6 \\\n')
-                f.write('        2>&1\n')
-                # Projected DOS — only if projections were specified
                 if sumo_orb:
                     f.write('    # Orbital-projected DOS\n')
                     f.write(f'    sumo-dosplot \\\n')
@@ -825,19 +832,17 @@ class VASPWorkflowAgent:
                     f.write(f'        --orbitals "{sumo_orb}" \\\n')
                     f.write(f'        --xmin -6 --xmax 6 \\\n')
                     f.write(f'        2>&1\n')
+                else:
+                    f.write('    sumo-dosplot \\\n')
+                    f.write('        --prefix "$(basename $HERE)_proj" \\\n')
+                    f.write('        --xmin -6 --xmax 6 \\\n')
+                    f.write('        2>&1\n')
                 f.write('    mv *_dos.* "$HERE/analysis/" 2>/dev/null || true\n')
                 f.write('    cd "$HERE"\n')
                 f.write('    echo "  Saved: analysis/*_dos.*"\n')
                 f.write('else\n')
-                f.write('    echo "  sumo not found — falling back to DOSCAR copy"\n')
+                f.write('    echo "  sumo not found — copying DOSCAR"\n')
                 f.write('    cp "$HERE/04_dos/DOSCAR" "$HERE/analysis/"\n')
-                f.write('fi\n\n')
-                # Cumulative DOS
-                f.write('echo "=== Cumulative DOS ==="\n')
-                f.write('if python3 -c "import pymatgen" 2>/dev/null; then\n')
-                f.write('    python3 "$HERE/04_dos/plot_cumulative_dos.py"\n')
-                f.write('else\n')
-                f.write('    echo "  pymatgen not found — skipping cumulative DOS (pip install pymatgen)"\n')
                 f.write('fi\n\n')
 
             f.write('echo ""\n')
