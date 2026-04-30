@@ -766,6 +766,108 @@ class SLURMVASPAgent:
             f.write(f'python3 "$HERE/{conv_dir_rel}/plot_convergence.py" "$@"\n')
         chmod_x(sh)
 
+    # ── cumulative DOS script ────────────────────────────────────────────────
+    def _gen_cumulative_dos_script(self, dos_dir):
+        """Generate 04_dos/plot_cumulative_dos.py — stacked-area cumulative DOS."""
+        slug  = slugify(self.project_label)
+        label = self.project_label
+        py = os.path.join(dos_dir, 'plot_cumulative_dos.py')
+        lines = [
+            '#!/usr/bin/env python3',
+            f'"""Cumulative DOS plot for: {label}',
+            '',
+            'Each filled band = contribution of one element-orbital pair.',
+            'Top of each band = running sum up to that contribution.',
+            'Top of the topmost band = total DOS.',
+            '',
+            'Requires: pymatgen  (pip install pymatgen)',
+            f'Output:   analysis/{slug}_cumulative_dos.png',
+            '"""',
+            'import sys, os',
+            'import matplotlib',
+            'matplotlib.use("Agg")',
+            'import matplotlib.pyplot as plt',
+            'import numpy as np',
+            '',
+            'HERE = os.path.dirname(os.path.abspath(__file__))',
+            'ANA  = os.path.normpath(os.path.join(HERE, "..", "analysis"))',
+            'os.makedirs(ANA, exist_ok=True)',
+            '',
+            'try:',
+            '    from pymatgen.io.vasp import Vasprun',
+            '    from pymatgen.electronic_structure.core import OrbitalType, Spin',
+            'except ImportError:',
+            '    print("ERROR: pymatgen not installed.  Run: pip install pymatgen")',
+            '    sys.exit(1)',
+            '',
+            'vxml = os.path.join(HERE, "vasprun.xml")',
+            'if not os.path.isfile(vxml):',
+            '    print(f"ERROR: {vxml} not found"); sys.exit(1)',
+            '',
+            'print("Reading vasprun.xml ...")',
+            'vr   = Vasprun(vxml, parse_projected_eigen=False)',
+            'cdos = vr.complete_dos',
+            'ef   = cdos.efermi',
+            'energies = cdos.energies - ef',
+            '',
+            'EMIN, EMAX = -6.0, 6.0',
+            'mask = (energies >= EMIN) & (energies <= EMAX)',
+            'en   = energies[mask]',
+            '',
+            'has_both = Spin.down in cdos.densities',
+            'elements = list(dict.fromkeys(s.specie.symbol for s in cdos.structure))',
+            'ORB_TYPES = [OrbitalType.s, OrbitalType.p, OrbitalType.d, OrbitalType.f]',
+            'ORB_NAMES = ["s", "p", "d", "f"]',
+            '',
+            'contributions = []',
+            'for el_sym in elements:',
+            '    try:',
+            '        spd = cdos.get_element_spd_dos(el_sym)',
+            '    except Exception:',
+            '        continue',
+            '    for orb, oname in zip(ORB_TYPES, ORB_NAMES):',
+            '        if orb not in spd:',
+            '            continue',
+            '        d      = spd[orb]',
+            '        dos_up   = d.densities.get(Spin.up,   np.zeros(len(energies)))[mask]',
+            '        dos_down = d.densities.get(Spin.down,  np.zeros(len(energies)))[mask]',
+            '        total  = dos_up + dos_down if has_both else dos_up',
+            '        if total.max() < 0.01:',
+            '            continue',
+            '        contributions.append((f"{el_sym}-{oname}", total))',
+            '',
+            'if not contributions:',
+            '    print("No significant orbital contributions found."); sys.exit(0)',
+            '',
+            'colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]',
+            'fig, ax = plt.subplots(figsize=(7, 5))',
+            'cumulative = np.zeros(len(en))',
+            'for i, (label, dos) in enumerate(contributions):',
+            '    prev       = cumulative.copy()',
+            '    cumulative = cumulative + dos',
+            '    color = colors[i % len(colors)]',
+            '    ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=label)',
+            '    ax.plot(en, cumulative, color=color, lw=1.0)',
+            '',
+            'ax.axvline(0, color="k", ls="--", lw=0.8)',
+            'ax.set_xlim(EMIN, EMAX)',
+            'ax.set_ylim(bottom=0)',
+            'ax.set_xlabel("Energy − $E_F$ (eV)", fontsize=12)',
+            'ax.set_ylabel("Cumulative DOS (states/eV)", fontsize=12)',
+            f'ax.set_title("Cumulative DOS — {label}")',
+            'ax.legend(fontsize=8, ncol=2, loc="upper left")',
+            'ax.grid(True, alpha=0.2)',
+            'plt.tight_layout()',
+            '',
+            f'out = os.path.join(ANA, "{slug}_cumulative_dos.png")',
+            'fig.savefig(out, dpi=150)',
+            'plt.close(fig)',
+            'print(f"  Saved: {out}")',
+        ]
+        with open(py, 'w') as f:
+            f.write('\n'.join(lines) + '\n')
+        chmod_x(py)
+
     # ── analysis (identical to workstation version) ───────────────────────
 
     def _gen_analysis(self, calc_dirs):
@@ -841,9 +943,19 @@ class SLURMVASPAgent:
                 f.write('    echo "  sumo not found — copying DOSCAR"\n')
                 f.write('    cp "$HERE/04_dos/DOSCAR" "$HERE/analysis/"\n')
                 f.write('fi\n\n')
+                # Cumulative DOS
+                f.write('echo "=== Cumulative DOS ==="\n')
+                f.write('if python3 -c "import pymatgen" 2>/dev/null; then\n')
+                f.write('    python3 "$HERE/04_dos/plot_cumulative_dos.py"\n')
+                f.write('else\n')
+                f.write('    echo "  pymatgen not found — skipping cumulative DOS (pip install pymatgen)"\n')
+                f.write('fi\n\n')
 
             f.write('echo "Done. Results in analysis/"\n')
         chmod_x(sh)
+
+        if has_dos:
+            self._gen_cumulative_dos_script(calc_dirs['dos'])
 
 
 # ── entry point ───────────────────────────────────────────────────────────
