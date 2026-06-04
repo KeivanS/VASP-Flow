@@ -18,6 +18,114 @@ _MPI_LAUNCH  = os.environ.get('MPI_LAUNCH',  'mpirun -np')
 _MPI_NP      = int(os.environ.get('MPI_NP',  '1'))
 _WANNIER90_X = os.environ.get('WANNIER90_X', 'wannier90.x')
 
+# ── Default k-paths per Bravais lattice type (Setyawan & Curtarolo 2010) ─────
+# All coordinates are fractional reciprocal (VASP "rec" format) in the
+# PRIMITIVE cell reciprocal basis for cF/cI/hP/tP/oP/rP/mP, or the
+# simple-cubic reciprocal basis for cP (conventional cubic).
+_KPATH_LIBRARY = {
+    'cF': {   # FCC primitive  (cell angles ≈ 60°)
+        'name': 'FCC',
+        'path':    ['G','X','W','K','G','L','U','W'],
+        'path_2d': ['G','X','W','K','G'],
+        'coords': {
+            'G': [0.000, 0.000, 0.000],
+            'X': [0.500, 0.000, 0.500],
+            'W': [0.500, 0.250, 0.750],
+            'K': [0.375, 0.375, 0.750],
+            'L': [0.500, 0.500, 0.500],
+            'U': [0.625, 0.250, 0.625],
+        },
+    },
+    'cI': {   # BCC primitive  (cell angles ≈ 109.47°)
+        'name': 'BCC',
+        'path':    ['G','H','N','G','P','H'],
+        'path_2d': ['G','H','N','G'],
+        'coords': {
+            'G': [ 0.000,  0.000,  0.000],
+            'H': [ 0.500, -0.500,  0.500],
+            'N': [ 0.000,  0.000,  0.500],
+            'P': [ 0.250,  0.250,  0.250],
+        },
+    },
+    'cP': {   # Simple cubic / conventional cubic (right angles, a=b=c)
+        'name': 'Cubic',
+        'path':    ['G','X','M','G','R','X'],
+        'path_2d': ['G','X','M','G'],
+        'coords': {
+            'G': [0.000, 0.000, 0.000],
+            'X': [0.000, 0.500, 0.000],
+            'M': [0.500, 0.500, 0.000],
+            'R': [0.500, 0.500, 0.500],
+        },
+    },
+    'hP': {   # Hexagonal  (a=b, γ=120°)
+        'name': 'Hexagonal',
+        'path':    ['G','M','K','G','A','L','H','A'],
+        'path_2d': ['G','M','K','G'],
+        'coords': {
+            'G': [0.000,       0.000,       0.000],
+            'M': [0.500,       0.000,       0.000],
+            'K': [1/3,         1/3,         0.000],
+            'A': [0.000,       0.000,       0.500],
+            'L': [0.500,       0.000,       0.500],
+            'H': [1/3,         1/3,         0.500],
+        },
+    },
+    'tP': {   # Simple tetragonal  (a=b≠c, 90°)
+        'name': 'Tetragonal',
+        'path':    ['G','X','M','G','Z','R','A','Z'],
+        'path_2d': ['G','X','M','G'],
+        'coords': {
+            'G': [0.000, 0.000, 0.000],
+            'X': [0.500, 0.000, 0.000],
+            'M': [0.500, 0.500, 0.000],
+            'Z': [0.000, 0.000, 0.500],
+            'R': [0.500, 0.000, 0.500],
+            'A': [0.500, 0.500, 0.500],
+        },
+    },
+    'oP': {   # Simple orthorhombic  (a≠b≠c, 90°)
+        'name': 'Orthorhombic',
+        'path':    ['G','X','S','Y','G','Z','U','R','T','Z'],
+        'path_2d': ['G','X','S','Y','G'],
+        'coords': {
+            'G': [0.000, 0.000, 0.000],
+            'X': [0.500, 0.000, 0.000],
+            'Y': [0.000, 0.500, 0.000],
+            'Z': [0.000, 0.000, 0.500],
+            'S': [0.500, 0.500, 0.000],
+            'T': [0.000, 0.500, 0.500],
+            'U': [0.500, 0.000, 0.500],
+            'R': [0.500, 0.500, 0.500],
+        },
+    },
+    'rP': {   # Rhombohedral primitive  (a=b=c, equal angles ≠ 90°)
+        'name': 'Rhombohedral',
+        'path':    ['G','T','F','G','L'],
+        'path_2d': ['G','T','F','G'],
+        'coords': {
+            'G': [0.000, 0.000, 0.000],
+            'T': [0.500, 0.500, 0.500],
+            'F': [0.500, 0.500, 0.000],
+            'L': [0.500, 0.000, 0.000],
+        },
+    },
+    'mP': {   # Simple monoclinic  (α=γ=90°, β≠90°) — simplified path
+        'name': 'Monoclinic',
+        'path':    ['G','Y','A','Z','G','B','D'],
+        'path_2d': ['G','Y','B','G'],
+        'coords': {
+            'G': [0.000, 0.000, 0.000],
+            'Y': [0.000, 0.500, 0.000],
+            'A': [0.000, 0.500, 0.500],
+            'Z': [0.000, 0.000, 0.500],
+            'B': [0.500, 0.000, 0.000],
+            'D': [0.500, 0.500, 0.000],
+        },
+    },
+}
+
+
 class VASPInputGenerator:
     """Generate VASP input files based on calculation type and parameters"""
 
@@ -179,8 +287,8 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS
-        kpath = self.instructions.get('kpath', ['G', 'X', 'M', 'G'])
+        # KPOINTS — None triggers auto-detection from structure
+        kpath = self.instructions.get('kpath')   # None if not specified
         kpoints_content = self._generate_kpoints_linemode(kpath)
         with open(f"{output_dir}/KPOINTS", 'w') as f:
             f.write(kpoints_content)
@@ -956,12 +1064,82 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 "LSORBIT = .TRUE.", "LNONCOLLINEAR = .TRUE.",
                 f"SAXIS = {saxis}", ""]
 
+    def _classify_bravais(self) -> str:
+        """Classify the Bravais lattice type from POSCAR lattice vectors.
+        Returns a key into _KPATH_LIBRARY: cF, cI, cP, hP, tP, oP, rP, mP.
+        Falls back to 'oP' on any error.
+        """
+        try:
+            lines = open(self.poscar).readlines()
+            scale = abs(float(lines[1].strip()))
+            lv    = np.array([[float(x) for x in lines[2+i].split()[:3]]
+                               for i in range(3)]) * scale
+
+            a, b, c = [float(np.linalg.norm(lv[i])) for i in range(3)]
+            cos_a = np.dot(lv[1], lv[2]) / (b * c)
+            cos_b = np.dot(lv[0], lv[2]) / (a * c)
+            cos_g = np.dot(lv[0], lv[1]) / (a * b)
+            alpha = float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
+            beta  = float(np.degrees(np.arccos(np.clip(cos_b, -1.0, 1.0))))
+            gamma = float(np.degrees(np.arccos(np.clip(cos_g, -1.0, 1.0))))
+
+            tl = max(a, b, c) * 0.03   # 3 % relative length tolerance
+            ta = 2.0                     # 2 ° angle tolerance
+
+            leq = lambda x, y: abs(x - y) < tl
+            aeq = lambda x, y: abs(x - y) < ta
+
+            abc   = leq(a, b) and leq(b, c)
+            ab_eq = leq(a, b)
+            right = aeq(alpha, 90) and aeq(beta, 90) and aeq(gamma, 90)
+
+            # Primitive FCC: a=b=c, all angles ≈ 60°
+            if abc and aeq(alpha, 60) and aeq(beta, 60) and aeq(gamma, 60):
+                return 'cF'
+            # Primitive BCC: a=b=c, all angles ≈ 109.47°
+            if abc and aeq(alpha, 109.47) and aeq(beta, 109.47) and aeq(gamma, 109.47):
+                return 'cI'
+            # Rhombohedral: a=b=c, all angles equal but ≠ 90°
+            if abc and aeq(alpha, beta) and aeq(beta, gamma) and not right:
+                return 'rP'
+            # Hexagonal: a≈b, α=β=90°, γ=120°
+            if ab_eq and aeq(alpha, 90) and aeq(beta, 90) and aeq(gamma, 120):
+                return 'hP'
+            # Conventional cubic (a=b=c, all 90°): use SC path regardless of
+            # FCC/BCC content — primitive cells are preferred for unfolded bands
+            if abc and right:
+                return 'cP'
+            # Tetragonal: a≈b≠c, all 90°
+            if ab_eq and right:
+                return 'tP'
+            # Orthorhombic: all 90°
+            if right:
+                return 'oP'
+            # Monoclinic: α=γ=90°, β≠90°
+            if aeq(alpha, 90) and aeq(gamma, 90):
+                return 'mP'
+            # Triclinic → safe fallback
+            return 'oP'
+        except Exception:
+            return 'oP'
+
+    def _read_atom_count(self) -> int:
+        """Total number of atoms from POSCAR line 6 (element counts)."""
+        try:
+            with open(self.poscar) as f:
+                lines = f.readlines()
+            return sum(int(x) for x in lines[6].split())
+        except Exception:
+            return max(len(self.elements), 1)
+
     def _mag_lines(self) -> list:
         mag = self.instructions.get('magnetization', {})
         if not mag.get('enabled') or self.instructions.get('soc', False):
             return []
+        n      = self._read_atom_count()
+        moment = self.instructions.get('mag_moment', 2.0)
         return ["# Collinear magnetization", "ISPIN = 2",
-                "MAGMOM = 2*0.6", ""]
+                f"MAGMOM = {n}*{moment}", ""]
 
     def _u_lines(self) -> list:
         """Generate GGA+U INCAR lines with actual per-element U values."""
@@ -1169,45 +1347,57 @@ echo "      Data:  band.yaml  FORCE_SETS"
             f"  0    0    0\n"
         )
     
-    def _generate_kpoints_linemode(self, kpath: List[str], npoints: int = 40) -> str:
+    def _generate_kpoints_linemode(self, kpath=None, npoints: int = 40) -> str:
         """Generate KPOINTS file for band structure.
-        npoints is overridden by 'nkpts_bands' in instructions if set.
+
+        If kpath is None, auto-detects the Bravais lattice type from POSCAR
+        and uses the standard high-symmetry path from _KPATH_LIBRARY.
+        If kpath is a list of labels, uses those with the generic coord table
+        (backward-compatible behaviour).
         """
         npoints = self.instructions.get('nkpts_bands') or npoints
-        # High-symmetry k-point coordinates in reduced reciprocal coordinates.
-        # M differs between hexagonal and cubic/tetragonal BZs:
-        #   Hexagonal  (MoS2, graphene): M = (1/2, 0, 0)
-        #   Cubic/Tetrag.             : M = (1/2, 1/2, 0)
-        # Set 'is_hex': False in instructions for non-hexagonal structures.
-        is_hex = self.instructions.get('is_hex', True)
+        is_2d   = self.instructions.get('is_2d', False)
 
-        kpoint_coords = {
-            'G': [0.0,       0.0,       0.0],
-            'Z': [0.0,       0.0,       0.5],
-            'M': [0.5,       0.0,       0.0] if is_hex else [0.5, 0.5, 0.0],
-            'K': [1/3,       1/3,       0.0],
-            'H': [1/3,       1/3,       0.5],
-            'A': [0.0,       0.0,       0.5],
-            'L': [0.5,       0.0,       0.5],
-            'X': [0.5,       0.0,       0.0],
-            'Y': [0.0,       0.5,       0.0],
-            'R': [0.5,       0.5,       0.5],
-        }
-        
-        lines = ["Line-mode KPOINTS\n", f"{npoints}\n", "Line-mode\n", "rec\n"]
-        
+        if kpath is None:
+            # ── auto-detect ──────────────────────────────────────────────
+            bravais = self._classify_bravais()
+            entry   = _KPATH_LIBRARY.get(bravais, _KPATH_LIBRARY['oP'])
+            kpath   = entry.get('path_2d', entry['path']) if is_2d else entry['path']
+            kcoords = entry['coords']
+            comment = f"Line-mode KPOINTS  [{entry['name']} — auto-detected]"
+        else:
+            # ── user-specified labels, generic coord table ────────────────
+            is_hex = self.instructions.get('is_hex', False)
+            kcoords = {
+                'G': [0.000, 0.000, 0.000],
+                'Z': [0.000, 0.000, 0.500],
+                'M': [0.500, 0.000, 0.000] if is_hex else [0.500, 0.500, 0.000],
+                'K': [1/3,   1/3,   0.000],
+                'H': [1/3,   1/3,   0.500],
+                'A': [0.000, 0.000, 0.500],
+                'L': [0.500, 0.000, 0.500],
+                'X': [0.500, 0.000, 0.000],
+                'Y': [0.000, 0.500, 0.000],
+                'R': [0.500, 0.500, 0.500],
+                'S': [0.500, 0.500, 0.000],
+                'T': [0.000, 0.500, 0.500],
+                'U': [0.500, 0.000, 0.500],
+                # FCC-specific (primitive cell)
+                'W': [0.500, 0.250, 0.750],
+                'P': [0.250, 0.250, 0.250],
+                'N': [0.000, 0.000, 0.500],
+            }
+            comment = "Line-mode KPOINTS"
+
+        out = [f"{comment}\n", f"{npoints}\n", "Line-mode\n", "rec\n"]
         for i in range(len(kpath) - 1):
-            start_label = kpath[i]
-            end_label = kpath[i + 1]
-            
-            start = kpoint_coords.get(start_label, [0.0, 0.0, 0.0])
-            end = kpoint_coords.get(end_label, [0.0, 0.0, 0.0])
-            
-            lines.append(f"  {start[0]:8.4f} {start[1]:8.4f} {start[2]:8.4f}  ! {start_label}\n")
-            lines.append(f"  {end[0]:8.4f} {end[1]:8.4f} {end[2]:8.4f}  ! {end_label}\n")
-            lines.append("\n")
-        
-        return ''.join(lines)
+            s_lbl, e_lbl = kpath[i], kpath[i + 1]
+            s = kcoords.get(s_lbl, [0.0, 0.0, 0.0])
+            e = kcoords.get(e_lbl, [0.0, 0.0, 0.0])
+            out.append(f"  {s[0]:8.4f} {s[1]:8.4f} {s[2]:8.4f}  ! {s_lbl}\n")
+            out.append(f"  {e[0]:8.4f} {e[1]:8.4f} {e[2]:8.4f}  ! {e_lbl}\n")
+            out.append("\n")
+        return ''.join(out)
     
     def _generate_potcar_script(self) -> str:
         """Generate script to create POTCAR"""

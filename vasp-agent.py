@@ -695,17 +695,18 @@ class VASPWorkflowAgent:
             '',
             '# Per-ion partial DOS: each block has 1 header + nedos lines',
             'from collections import defaultdict',
-            'el_dos = defaultdict(lambda: np.zeros(nedos))',
+            'el_dos_up   = defaultdict(lambda: np.zeros(nedos))',
+            'el_dos_down = defaultdict(lambda: np.zeros(nedos))',
             'offset = 6 + nedos',
             'for i in range(nions):',
             '    start = offset + i * (nedos + 1) + 1',
             '    d = np.array([[float(x) for x in l.split()] for l in raw[start:start+nedos]])',
-            '    if spin_pol:',
-            '        ion_total = d[:,1::2].sum(axis=1) + d[:,2::2].sum(axis=1)',
-            '    else:',
-            '        ion_total = d[:,1:].sum(axis=1)',
             '    el = ion_elements[i] if i < len(ion_elements) else f"ion{i}"',
-            '    el_dos[el] += ion_total',
+            '    if spin_pol:',
+            '        el_dos_up[el]   += d[:,1::2].sum(axis=1)',
+            '        el_dos_down[el] += d[:,2::2].sum(axis=1)',
+            '    else:',
+            '        el_dos_up[el] += d[:,1:].sum(axis=1)',
             '',
             '# ── plot ─────────────────────────────────────────────────────',
             'EMIN, EMAX = -6.0, 6.0',
@@ -715,24 +716,46 @@ class VASPWorkflowAgent:
             'elements_ordered = list(dict.fromkeys(ion_elements))',
             'colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]',
             'fig, ax = plt.subplots(figsize=(7, 5))',
-            'cumulative = np.zeros(mask.sum())',
-            'for i, el in enumerate(elements_ordered):',
-            '    prev       = cumulative.copy()',
-            '    cumulative = cumulative + el_dos[el][mask]',
-            '    color = colors[i % len(colors)]',
-            '    ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)',
-            '    ax.plot(en, cumulative, color=color, lw=1.2)',
+            'if spin_pol:',
+            '    from matplotlib.lines import Line2D',
+            '    cum_up = np.zeros(mask.sum())',
+            '    cum_down = np.zeros(mask.sum())',
+            '    for i, el in enumerate(elements_ordered):',
+            '        color = colors[i % len(colors)]',
+            '        prev_up = cum_up.copy(); cum_up += el_dos_up[el][mask]',
+            '        prev_dn = cum_down.copy(); cum_down += el_dos_down[el][mask]',
+            '        ax.fill_between(en,  prev_up,   cum_up,   alpha=0.30, color=color)',
+            '        ax.plot(en,  cum_up,  color=color, lw=1.2)',
+            '        ax.fill_between(en, -prev_dn, -cum_down, alpha=0.30, color=color)',
+            '        ax.plot(en, -cum_down, color=color, lw=1.2, ls="--")',
+            '    ax.axhline(0, color="k", lw=0.9)',
+            '    ymax_v = max(cum_up.max(), cum_down.max()) * 1.1 or 1',
+            '    ax.set_ylim(-ymax_v, ymax_v)',
+            '    ax.set_ylabel("Cumulative DOS  ↑ up  /  ↓ down  (states/eV)", fontsize=10)',
+            '    hs  = [Line2D([0],[0], color=colors[i%len(colors)], lw=1.5, label=el)',
+            '           for i, el in enumerate(elements_ordered)]',
+            '    hs += [Line2D([0],[0], color="k", lw=1.2, label="spin ↑"),',
+            '           Line2D([0],[0], color="k", lw=1.2, ls="--", label="spin ↓")]',
+            '    ax.legend(handles=hs, fontsize=8, loc="upper left")',
+            'else:',
+            '    cumulative = np.zeros(mask.sum())',
+            '    for i, el in enumerate(elements_ordered):',
+            '        prev = cumulative.copy()',
+            '        cumulative = cumulative + el_dos_up[el][mask]',
+            '        color = colors[i % len(colors)]',
+            '        ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)',
+            '        ax.plot(en, cumulative, color=color, lw=1.2)',
+            '    ax.set_ylim(bottom=0)',
+            '    ax.set_ylabel("Cumulative DOS (states/eV)", fontsize=12)',
+            '    ax.legend(fontsize=9, loc="upper left")',
             '',
             'sc = ScalarFormatter(useOffset=False, useMathText=False)',
             'sc.set_scientific(False)',
             'ax.yaxis.set_major_formatter(sc)',
             'ax.axvline(0, color="k", ls="--", lw=0.8)',
             'ax.set_xlim(EMIN, EMAX)',
-            'ax.set_ylim(bottom=0)',
             'ax.set_xlabel("Energy − $E_F$ (eV)", fontsize=12)',
-            'ax.set_ylabel("Cumulative DOS (states/eV)", fontsize=12)',
             f'ax.set_title("Cumulative DOS — {label}")',
-            'ax.legend(fontsize=9, loc="upper left")',
             'ax.grid(True, alpha=0.2)',
             'plt.tight_layout()',
             '',
@@ -740,6 +763,158 @@ class VASPWorkflowAgent:
             'fig.savefig(out, dpi=150)',
             'plt.close(fig)',
             'print(f"  Saved: {out}")',
+        ]
+        with open(py, 'w') as f:
+            f.write('\n'.join(lines) + '\n')
+        chmod_x(py)
+
+    # ── spin-resolved band plot script ──────────────────────────────────────
+    def _gen_spin_bands_script(self, bands_dir, ana_dir):
+        """Write analysis/plot_spin_bands.py — standalone spin-resolved band plot."""
+        slug  = slugify(self.project_label)
+        label = self.project_label
+        pd    = self.project_dir
+        py    = os.path.join(ana_dir, 'plot_spin_bands.py')
+        lines = [
+            '#!/usr/bin/env python3',
+            f'"""Spin-resolved band structure for: {label}',
+            '',
+            'Reads 03_bands/vasprun.xml directly (no pymatgen needed).',
+            'Spin-up: blue solid   Spin-down: red dashed',
+            f'Output: analysis/{slug}_band.png  and  analysis/{slug}_band.pdf',
+            '"""',
+            'import sys, os, re',
+            'import xml.etree.ElementTree as ET',
+            'import numpy as np',
+            'import matplotlib',
+            'matplotlib.use("Agg")',
+            'import matplotlib.pyplot as plt',
+            'from matplotlib.lines import Line2D',
+            '',
+            'HERE = os.path.dirname(os.path.abspath(__file__))',
+            'ROOT = os.path.normpath(os.path.join(HERE, ".."))',
+            'ANA  = HERE',
+            '',
+            'vr_path = os.path.join(ROOT, "03_bands", "vasprun.xml")',
+            'kp_path = os.path.join(ROOT, "03_bands", "KPOINTS")',
+            'if not os.path.exists(vr_path):',
+            '    print(f"ERROR: {vr_path} not found"); sys.exit(1)',
+            '',
+            '# Fermi energy from 04_dos or 02_scf OUTCAR',
+            'efermi = None',
+            'for oc in [os.path.join(ROOT,"04_dos","OUTCAR"),',
+            '           os.path.join(ROOT,"02_scf","OUTCAR")]:',
+            '    if os.path.exists(oc):',
+            '        m = re.findall(r"E-fermi\\s*:\\s*([\\-\\d.]+)", open(oc,errors="replace").read())',
+            '        if m: efermi = float(m[-1]); break',
+            'if efermi is None:',
+            '    print("WARNING: E-fermi not found in OUTCAR — using 0.0"); efermi = 0.0',
+            '',
+            '# Parse vasprun.xml',
+            'tree = ET.parse(vr_path)',
+            'root = tree.getroot()',
+            '',
+            'rec_el  = root.find(".//varray[@name=\'rec_basis\']")',
+            'rec_lat = (np.array([[float(x) for x in v.text.split()]',
+            '                      for v in rec_el.findall("v")])',
+            '           if rec_el is not None else np.eye(3))',
+            '',
+            'kv = root.find(".//varray[@name=\'kpointlist\']")',
+            'if kv is None: print("ERROR: kpointlist not found"); sys.exit(1)',
+            'kpts_cart = np.array([[float(x) for x in v.text.split()]',
+            '                       for v in kv.findall("v")]) @ rec_lat',
+            'nkpts = len(kpts_cart)',
+            '',
+            'eig_parent = root.find(".//eigenvalues/array/set")',
+            'if eig_parent is None: print("ERROR: eigenvalues not found"); sys.exit(1)',
+            'spins = eig_parent.findall("set")',
+            'if len(spins) < 2: print("ERROR: not spin-polarized"); sys.exit(1)',
+            '',
+            'def parse_spin(s):',
+            '    return np.array([[float(r.text.split()[0]) for r in ks.findall("r")]',
+            '                      for ks in s.findall("set")])',
+            '',
+            'ev_up   = parse_spin(spins[0]) - efermi',
+            'ev_down = parse_spin(spins[1]) - efermi',
+            'nbands  = ev_up.shape[1]',
+            '',
+            '# k-distances',
+            'diffs = np.linalg.norm(np.diff(kpts_cart, axis=0), axis=1)',
+            'kdist = np.zeros(nkpts)',
+            'for i in range(1, nkpts): kdist[i] = kdist[i-1] + diffs[i-1]',
+            '',
+            '# Parse KPOINTS for HS labels',
+            'ticks, tick_labels, seg_breaks = [], [], []',
+            'nkdiv = None',
+            'if os.path.exists(kp_path):',
+            '    raw_kp = open(kp_path).readlines()',
+            '    h = 0; pairs = []; cur = []',
+            '    for ln in raw_kp:',
+            '        s = ln.strip()',
+            '        if h < 4:',
+            '            if not s: continue',
+            '            if h == 1:',
+            '                try: nkdiv = int(s)',
+            '                except ValueError: pass',
+            '            h += 1; continue',
+            '        if not s:',
+            '            if len(cur)==2: pairs.append(cur); cur=[]',
+            '        else:',
+            '            pts = s.split()',
+            '            if len(pts)>=3:',
+            '                try: coord=[float(pts[j]) for j in range(3)]',
+            '                except ValueError: continue',
+            '                lbl = s.split("!")[1].strip() if "!" in s else ""',
+            '                lbl = {"G":"Γ","Gamma":"Γ","GAMMA":"Γ"}.get(lbl, lbl)',
+            '                cur.append((coord, lbl))',
+            '    if len(cur)==2: pairs.append(cur)',
+            '    if nkdiv and pairs:',
+            '        for p, ((sc,sl),(ec,el)) in enumerate(pairs):',
+            '            si = p*nkdiv; ei = min(si+nkdiv-1, nkpts-1)',
+            '            if p>0: seg_breaks.append(si)',
+            '            if p==0: ticks.append(kdist[si]); tick_labels.append(sl or "?")',
+            '            if p+1 < len(pairs):',
+            '                nsi = (p+1)*nkdiv',
+            '                gap = np.linalg.norm(kpts_cart[ei]-kpts_cart[nsi]) if nsi<nkpts else 0',
+            '                cl = el or "?"; nl = pairs[p+1][0][1] or "?"',
+            '                cl = {"G":"Γ","Gamma":"Γ","GAMMA":"Γ"}.get(cl,cl)',
+            '                nl = {"G":"Γ","Gamma":"Γ","GAMMA":"Γ"}.get(nl,nl)',
+            '                merged = f"{cl}|{nl}" if gap<1e-4 and cl!=nl else cl',
+            '                ticks.append(kdist[ei]); tick_labels.append(merged)',
+            '            else:',
+            '                lbl = el or "?"',
+            '                lbl = {"G":"Γ","Gamma":"Γ","GAMMA":"Γ"}.get(lbl,lbl)',
+            '                ticks.append(kdist[ei]); tick_labels.append(lbl)',
+            '',
+            '# Plot',
+            'fig, ax = plt.subplots(figsize=(8, 6))',
+            'up_c, dn_c = "#2166ac", "#d6604d"',
+            'segs = []',
+            'prev = 0',
+            'for sp in sorted(set(seg_breaks)) + [nkpts]:',
+            '    segs.append(slice(prev, sp)); prev = sp',
+            'for b in range(nbands):',
+            '    for seg in segs:',
+            '        ax.plot(kdist[seg], ev_up[seg,b],   color=up_c, lw=0.9, alpha=0.85)',
+            '        ax.plot(kdist[seg], ev_down[seg,b],  color=dn_c, lw=0.9, alpha=0.85, ls="--")',
+            'for pos in set(ticks): ax.axvline(pos, color="k", lw=0.8, zorder=0)',
+            'if ticks: ax.set_xticks(ticks); ax.set_xticklabels(tick_labels, fontsize=11)',
+            'ax.axhline(0, color="k", lw=0.5, ls=":")',
+            'ax.set_xlim(kdist[0], kdist[-1])',
+            'ax.set_ylim(-4, 4)',
+            'ax.set_ylabel("Energy − $E_F$ (eV)", fontsize=12)',
+            'ax.legend(handles=[',
+            '    Line2D([0],[0], color=up_c, lw=1.5, label="spin ↑"),',
+            '    Line2D([0],[0], color=dn_c, lw=1.5, ls="--", label="spin ↓"),',
+            '], fontsize=10, loc="upper right")',
+            'ax.grid(True, axis="y", alpha=0.15)',
+            'plt.tight_layout()',
+            '',
+            f'for fmt, fn in [("png","{slug}_band.png"),("pdf","{slug}_band.pdf")]:',
+            '    out = os.path.join(ANA, fn)',
+            '    fig.savefig(out, dpi=150 if fmt=="png" else None)',
+            '    print(f"  Saved: {out}")',
+            'plt.close(fig)',
         ]
         with open(py, 'w') as f:
             f.write('\n'.join(lines) + '\n')
@@ -787,33 +962,33 @@ class VASPWorkflowAgent:
                 f.write('echo "=== SCF ==="\n')
                 f.write('grep "E-fermi" "$HERE/02_scf/OUTCAR" | tail -1\n\n')
 
-            # ── band structure with sumo ─────────────────────────────────
+            # ── band structure ───────────────────────────────────────────
             if has_bands:
-                f.write('echo "=== Band structure (sumo) ==="\n')
-                f.write('if command -v sumo-bandplot &>/dev/null; then\n')
-                # Extract Fermi level from DOS (dense k-mesh) with SCF fallback
-                f.write('    # Use Fermi level from dense-mesh DOS OUTCAR (more accurate)\n')
-                f.write('    EFERMI=""\n')
-                f.write('    if [ -f "$HERE/04_dos/OUTCAR" ]; then\n')
-                f.write('        EFERMI=$(grep "E-fermi" "$HERE/04_dos/OUTCAR" | tail -1 | awk \'{print $3}\')\n')
-                f.write('    elif [ -f "$HERE/02_scf/OUTCAR" ]; then\n')
-                f.write('        EFERMI=$(grep "E-fermi" "$HERE/02_scf/OUTCAR" | tail -1 | awk \'{print $3}\')\n')
-                f.write('    fi\n')
-                f.write('    if [ -n "$EFERMI" ] && [ -f "$HERE/03_bands/vasprun.xml" ]; then\n')
-                f.write('        echo "  Patching vasprun.xml efermi to $EFERMI eV"\n')
-                f.write('        sed -i.efermi_bak \'s|<i name="efermi">.*</i>|<i name="efermi">  \'$EFERMI\'  </i>|\' "$HERE/03_bands/vasprun.xml"\n')
-                f.write('    fi\n')
-                f.write('    cd "$HERE/03_bands"\n')
-                f.write('    sumo-bandplot \\\n')
-                f.write('        --prefix "$(basename $HERE)" \\\n')
-                f.write('        --ymin -4 --ymax 4 \\\n')
-                f.write('        2>&1\n')
-                f.write('    mv *_band.* "$HERE/analysis/" 2>/dev/null || true\n')
-                f.write('    cd "$HERE"\n')
-                f.write('    echo "  Saved: analysis/*_band.*"\n')
+                self._gen_spin_bands_script(calc_dirs.get('bands',''), ana)
+                f.write('echo "=== Band structure ==="\n')
+                f.write('if [ -f "$HERE/03_bands/INCAR" ] && grep -q "ISPIN *= *2" "$HERE/03_bands/INCAR"; then\n')
+                f.write('    echo "  Spin-polarized — generating spin-resolved band plot..."\n')
+                f.write('    python3 "$HERE/analysis/plot_spin_bands.py" 2>&1\n')
                 f.write('else\n')
-                f.write('    echo "  sumo not found — falling back to EIGENVAL copy"\n')
-                f.write('    cp "$HERE/03_bands/EIGENVAL" "$HERE/analysis/"\n')
+                f.write('    if command -v sumo-bandplot &>/dev/null; then\n')
+                f.write('        EFERMI=""\n')
+                f.write('        if [ -f "$HERE/04_dos/OUTCAR" ]; then\n')
+                f.write('            EFERMI=$(grep "E-fermi" "$HERE/04_dos/OUTCAR" | tail -1 | awk \'{print $3}\')\n')
+                f.write('        elif [ -f "$HERE/02_scf/OUTCAR" ]; then\n')
+                f.write('            EFERMI=$(grep "E-fermi" "$HERE/02_scf/OUTCAR" | tail -1 | awk \'{print $3}\')\n')
+                f.write('        fi\n')
+                f.write('        if [ -n "$EFERMI" ] && [ -f "$HERE/03_bands/vasprun.xml" ]; then\n')
+                f.write('            sed -i.efermi_bak \'s|<i name="efermi">.*</i>|<i name="efermi">  \'$EFERMI\'  </i>|\' "$HERE/03_bands/vasprun.xml"\n')
+                f.write('        fi\n')
+                f.write('        cd "$HERE/03_bands"\n')
+                f.write('        sumo-bandplot --prefix "$(basename $HERE)" --ymin -4 --ymax 4 2>&1\n')
+                f.write('        mv *_band.* "$HERE/analysis/" 2>/dev/null || true\n')
+                f.write('        cd "$HERE"\n')
+                f.write('        echo "  Saved: analysis/*_band.*"\n')
+                f.write('    else\n')
+                f.write('        echo "  sumo not found — copying EIGENVAL"\n')
+                f.write('        cp "$HERE/03_bands/EIGENVAL" "$HERE/analysis/"\n')
+                f.write('    fi\n')
                 f.write('fi\n\n')
 
             # ── DOS with sumo ────────────────────────────────────────────

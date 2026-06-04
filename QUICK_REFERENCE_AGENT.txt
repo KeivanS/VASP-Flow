@@ -1,0 +1,294 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║               VASP WORKFLOW AGENT — QUICK REFERENCE                          ║
+║               CLI tools  ·  vasp-agent.py  ·  vasp-agent-slurm.py           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─ BASIC USAGE ─────────────────────────────────────────────────────────────────┐
+│ Workstation:                                                                  │
+│   ./vasp-agent.py                        uses instructions.txt + POSCAR      │
+│   ./vasp-agent.py -i my_inst.txt -s struct.vasp                              │
+│                                                                               │
+│ SLURM cluster (generates sbatch scripts + submit_all.sh):                    │
+│   ./vasp-agent-slurm.py                  uses profiles/slurm.json            │
+│   ./vasp-agent-slurm.py --profile slurm  explicit profile name               │
+│                                                                               │
+│ After generation:                                                             │
+│   cd ProjectName                                                              │
+│   ./run_all.sh               workstation: runs every step in sequence        │
+│   ./submit_all.sh            SLURM: submits jobs with dependency chaining    │
+│   ./analyze.sh               post-processing plots (run after all jobs done) │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ INSTRUCTIONS.TXT FORMAT ─────────────────────────────────────────────────────┐
+│ Project: My material name                                                     │
+│                                                                               │
+│ Methods: PBEsol functional                                                    │
+│          collinear magnetization                                              │
+│          GGA+U with U=4.0 on Fe-d orbitals                                   │
+│                                                                               │
+│ Tasks: structure relaxation                                                   │
+│        SCF calculation                                                        │
+│        band structure                                                         │
+│        DOS (projected on Fe-d and O-p)                                       │
+│                                                                               │
+│ Convergence: Test k-points 6x6x6 to 12x12x12                                 │
+│              ENCUT 400-600 eV                                                 │
+│                                                                               │
+│ MAGMOM: 4.0          initial moment per atom (μB), collinear only            │
+│ ISIF: 3              relaxation type (3=full, 2=ions only, 4=fixed vol)      │
+│ NSW: 100             max ionic steps                                          │
+│ EDIFFG: -0.01        force convergence criterion (eV/Å)                      │
+│ ENCUT: 520           manual ENCUT override (eV)                              │
+│ NKPTS: 60            k-points per band segment                               │
+│ MPI: 128             total MPI tasks                                         │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ FUNCTIONALS ─────────────────────────────────────────────────────────────────┐
+│ PBE                 Standard GGA                                               │
+│ PBEsol              Optimized for solids (recommended starting point)         │
+│ R2SCAN              Meta-GGA, good accuracy/cost balance                      │
+│ HSE06  or  HSE      Hybrid — accurate gaps, expensive                         │
+│ RVV10               van der Waals (layered materials)                         │
+│ LDA                 Local density approximation                                │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SPIN AND MAGNETISM ───────────────────────────────────────────────────────────┐
+│ Collinear (ISPIN=2, ferromagnet / AFM):                                       │
+│   Methods: collinear magnetization                                            │
+│   MAGMOM: 4.0           uniform initial moment per atom in μB                │
+│                                                                               │
+│   Generated INCAR:  ISPIN = 2  /  MAGMOM = N*4.0  /  LORBIT = 11            │
+│                                                                               │
+│   For antiferromagnets — edit INCAR manually after generation:               │
+│     MAGMOM = 4.0 -4.0 4.0 -4.0   (alternating per sublattice)               │
+│                                                                               │
+│ Spin-orbit coupling (non-collinear, uses vasp_ncl):                          │
+│   Methods: SOC with magnetization in z-direction                              │
+│   Methods: SOC with magnetization in x-direction                              │
+│                                                                               │
+│ Typical initial moments (μB):                                                 │
+│   Fe, Co: 4–5    Ni: 2    Cr, Mn: 3–4    rare earths: 7                     │
+│                                                                               │
+│ Plots after DOS/bands run:                                                    │
+│   Cumulative DOS : spin-up positive, spin-down mirrored below x-axis         │
+│   Band structure : spin-up blue, spin-down red dashed                        │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ GGA+U ───────────────────────────────────────────────────────────────────────┐
+│ Methods: GGA+U with U=4.0 on Fe-d orbitals                                   │
+│          GGA+U with U=3.0 on Ni-d orbitals                                   │
+│          GGA+U with U=6.0 on Ce-f orbitals                                   │
+│                                                                               │
+│ Uses Dudarev (LDAUTYPE=2): only U−J is meaningful; set J=0.                  │
+│ Can combine with collinear magnetization in the same Methods block.          │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TASKS ───────────────────────────────────────────────────────────────────────┐
+│ structure relaxation       01_relax  IBRION=2, ISIF from ISIF keyword        │
+│ SCF  /  self-consistent    02_scf    IBRION=-1                                │
+│ band structure             03_bands  line-mode KPOINTS                        │
+│ DOS                        04_dos    dense k-mesh, LORBIT=11                  │
+│ Wannier90 / wannierization 05_wannier                                         │
+│ DFPT / Born charges        06_dfpt   IBRION=8, LEPSILON=.TRUE.               │
+│ phonons / lattice dynamics 07_phonons phonopy finite-displacement             │
+│                                                                               │
+│ Minimum required order: SCF before bands or DOS.                             │
+│ Relaxation should be first if geometry is not pre-optimised.                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ K-PATH FOR BAND STRUCTURE ────────────────────────────────────────────────────┐
+│ Omit "along …" → auto-detected from POSCAR lattice vectors:                  │
+│   Tasks: band structure                                                       │
+│                                                                               │
+│ Auto-detected defaults:                                                       │
+│   cF  FCC primitive  (angles ≈ 60°)        G-X-W-K-G-L-U-W                  │
+│   cI  BCC primitive  (angles ≈ 109.47°)    G-H-N-G-P-H                      │
+│   cP  Cubic (right angles, a=b=c)          G-X-M-G-R-X                       │
+│   hP  Hexagonal      (γ=120°)              G-M-K-G-A-L-H-A                   │
+│        2D (is_2d flag)                     G-M-K-G                            │
+│   tP  Tetragonal     (a≈b≠c, 90°)         G-X-M-G-Z-R-A-Z                   │
+│   oP  Orthorhombic   (90°)                 G-X-S-Y-G-Z-U-R-T-Z               │
+│   rP  Rhombohedral                         G-T-F-G-L                          │
+│   mP  Monoclinic                           G-Y-A-Z-G-B-D                     │
+│                                                                               │
+│ Manual override (any crystal system):                                         │
+│   Tasks: band structure along G-X-W-K-G-L                                    │
+│                                                                               │
+│ NOTE: conventional FCC/BCC cells (all 90°, 4/2 atoms) map to cP (cubic      │
+│ path). Use the PRIMITIVE cell for unfolded FCC/BCC band structure — the       │
+│ primitive cell is recognised automatically by its characteristic angles.     │
+│                                                                               │
+│ Available labels for manual paths:                                            │
+│   G  X  M  K  R  Z  A  L  H  S  T  U  Y   generic / hexagonal               │
+│   W  P  N                                   FCC/BCC primitive                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DOS PROJECTIONS ─────────────────────────────────────────────────────────────┐
+│ All accepted forms:                                                           │
+│   DOS (projected on Mo-d and S-p)                                            │
+│   DOS with projections on Ni:d and Ni:s                                      │
+│   DOS with projection on Fe-d and O-p                                        │
+│                                                                               │
+│ Element-orbital format:  El-orbital  or  El:orbital                          │
+│   s  p  d  f             orbital channel                                      │
+│   Ni:d   Mo-d   C-2s     all equivalent                                      │
+│                                                                               │
+│ Results: sumo-dosplot generates orbital-resolved PDF in analysis/             │
+│   Spin-polarized: spin-up positive, spin-down mirrored (automatic)           │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ CONVERGENCE TESTS ───────────────────────────────────────────────────────────┐
+│ Range format (auto-steps):                                                    │
+│   Convergence: Test k-points from 6x6x1 to 18x18x1    2D material           │
+│                Test k-points from 6x6x6 to 12x12x12   3D material           │
+│                ENCUT 400-600 eV                                               │
+│                                                                               │
+│ Explicit list:                                                                │
+│   Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9                       │
+│                                                                               │
+│ Generated directories: 00_convergence/kpoints/  and  00_convergence/encut/   │
+│ Run:  ./run_convergence.sh   (workstation)                                    │
+│       ./submit_convergence.sh (SLURM)                                        │
+│ Plot: ./analyze_convergence.sh                                                │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ MPI / PARALLELIZATION ────────────────────────────────────────────────────────┐
+│ Global settings:                                                              │
+│   MPI: 128              Total MPI tasks (nodes × cores_per_node)             │
+│   KPAR: 4               k-point parallelization                               │
+│   NCORE: 8              Cores per orbital                                     │
+│                                                                               │
+│ Per-task overrides:                                                           │
+│   SCF_KPAR: 4        BANDS_KPAR: 1       DOS_KPAR: 8                         │
+│   RELAX_KPAR: 2      DFPT_KPAR: 1        PHONONS_KPAR: 1                     │
+│   SCF_NCORE: 8       BANDS_NCORE: 16     DOS_NCORE: 8                        │
+│   RELAX_NCORE: 8     DFPT_NCORE: 16      PHONONS_NCORE: 8                    │
+│                                                                               │
+│ Auto-defaults when not specified (N = total MPI tasks):                      │
+│   SCF / DOS / relax  →  KPAR = floor(√N),  NCORE = N / KPAR                 │
+│   bands              →  KPAR = 1,           NCORE = N                        │
+│   DFPT               →  KPAR = 1,           NCORE = N  (KPAR=1 required)    │
+│   phonons            →  KPAR = 1,           NCORE = floor(√N)               │
+│                                                                               │
+│ Rule: KPAR × NCORE must divide N evenly. Agent enforces this automatically.  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SLURM CLUSTER SETTINGS ──────────────────────────────────────────────────────┐
+│ Defaults in profiles/slurm.json. Override per-project in instructions.txt:  │
+│   NODES: 2                Number of compute nodes                            │
+│   NTASKS_PER_NODE: 64     MPI tasks per node                                 │
+│   PARTITION: standard     SLURM partition name                               │
+│   WALLTIME: 24:00:00      Job time limit (hh:mm:ss)                          │
+│   ACCOUNT: mygroup        SLURM account / allocation                         │
+│                                                                               │
+│ Example profiles/slurm.json:                                                  │
+│   {                                                                           │
+│     "vasp_std": "vasp_std",  "vasp_ncl": "vasp_ncl",                        │
+│     "mpi_cmd": "srun",                                                        │
+│     "modules": ["intel/2021", "impi/2021", "vasp/6.3.2"],                   │
+│     "slurm": {                                                                │
+│       "partition": "standard", "nodes": 2,                                   │
+│       "ntasks_per_node": 64,   "time": "12:00:00",                           │
+│       "account": "elmgroup"                                                   │
+│     }                                                                         │
+│   }                                                                           │
+│                                                                               │
+│ Submission scripts generated:                                                 │
+│   ./submit_all.sh             All steps, dependency chained                  │
+│   ./submit_convergence.sh     Convergence jobs (STEP 1)                      │
+│   ./submit_calculations.sh    Production jobs (STEP 2)                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ WANNIER90 ────────────────────────────────────────────────────────────────────┐
+│ Tasks: Wannier90 wannierization                                               │
+│                                                                               │
+│ WANNIER_NUM_WANN: 8         number of Wannier functions                      │
+│ WANNIER_PROJ: Ga:s;As:p     projections (wannier90.win format)               │
+│ WANNIER_EWIN: -5.0 to 15.0  energy window (eV relative to E_F)              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ PHONONS (phonopy) ────────────────────────────────────────────────────────────┐
+│ Tasks: phonons lattice dynamics                                               │
+│                                                                               │
+│ PHONONS_DIM: 2 2 2          supercell dimensions                             │
+│ PHONONS_MESH: 20 20 20      q-point mesh for thermal properties              │
+│ PHONONS_DISP: 0.01          displacement amplitude (Å)                       │
+│ PHONONS_BAND: G M K G A     high-symmetry path for phonon bands              │
+│ PHONONS_NAC: FALSE          disable non-analytic correction (default: TRUE)  │
+│                                                                               │
+│ Note: DFPT Born charges are needed for NAC. Include DFPT task or set NAC off.│
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DIRECTORY STRUCTURE ─────────────────────────────────────────────────────────┐
+│ ProjectName/                                                                  │
+│ ├── instructions.txt      copy of your input                                 │
+│ ├── POSCAR                copy of your structure                              │
+│ ├── POTCAR                built once from $VASP_POTCAR_DIR                   │
+│ ├── 01_relax/             INCAR  KPOINTS  POSCAR  POTCAR  run.sh             │
+│ ├── 02_scf/               INCAR  KPOINTS  POSCAR  POTCAR  run.sh             │
+│ ├── 03_bands/             INCAR  KPOINTS         POTCAR  run.sh             │
+│ ├── 04_dos/               INCAR  KPOINTS         POTCAR  run.sh             │
+│ ├── analysis/             plots and output files                              │
+│ ├── run_all.sh            run every step in order (workstation)              │
+│ └── analyze.sh            generate plots after all steps complete            │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ COMMON OUTCAR CHECKS ─────────────────────────────────────────────────────────┐
+│ grep "reached required accuracy"  OUTCAR    converged?                       │
+│ grep "energy  without"            OUTCAR | tail -1    total energy           │
+│ grep "E-fermi"                    OUTCAR | tail -1    Fermi level            │
+│ grep "magnetization (x)"          OUTCAR | tail -5    magnetic moment        │
+│ grep "NIONS"                      OUTCAR | head -5    atom count             │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ FULL EXAMPLE — FCC Nickel, magnetic, GGA+U ──────────────────────────────────┐
+│ Project: Nickel GGA+U                                                         │
+│                                                                               │
+│ Methods: PBEsol functional                                                    │
+│          collinear magnetization                                              │
+│          GGA+U with U=4.0 on Ni-d orbitals                                   │
+│                                                                               │
+│ Tasks: structure relaxation                                                   │
+│        SCF calculation                                                        │
+│        band structure                                                         │
+│        DOS (projected on Ni-d and Ni-s)                                      │
+│                                                                               │
+│ MAGMOM: 2.0                                                                   │
+│ MPI: 128                                                                      │
+│ NODES: 2                                                                      │
+│ NTASKS_PER_NODE: 64                                                           │
+│ WALLTIME: 08:00:00                                                            │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ FULL EXAMPLE — MoS2 monolayer, SOC, convergence ─────────────────────────────┐
+│ Project: MoS2 monolayer                                                       │
+│                                                                               │
+│ Methods: PBEsol functional                                                    │
+│          SOC with magnetization in z-direction                                │
+│          2D monolayer                                                         │
+│                                                                               │
+│ Tasks: structure relaxation                                                   │
+│        SCF calculation                                                        │
+│        band structure                                                         │
+│        DOS (projected on Mo-d and S-p)                                       │
+│                                                                               │
+│ Convergence: Test k-points 8x8 to 20x20                                      │
+│              ENCUT 400-600 eV                                                 │
+│                                                                               │
+│ MPI: 64                                                                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐
+│ VASP_POTCAR_DIR not set   export VASP_POTCAR_DIR=/path/to/potpaw_PBE         │
+│ POTCAR element missing    add _sv or _pv variant to potcar_choices.json      │
+│ Wrong W point in bands    Ensure you provide a primitive cell, not           │
+│                           conventional (primitive FCC: angles ≈ 60°)         │
+│ projected DOS missing     Check "projected on" or "projections on" in        │
+│                           instructions.txt; both forms are accepted           │
+│ Not converged             Increase NSW (relax) or NELM (SCF) in INCAR       │
+│ KPAR error                KPAR × NCORE must divide total MPI tasks evenly    │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ GUI reference: QUICK_REFERENCE_GUI.txt                                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝

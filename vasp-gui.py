@@ -168,6 +168,7 @@ def api_generate():
     # ── build instruction text ──────────────────────────────────────────
     functional = d.get('functional','PBEsol')
     spin_mode  = d.get('spin_mode','none')      # none | collinear | soc_z | soc_x | soc_y
+    mag_moment = float(d.get('mag_moment', 2.0) or 2.0)
     use_u      = d.get('use_u', False)
     u_entries  = d.get('u_entries', [])         # [{element, orbital, U}]
 
@@ -201,7 +202,11 @@ def api_generate():
     if d.get('relax'):  tasks.append('structure relaxation')
     if d.get('scf'):    tasks.append('SCF calculation')
     if d.get('bands'):
-        tasks.append('band structure along ' + d.get('kpath', CONFIG['kpath']))
+        kpath_str = d.get('kpath', '').strip()
+        if kpath_str:
+            tasks.append('band structure along ' + kpath_str)
+        else:
+            tasks.append('band structure')   # no kpath → auto-detect from POSCAR
     if d.get('dos'):
         # Build projection string from dos_proj list [{element,orbitals:[s,p,d,f]}]
         proj_list = d.get('dos_proj', [])
@@ -226,6 +231,7 @@ def api_generate():
     if conv_lines: lines += ['Convergence: ' + '\n             '.join(conv_lines), '']
     lines += [f'ISIF: {isif}', f'NSW: {nsw}', f'EDIFFG: {ediffg}', f'NKPTS: {nkpts}']
     if mpi > 1: lines.append(f'MPI: {mpi}')
+    if spin_mode == 'collinear': lines.append(f'MAGMOM: {mag_moment}')
 
     # DFPT parameters
     if d.get('dfpt'):
@@ -528,11 +534,13 @@ def api_outcar(slug, step):
     return jsonify(tail=tail, info=info)
 
 def _cumulative_dos_plot(dos_dir, out_png, project_label):
-    """Read DOSCAR + POSCAR and save a cumulative DOS PNG. No pymatgen needed."""
+    """Read DOSCAR + POSCAR and save a cumulative DOS PNG. No pymatgen needed.
+    Spin-polarized: spin-up plotted positive, spin-down mirrored negative."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.ticker import ScalarFormatter
+    from matplotlib.lines import Line2D
     import numpy as np
     from collections import defaultdict
 
@@ -562,16 +570,21 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
 
     tot      = np.array([[float(x) for x in l.split()] for l in raw[6:6+nedos]])
     energies = tot[:,0] - efermi
-    spin_pol = tot.shape[1] == 5
+    spin_pol = tot.shape[1] == 5  # ISPIN=2: E dos_up dos_down idos_up idos_down
 
-    el_dos = defaultdict(lambda: np.zeros(nedos))
+    # Accumulate per-element DOS (up and down separately)
+    el_dos_up   = defaultdict(lambda: np.zeros(nedos))
+    el_dos_down = defaultdict(lambda: np.zeros(nedos))
     offset = 6 + nedos
     for i in range(nions):
         start = offset + i * (nedos + 1) + 1
-        d = np.array([[float(x) for x in l.split()] for l in raw[start:start+nedos]])
-        ion_total = (d[:,1::2].sum(axis=1) + d[:,2::2].sum(axis=1)) if spin_pol else d[:,1:].sum(axis=1)
+        d  = np.array([[float(x) for x in l.split()] for l in raw[start:start+nedos]])
         el = ion_elements[i] if i < len(ion_elements) else f'ion{i}'
-        el_dos[el] += ion_total
+        if spin_pol:
+            el_dos_up[el]   += d[:, 1::2].sum(axis=1)   # cols 1,3,5,… = spin-up
+            el_dos_down[el] += d[:, 2::2].sum(axis=1)   # cols 2,4,6,… = spin-down
+        else:
+            el_dos_up[el] += d[:, 1:].sum(axis=1)
 
     xmin = float(CONFIG.get('dos_xmin', -6))
     xmax = float(CONFIG.get('dos_xmax',  6))
@@ -581,27 +594,235 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
     elements_ordered = list(dict.fromkeys(ion_elements))
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig, ax = plt.subplots(figsize=(7, 5))
-    cumulative = np.zeros(mask.sum())
-    for i, el in enumerate(elements_ordered):
-        prev       = cumulative.copy()
-        cumulative = cumulative + el_dos[el][mask]
-        color = colors[i % len(colors)]
-        ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)
-        ax.plot(en, cumulative, color=color, lw=1.2)
+
+    if spin_pol:
+        cum_up   = np.zeros(mask.sum())
+        cum_down = np.zeros(mask.sum())
+        for i, el in enumerate(elements_ordered):
+            color = colors[i % len(colors)]
+            prev_up   = cum_up.copy()
+            cum_up   += el_dos_up[el][mask]
+            prev_down = cum_down.copy()
+            cum_down += el_dos_down[el][mask]
+            ax.fill_between(en,  prev_up,   cum_up,   alpha=0.30, color=color)
+            ax.plot(en,  cum_up,  color=color, lw=1.2)
+            ax.fill_between(en, -prev_down, -cum_down, alpha=0.30, color=color)
+            ax.plot(en, -cum_down, color=color, lw=1.2, ls='--')
+
+        ax.axhline(0, color='k', lw=0.9)
+        ymax_v = max(cum_up.max(), cum_down.max()) * 1.1 or 1
+        ax.set_ylim(-ymax_v, ymax_v)
+        ax.set_ylabel('Cumulative DOS (states/eV)   ↑ up  /  ↓ down', fontsize=10)
+        handles = [Line2D([0],[0], color=colors[i % len(colors)], lw=1.5, label=el)
+                   for i, el in enumerate(elements_ordered)]
+        handles += [Line2D([0],[0], color='k', lw=1.2, label='spin ↑'),
+                    Line2D([0],[0], color='k', lw=1.2, ls='--', label='spin ↓')]
+        ax.legend(handles=handles, fontsize=8, loc='upper left')
+    else:
+        cumulative = np.zeros(mask.sum())
+        for i, el in enumerate(elements_ordered):
+            prev       = cumulative.copy()
+            cumulative = cumulative + el_dos_up[el][mask]
+            color = colors[i % len(colors)]
+            ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)
+            ax.plot(en, cumulative, color=color, lw=1.2)
+        ax.set_ylim(bottom=0)
+        ax.set_ylabel('Cumulative DOS (states/eV)', fontsize=12)
+        ax.legend(fontsize=9, loc='upper left')
 
     sc = ScalarFormatter(useOffset=False, useMathText=False)
     sc.set_scientific(False)
     ax.yaxis.set_major_formatter(sc)
     ax.axvline(0, color='k', ls='--', lw=0.8)
     ax.set_xlim(xmin, xmax)
-    ax.set_ylim(bottom=0)
     ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
-    ax.set_ylabel('Cumulative DOS (states/eV)', fontsize=12)
     ax.set_title(f'Cumulative DOS — {project_label}')
-    ax.legend(fontsize=9, loc='upper left')
     ax.grid(True, alpha=0.2)
     plt.tight_layout()
     fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    return True
+
+
+# ── spin-resolved band structure plot ─────────────────────────────────────────
+
+def _fmt_hs_label(s):
+    """Normalise high-symmetry label: G/Gamma → Γ."""
+    s = s.strip()
+    return {'G': 'Γ', 'Gamma': 'Γ', 'GAMMA': 'Γ', 'gamma': 'Γ'}.get(s, s) or s
+
+
+def _parse_kpoints_for_bands(kp_file):
+    """Parse line-mode KPOINTS. Returns (nkdiv, pairs, coord_is_frac).
+    pairs = [((coord3, label), (coord3, label)), …] one per segment."""
+    try:
+        lines = open(kp_file).readlines()
+        header_seen = 0
+        nkdiv = None
+        coord_is_frac = True
+        pairs, current = [], []
+        for raw in lines:
+            s = raw.strip()
+            if header_seen == 0:                    # comment line
+                header_seen = 1; continue
+            if header_seen == 1:                    # nkdiv
+                nkdiv = int(s); header_seen = 2; continue
+            if header_seen == 2:                    # "Line_mode"
+                header_seen = 3; continue
+            if header_seen == 3:                    # "Reciprocal"/"Cartesian"
+                coord_is_frac = not s.lower().startswith('c')
+                header_seen = 4; continue
+            if not s:
+                if len(current) == 2:
+                    pairs.append(current); current = []
+                continue
+            parts = s.split()
+            if len(parts) < 3:
+                continue
+            try:
+                coord = [float(parts[j]) for j in range(3)]
+            except ValueError:
+                continue
+            label = s.split('!')[1].strip() if '!' in s else ''
+            current.append((coord, label))
+        if len(current) == 2:
+            pairs.append(current)
+        return nkdiv, pairs, coord_is_frac
+    except Exception:
+        return None, [], True
+
+
+def _spin_band_plot(bands_dir, efermi, ymin, ymax, ana_dir, base):
+    """Plot spin-up (blue) and spin-down (red dashed) bands from vasprun.xml."""
+    import xml.etree.ElementTree as ET
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    vr_path = os.path.join(bands_dir, 'vasprun.xml')
+    kp_path = os.path.join(bands_dir, 'KPOINTS')
+    if not os.path.exists(vr_path):
+        return False
+
+    # ── parse vasprun.xml ─────────────────────────────────────────────────
+    tree = ET.parse(vr_path)
+    root = tree.getroot()
+
+    # Reciprocal lattice vectors (rows) — convert frac k → Cartesian Å⁻¹
+    rec_el = root.find('.//varray[@name="rec_basis"]')
+    rec_lat = (np.array([[float(x) for x in v.text.split()]
+                          for v in rec_el.findall('v')])
+               if rec_el is not None else np.eye(3))
+
+    # k-points (fractional)
+    kv = root.find('.//varray[@name="kpointlist"]')
+    if kv is None:
+        return False
+    kpts_cart = np.array([[float(x) for x in v.text.split()]
+                           for v in kv.findall('v')]) @ rec_lat
+    nkpts = len(kpts_cart)
+
+    # Eigenvalues for both spins
+    eig_parent = root.find('.//eigenvalues/array/set')
+    if eig_parent is None:
+        return False
+    spins = eig_parent.findall('set')
+    if len(spins) < 2:
+        return False  # not spin-polarized
+
+    def _parse_spin(spin_set):
+        return np.array([[float(r.text.split()[0]) for r in ks.findall('r')]
+                          for ks in spin_set.findall('set')])
+
+    ev_up   = _parse_spin(spins[0]) - efermi
+    ev_down = _parse_spin(spins[1]) - efermi
+    nbands  = ev_up.shape[1]
+
+    # ── k-distances (cumulative path length) ─────────────────────────────
+    diffs  = np.linalg.norm(np.diff(kpts_cart, axis=0), axis=1)
+    kdist  = np.zeros(nkpts)
+    for i in range(1, nkpts):
+        kdist[i] = kdist[i - 1] + diffs[i - 1]
+
+    # ── parse KPOINTS for HS labels and segment boundaries ───────────────
+    nkdiv, pairs, _ = _parse_kpoints_for_bands(kp_path)
+    ticks, tick_labels = [], []
+    seg_breaks = []   # first index of each new segment (>0)
+
+    if nkdiv and pairs:
+        n_pairs = len(pairs)
+        for p, ((sc, sl), (ec, el_label)) in enumerate(pairs):
+            si = p * nkdiv
+            ei = min(p * nkdiv + nkdiv - 1, nkpts - 1)
+            if p > 0:
+                seg_breaks.append(si)
+            if p == 0:
+                ticks.append(kdist[si])
+                tick_labels.append(_fmt_hs_label(sl))
+            # end-of-segment tick: merge with next start if same k-point
+            if p + 1 < n_pairs:
+                next_si = (p + 1) * nkdiv
+                gap = (np.linalg.norm(kpts_cart[ei] - kpts_cart[next_si])
+                       if next_si < nkpts else 0.0)
+                cur_lbl  = _fmt_hs_label(el_label)
+                next_lbl = _fmt_hs_label(pairs[p + 1][0][1])
+                if gap < 1e-4:
+                    merged = (f'{cur_lbl}|{next_lbl}'
+                              if cur_lbl != next_lbl else cur_lbl)
+                    ticks.append(kdist[ei])
+                    tick_labels.append(merged)
+                else:
+                    ticks.append(kdist[ei])
+                    tick_labels.append(cur_lbl)
+                    ticks.append(kdist[next_si])
+                    tick_labels.append(next_lbl)
+            else:
+                ticks.append(kdist[ei])
+                tick_labels.append(_fmt_hs_label(el_label))
+
+    # ── plot ──────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(8, 6))
+    up_c, dn_c = '#2166ac', '#d6604d'   # blue, salmon-red
+
+    # Split path at segment boundaries so lines don't connect across breaks
+    split_pts = sorted(set(seg_breaks))
+    segs = []
+    prev = 0
+    for sp in split_pts + [nkpts]:
+        segs.append(slice(prev, sp))
+        prev = sp
+
+    for b in range(nbands):
+        for seg in segs:
+            ax.plot(kdist[seg], ev_up[seg, b],   color=up_c, lw=0.9, alpha=0.85)
+            ax.plot(kdist[seg], ev_down[seg, b],  color=dn_c, lw=0.9, alpha=0.85, ls='--')
+
+    for pos in set(ticks):
+        ax.axvline(pos, color='k', lw=0.8, zorder=0)
+
+    if ticks:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(tick_labels, fontsize=11)
+
+    ax.axhline(0, color='k', lw=0.5, ls=':')
+    ax.set_xlim(kdist[0], kdist[-1])
+    try:
+        ax.set_ylim(float(ymin), float(ymax))
+    except (TypeError, ValueError):
+        ax.set_ylim(-4, 4)
+    ax.set_ylabel('Energy − $E_F$ (eV)', fontsize=12)
+    ax.legend(handles=[
+        Line2D([0],[0], color=up_c, lw=1.5, label='spin ↑'),
+        Line2D([0],[0], color=dn_c, lw=1.5, ls='--', label='spin ↓'),
+    ], fontsize=10, loc='upper right')
+    ax.grid(True, axis='y', alpha=0.15)
+    plt.tight_layout()
+
+    for fmt in ('png', 'pdf'):
+        fig.savefig(os.path.join(ana_dir, f'{base}_band.{fmt}'),
+                    dpi=150 if fmt == 'png' else None)
     plt.close(fig)
     return True
 
@@ -660,18 +881,20 @@ def api_plot(slug, ptype):
     for p in candidates:
         if os.path.exists(p): return send_file(p, mimetype='image/png')
 
-    # ── run sumo ─────────────────────────────────────────────────────────
+    # ── run sumo (or custom spin plot) ───────────────────────────────────
     if ptype == 'bands':
         src = os.path.join(pd_, '03_bands')
         if os.path.isdir(src):
-            # Prefer Fermi level from 04_dos (dense k-mesh NSCF), fallback to 02_scf
+            # Resolve Fermi energy (dense DOS k-mesh preferred over SCF)
+            efermi = None
             for oc in [os.path.join(pd_, '04_dos', 'OUTCAR'),
                        os.path.join(pd_, '02_scf', 'OUTCAR')]:
                 if os.path.exists(oc):
                     m = re.findall(r'E-fermi\s*:\s*([-\d.]+)',
                                    Path(oc).read_text(errors='replace'))
                     if m:
-                        # Patch efermi in vasprun.xml — sumo reads it from there
+                        efermi = float(m[-1])
+                        # Patch vasprun.xml so sumo also picks up the correct EF
                         vr = os.path.join(src, 'vasprun.xml')
                         if os.path.exists(vr):
                             txt = Path(vr).read_text(errors='replace')
@@ -679,16 +902,33 @@ def api_plot(slug, ptype):
                                          f'<i name="efermi">  {m[-1]}  </i>', txt)
                             Path(vr).write_text(txt)
                         break
+
             ymin, ymax, labels = _band_plot_opts(slug)
-            label_args = ['--labels', labels] if labels else []
-            for fmt in ('png', 'pdf'):
-                subprocess.run(
-                    ['sumo-bandplot','--prefix',base,
-                     '--ymin', ymin, '--ymax', ymax,
-                     '--format', fmt] + label_args,
-                    capture_output=True, cwd=src)
-            for f in os.listdir(src):
-                if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
+
+            # Detect ISPIN=2 from INCAR → use custom spin-resolved plot
+            is_spin_pol = False
+            incar_p = os.path.join(src, 'INCAR')
+            if os.path.exists(incar_p):
+                is_spin_pol = bool(re.search(r'ISPIN\s*=\s*2',
+                                             Path(incar_p).read_text(errors='replace')))
+
+            spin_plot_ok = False
+            if is_spin_pol and efermi is not None:
+                try:
+                    spin_plot_ok = bool(_spin_band_plot(src, efermi, ymin, ymax, ana, base))
+                except Exception:
+                    spin_plot_ok = False
+
+            if not spin_plot_ok:
+                label_args = ['--labels', labels] if labels else []
+                for fmt in ('png', 'pdf'):
+                    subprocess.run(
+                        ['sumo-bandplot','--prefix',base,
+                         '--ymin', ymin, '--ymax', ymax,
+                         '--format', fmt] + label_args,
+                        capture_output=True, cwd=src)
+                for f in os.listdir(src):
+                    if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
     else:
         src = os.path.join(pd_, '04_dos')
         if os.path.isdir(src):
@@ -1655,13 +1895,18 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       </select>
     </div>
     <div class="f"><label>Spin / SOC</label>
-      <select id="spin_mode">
+      <select id="spin_mode" onchange="toggleMagMoment()">
         <option value="none">None (non-magnetic)</option>
         <option value="collinear">Collinear spin (ISPIN=2)</option>
         <option value="soc_z">SOC, magnetization ∥ z  (vasp_ncl)</option>
         <option value="soc_x">SOC, magnetization ∥ x  (vasp_ncl)</option>
         <option value="soc_y">SOC, magnetization ∥ y  (vasp_ncl)</option>
       </select>
+    </div>
+    <div class="f" id="mag_moment_row" style="display:none">
+      <label>Magnetic moment / atom (μ<sub>B</sub>)</label>
+      <input type="number" id="mag_moment" value="2.0" min="0" max="20" step="0.5"
+             style="width:100px" title="Initial MAGMOM per atom for ISPIN=2 (e.g. Fe≈4, Ni≈2, Cr≈3)">
     </div>
   </div>
   <div class="checks" style="margin-bottom:12px;">
@@ -1756,7 +2001,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div class="task-body" id="tbody-bands">
       <div class="g3">
         <div class="f"><label>K-path</label>
-          <input id="kpath" value="G-M-K-G" placeholder="G-M-K-G"></div>
+          <input id="kpath" value="" placeholder="auto-detect (or e.g. G-M-K-G)"></div>
         <div class="f"><label>K-points per segment</label>
           <input id="nkpts_bands" type="number" value="60" min="10"></div>
         <div class="f"><label>Energy window (eV, relative to EF)</label>
@@ -2107,6 +2352,8 @@ async function loadProjectSettings(){
     s('potcar_dir',   settings.potcar_dir);
     s('functional',   settings.functional);
     s('spin_mode',    settings.spin_mode);
+    s('mag_moment',   settings.mag_moment ?? 2.0);
+    toggleMagMoment();
     c('hexagonal',    settings.hexagonal);
     c('is_2d',        settings.is_2d);
     s('mpi_np',       settings.mpi_np);
@@ -2299,6 +2546,10 @@ function choosePotcar(elem,variant){
 }
 
 // ── GGA+U rows ─────────────────────────────────────────────────────────────
+function toggleMagMoment(){
+  const show = document.getElementById('spin_mode').value === 'collinear';
+  document.getElementById('mag_moment_row').style.display = show ? '' : 'none';
+}
 function toggleU(cb){
   document.getElementById('u-section').classList.toggle('hidden',!cb.checked);
   if(cb.checked&&document.getElementById('u-rows').children.length===0) addURow();
@@ -2386,6 +2637,7 @@ async function saveProjectSettings(){
     potcar_choices: POTCAR_CHOICES,
     functional:     v('functional'),
     spin_mode:      v('spin_mode'),
+    mag_moment:     parseFloat(v('mag_moment')) || 2.0,
     hexagonal:      chk('hexagonal'),
     is_2d:          chk('is_2d'),
     use_u:          chk('use_u'),
@@ -2452,6 +2704,7 @@ async function generate(){
     potcar_choices: POTCAR_CHOICES,
     functional:     v('functional'),
     spin_mode:    v('spin_mode'),
+    mag_moment:   parseFloat(v('mag_moment')) || 2.0,
     hexagonal:    chk('hexagonal'),
     is_2d:        chk('is_2d'),
     use_u:        chk('use_u'),

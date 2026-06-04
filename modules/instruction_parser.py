@@ -74,6 +74,8 @@ class InstructionParser:
             'ediffg':         self._extract_float_key(content, r'EDIFFG\s*[:,=]\s*([-\d.Ee]+)', default=None),
             # Direct ENCUT value (not a range — requires = or :)
             'encut_val':      self._extract_int_key(content, r'ENCUT\s*[:,=]\s*(\d+)', default=None),
+            # Collinear magnetization: default moment per atom (μB)
+            'mag_moment':     self._extract_float_key(content, r'MAGMOM\s*[:,=]\s*([\d.]+)', default=2.0),
             # Band structure resolution
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
@@ -242,17 +244,16 @@ class InstructionParser:
 
         return conv_info
     
-    def _extract_kpath(self, content: str) -> List[str]:
-        """Extract k-point path for band structure"""
-        # Look for patterns like "Γ-M-K-Γ" or "G-M-K-G"
+    def _extract_kpath(self, content: str):
+        """Extract k-point path for band structure.
+        Returns list of labels, or None if not specified (triggers auto-detection)."""
         kpath_match = re.search(r'along\s+([\w\-Γ]+)', content, re.IGNORECASE)
         if kpath_match:
-            path_str = kpath_match.group(1)
-            # Replace Γ with G for consistency
-            path_str = path_str.replace('Γ', 'G')
-            return path_str.split('-')
-        
-        return ['G', 'X', 'M', 'G']  # default cubic path
+            path_str = kpath_match.group(1).replace('Γ', 'G')
+            labels = path_str.split('-')
+            if labels:
+                return labels
+        return None  # auto-detect from structure
     
     def _extract_wannier(self, content: str) -> Dict[str, Any]:
         """Extract Wannier90 settings."""
@@ -317,7 +318,7 @@ class InstructionParser:
         Returns list of 'Element:orbital' strings, e.g. ['Mo:d', 'S:p', 'C:s']
         """
         projections = []
-        proj_match = re.search(r'projected on (.+?)(?:\n|$)', content, re.IGNORECASE)
+        proj_match = re.search(r'project(?:ed|ion[s]?)\s+on\s+(.+?)(?:\n|$)', content, re.IGNORECASE)
         if proj_match:
             proj_str = proj_match.group(1)
             # Match  Element[-:]optional_digit orbital_letter

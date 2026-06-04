@@ -1,0 +1,175 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║               VASP WORKFLOW GUI — QUICK REFERENCE                            ║
+║               Browser interface  ·  vasp-gui.py                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─ STARTING THE GUI ────────────────────────────────────────────────────────────┐
+│ First-time setup:                                                             │
+│   make setup          Create site.env from template (once)                   │
+│   nano site.env       Set VASP paths, POTCAR dir, MPI command                │
+│                                                                               │
+│ Start:                                                                        │
+│   make run            Launch GUI on http://localhost:5001                     │
+│                                                                               │
+│ On a cluster (SLURM):                                                         │
+│   ssh -L 5001:localhost:5001 user@cluster    SSH port-forward first          │
+│   make run                                   Run on the login node            │
+│   Open http://localhost:5001 on your laptop                                   │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ WORKFLOW — THREE TABS ────────────────────────────────────────────────────────┐
+│ 1. Setup      Fill in your project details and click ▶ Generate Workflow     │
+│ 2. Workflow   Run each calculation step in order                              │
+│ 3. Results    View band structure and DOS plots                               │
+│                                                                               │
+│ To resume an existing project:                                                │
+│   Use the "Select project" dropdown at the top of the page                   │
+│   → Workflow    jump straight to the run tab                                  │
+│   ✏ Edit & Regenerate    re-open Setup with all settings pre-filled          │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SETUP TAB — FIELD GUIDE ─────────────────────────────────────────────────────┐
+│ Project name      Folder name created in the working directory                │
+│ POSCAR            Paste crystal structure (VASP format) or click 📁 Load      │
+│ POTCAR dir        Path to your PAW pseudopotential library                    │
+│                                                                               │
+│ Functional:                                                                   │
+│   PBEsol          Best for structural properties of solids (recommended)     │
+│   PBE             Standard GGA, widely used                                   │
+│   R2SCAN          Meta-GGA, good balance of accuracy and cost                 │
+│   HSE06           Hybrid — more accurate band gaps, much slower              │
+│   RVV10           Van der Waals (layered materials)                           │
+│   LDA / AM05      Rarely needed                                               │
+│                                                                               │
+│ Spin / SOC:                                                                   │
+│   None            Non-magnetic calculation                                    │
+│   Collinear spin  ISPIN=2 — ferromagnets, antiferromagnets                    │
+│   SOC ∥ z/x/y    Spin-orbit coupling (uses vasp_ncl binary)                  │
+│                                                                               │
+│ Magnetic moment / atom (μB)   Shown when Collinear spin is selected.          │
+│   Initial MAGMOM per atom. Typical values:                                    │
+│   Fe, Co: 4–5    Ni: 2    Cr, Mn: 3–4    rare earths: 7                     │
+│   VASP writes MAGMOM = N×value in INCAR (N = total atoms from POSCAR)        │
+│                                                                               │
+│ Hexagonal BZ      Check for hexagonal/trigonal structures (MoS2, graphene)   │
+│ 2D / slab         Sets kz=1 (Gamma only out-of-plane)                        │
+│                                                                               │
+│ GGA+U             Hubbard correction — add one row per element/orbital        │
+│   Element: Fe    Orbital: d    U (eV): 4.0                                   │
+│                                                                               │
+│ Execution profile     Default: workstation. Select "SLURM HPC" for clusters  │
+│   Edit profiles/slurm.json to set your partition, nodes, account, modules    │
+│                                                                               │
+│ MPI tasks         Number of CPU cores per calculation                         │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TASKS ───────────────────────────────────────────────────────────────────────┐
+│ ☑ Structure relaxation   Optimize atomic positions (IBRION=2)                │
+│ ☑ SCF                    Self-consistent charge density                       │
+│ ☑ Band structure         Electronic band dispersion — needs SCF first        │
+│ ☑ DOS                    Density of states — needs SCF first                 │
+│ ☐ DFPT                   Born charges + dielectric tensor (IBRION=8)         │
+│ ☐ Phonons                Phonopy finite-displacement (needs DFPT for NAC)    │
+│ ☐ Wannier90              NSCF interface for Wannierization                    │
+│                                                                               │
+│ Normal order: Relaxation → SCF → Bands → DOS                                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ BAND STRUCTURE OPTIONS ──────────────────────────────────────────────────────┐
+│ k-path         Leave blank → auto-detected from POSCAR (recommended)         │
+│                Or enter manually, e.g.  G-M-K-G  or  G-X-W-K-G-L            │
+│                                                                               │
+│ Auto-detected defaults by crystal system:                                     │
+│   FCC primitive  (angles ≈ 60°)     G-X-W-K-G-L-U-W                         │
+│   BCC primitive  (angles ≈ 109.47°) G-H-N-G-P-H                             │
+│   Cubic          (a=b=c, 90°)       G-X-M-G-R-X                              │
+│   Hexagonal      (γ=120°)           G-M-K-G-A-L-H-A  (or G-M-K-G for 2D)   │
+│   Tetragonal                        G-X-M-G-Z-R-A-Z                          │
+│   Orthorhombic                      G-X-S-Y-G-Z-U-R-T-Z                     │
+│                                                                               │
+│ k-path resolution    Points per segment (default 40)                          │
+│ Energy window        Plotting range, e.g.  -4 to 4                            │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DOS OPTIONS ─────────────────────────────────────────────────────────────────┐
+│ DOS projections    Add rows to plot orbital contributions                     │
+│   Element: Mo   Orbitals: ☑d ☐s ☐p                                          │
+│   Element: S    Orbitals: ☑p ☐s                                              │
+│                                                                               │
+│ Spin-polarized DOS (ISPIN=2):                                                 │
+│   Cumulative DOS  → spin-up above x-axis, spin-down mirrored below           │
+│   Projected DOS   → same mirroring (sumo handles this automatically)         │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ CONVERGENCE TESTS ───────────────────────────────────────────────────────────┐
+│ Enable in Setup → Convergence tests (shows instead of manual k-mesh)         │
+│                                                                               │
+│ k-points range     e.g.  6x6x1 to 18x18x1   (2D)                            │
+│                          6x6x6 to 12x12x12   (3D)                            │
+│ ENCUT range        e.g.  400-600 eV                                           │
+│                                                                               │
+│ After convergence calculations finish, click the chart icon to view plots.   │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ WORKFLOW TAB ─────────────────────────────────────────────────────────────────┐
+│ Each step shows:  ▶ Run  |  ✏ Edit files  |  status badge                    │
+│                                                                               │
+│ Run steps in order — each step copies files from the previous one.           │
+│ ▶ Run All Steps submits them sequentially with automatic chaining.            │
+│                                                                               │
+│ ✏ Edit files → opens INCAR / KPOINTS / POSCAR in the browser                 │
+│   A .bak backup is created on first edit.                                    │
+│                                                                               │
+│ On SLURM: "Run" launches sbatch. The live terminal streams slurm output.     │
+│   You can also cd into the step directory and run sbatch run.sh manually.    │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ RESULTS TAB ──────────────────────────────────────────────────────────────────┐
+│ Band structure   Auto-generated after 03_bands completes                     │
+│   Spin-polarized: blue = spin ↑, red dashed = spin ↓                        │
+│   ▶ Run sumo-bandplot   regenerate (non-magnetic only)                        │
+│   ⬇ PDF   download publication-quality PDF                                   │
+│                                                                               │
+│ Cumulative DOS   Stacked filled-area plot by element, from DOSCAR            │
+│   Spin-polarized: up above zero, down mirrored below                         │
+│                                                                               │
+│ Projected DOS    Orbital-resolved via sumo (requires sumo installed)         │
+│   Spin-polarized: sumo automatically mirrors spin-down                        │
+│   ▶ Run sumo-dosplot   regenerate                                             │
+│                                                                               │
+│ OUTCAR analysis  Energy, Fermi level, magnetic moment, forces                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SLURM CLUSTER SETUP ──────────────────────────────────────────────────────────┐
+│ 1. Edit profiles/slurm.json:                                                  │
+│   {                                                                           │
+│     "vasp_std": "vasp_std",                                                   │
+│     "mpi_cmd": "srun",                                                        │
+│     "modules": ["intel/2021", "impi/2021", "vasp/6.3"],                      │
+│     "slurm": {                                                                │
+│       "partition": "standard",                                                │
+│       "nodes": 2,                                                             │
+│       "ntasks_per_node": 64,                                                  │
+│       "time": "12:00:00",                                                     │
+│       "account": "mygroup"                                                    │
+│     }                                                                         │
+│   }                                                                           │
+│                                                                               │
+│ 2. In Setup → Execution Profile: select "SLURM HPC"                          │
+│ 3. Generated run.sh files contain #SBATCH headers + module load lines        │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐
+│ POTCAR not found       System Setup → POTCAR library directory                │
+│ vasp_std not found     System Setup → VASP standard binary (full path)       │
+│ Not converged          ✏ Edit INCAR → increase NSW or NELM; re-run           │
+│ Wrong band structure   Check KPOINTS — may need to specify kpath manually    │
+│ Plots not appearing    Run the calculation step first; then reload Results    │
+│ GUI unreachable        Check ssh -L 5001:localhost:5001 tunnel is active      │
+│ Project missing from   Folder needs POSCAR + settings.json; check directory  │
+│  dropdown              is in the working directory where vasp-gui.py started  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ CLI agent reference: QUICK_REFERENCE_AGENT.txt                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
