@@ -1,0 +1,985 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{colortbl}
+\usepackage{setspace}
+
+% ---- colours ----
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{keywd}{RGB}{0,80,180}
+\definecolor{commentcol}{RGB}{60,140,60}
+\definecolor{stringcol}{RGB}{180,0,0}
+\definecolor{notebg}{RGB}{255,248,220}
+\definecolor{tipbg}{RGB}{230,245,255}
+\definecolor{tabhead}{RGB}{220,230,242}
+
+% ---- code listings ----
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{codebg},
+    keywordstyle=\color{keywd}\bfseries,
+    commentstyle=\color{commentcol},
+    stringstyle=\color{stringcol},
+    upquote=true,
+    numbers=none,
+    xleftmargin=6pt,
+    xrightmargin=6pt,
+}
+
+% ---- callout boxes ----
+\newenvironment{notebox}%
+    {\par\vspace{4pt}\noindent\begin{tabular}{|>{\columncolor{notebg}}p{0.96\linewidth}|}
+     \hline \noindent\textbf{Note:} \\}%
+    {\\ \hline \end{tabular}\par\vspace{4pt}}
+
+\newenvironment{tipbox}%
+    {\par\vspace{4pt}\noindent\begin{tabular}{|>{\columncolor{tipbg}}p{0.96\linewidth}|}
+     \hline \noindent\textbf{Tip:} \\}%
+    {\\ \hline \end{tabular}\par\vspace{4pt}}
+
+% ---- header / footer ----
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{VASP Workflow --- User Manual}
+\lhead{\leftmark}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ---- meta ----
+\title{%
+    \textbf{VASP Workflow}\\[4pt]
+    \large User Manual\\[6pt]
+    \normalsize Browser GUI $\cdot$ CLI Agents $\cdot$ SLURM HPC
+}
+\author{Keivan Esfarjani}
+\date{June 2026 \quad --- \quad
+      \url{https://github.com/KeivanS/VASP-Flow}}
+
+% ----
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ----
+\section{Introduction}
+% ----
+
+VASP Workflow is a framework for setting up, running, and analysing DFT
+calculations with VASP. Two interfaces are provided:
+
+\begin{itemize}
+    \item \textbf{Browser GUI} (\texttt{vasp-gui.py}) --- a Flask web
+          application that lets you configure calculations through a form,
+          run each step from the browser, and view band-structure and DOS
+          plots in real time.
+    \item \textbf{CLI agents} (\texttt{vasp-agent.py} for workstations,
+          \texttt{vasp-agent-slurm.py} for SLURM clusters) --- command-line
+          tools that read a plain-text \texttt{instructions.txt} file and
+          generate all INCAR, KPOINTS, POSCAR, POTCAR, and job scripts
+          automatically.
+\end{itemize}
+
+Both interfaces share the same \texttt{modules/} back-end, so every feature
+is available in either.
+
+\subsection{Key features}
+
+\begin{itemize}
+    \item Functionals: PBEsol, PBE, R2SCAN, HSE06, RVV10, LDA, AM05
+    \item Spin-orbit coupling (SOC) and collinear spin (ISPIN=2)
+    \item Magnetic materials: correct MAGMOM per atom; spin-resolved band
+          and DOS plots (spin-up / spin-down)
+    \item GGA+U (Dudarev, LDAUTYPE=2) per element and orbital
+    \item Automatic k-path detection from POSCAR lattice vectors
+    \item Convergence testing (ENCUT and k-mesh sweeps)
+    \item DOS with orbital projections via \texttt{sumo}
+    \item Phonons via phonopy, Wannier90 interface, DFPT Born charges
+    \item Smart KPAR/NCORE auto-defaults that scale with MPI task count
+    \item SLURM workflow with dependency-chained job submission
+\end{itemize}
+
+\subsection{Requirements}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Package & Notes \\
+\midrule
+VASP 5.4+ & \texttt{vasp\_std}, \texttt{vasp\_ncl} (for SOC),
+            optionally \texttt{vasp\_gam} \\
+POTCAR library & PAW pseudopotential files in per-element folders \\
+Python 3.8+ & Conda environment recommended \\
+Flask & \texttt{pip install flask} --- GUI only \\
+sumo $\geq$ 2.0 & \texttt{pip install sumo} --- band and DOS plots \\
+MPI & \texttt{mpirun}, \texttt{mpiexec}, or \texttt{srun} (SLURM) \\
+phonopy & optional; \texttt{conda install -c conda-forge phonopy} \\
+wannier90.x & optional; \texttt{conda install -c conda-forge wannier90} \\
+\bottomrule
+\end{tabularx}
+
+% ----
+\section{Installation}
+% ----
+
+\begin{lstlisting}[language=bash]
+# 1. Clone the repository
+git clone https://github.com/KeivanS/VASP-Flow.git
+cd VASP-Flow
+
+# 2. Install Python dependencies
+pip install flask sumo
+
+# 3. Optional: phonons and Wannier support
+conda install -c conda-forge phonopy wannier90
+
+# 4. First-time configuration (creates site.env from template)
+make setup
+nano site.env       # set VASP paths, POTCAR directory, MPI command
+\end{lstlisting}
+
+\subsection{site.env --- platform configuration}
+
+\texttt{site.env} is read by \texttt{make run} and exported to the GUI and
+CLI agents.  Edit it once for your system:
+
+\begin{lstlisting}
+PYTHON          = python3
+VASP_STD        = /path/to/vasp_std
+VASP_NCL        = /path/to/vasp_ncl
+VASP_GAM        = /path/to/vasp_gam       # optional
+VASP_POTCAR_DIR = /path/to/potpaw_PBE
+MPI_LAUNCH      = mpirun -np              # or: srun
+MPI_NP          = 16
+WANNIER90_X     = wannier90.x
+\end{lstlisting}
+
+% ----
+\section{Browser GUI}
+% ----
+
+\subsection{Starting the GUI}
+
+\begin{lstlisting}[language=bash]
+make run          # launches on http://localhost:5001
+\end{lstlisting}
+
+\textbf{On a SLURM cluster:} run on the login node and open the GUI on
+your laptop via SSH port-forwarding:
+
+\begin{lstlisting}[language=bash]
+# On your laptop: open the tunnel
+ssh -L 5001:localhost:5001 username@cluster
+
+# On the cluster login node
+make run
+
+# Open http://localhost:5001 in your laptop's browser
+\end{lstlisting}
+
+\subsection{Three-tab workflow}
+
+\begin{enumerate}
+    \item \textbf{Setup} --- configure the project, then click
+          \emph{Generate Workflow}.
+    \item \textbf{Workflow} --- run each calculation step; live terminal
+          output is streamed to the browser.
+    \item \textbf{Results} --- view band-structure and DOS plots; access
+          OUTCAR analysis.
+\end{enumerate}
+
+To return to a previous project, use the \emph{Select project} dropdown
+at the top of the page.  \textbf{$\to$ Workflow} jumps to the run tab;
+\textbf{Edit \& Regenerate} re-opens Setup with all settings pre-filled.
+
+\subsection{Setup tab --- field guide}
+
+\subsubsection{Structure and POTCAR}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Field & Description \\
+\midrule
+Project name & Folder created in the working directory. \\
+POSCAR & Paste the crystal structure, or click \emph{Load file}. \\
+POTCAR directory & Path to your PAW library
+    (e.g.\ \texttt{/opt/vasp/potpaw\_PBE.54}).
+    If an element has multiple PAW variants (e.g.\ \texttt{Ga}
+    vs \texttt{Ga\_d}), a chooser appears. \\
+\bottomrule
+\end{tabularx}
+
+\subsubsection{Functional}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Choice & Description \\
+\midrule
+PBEsol & Optimised for solids; recommended starting point. \\
+PBE & Standard GGA; widely used. \\
+R2SCAN & Meta-GGA; good accuracy/cost balance. \\
+HSE06 & Hybrid --- accurate band gaps, significantly slower. \\
+RVV10 & van der Waals; for layered or molecular materials. \\
+LDA / AM05 & Rarely needed. \\
+\bottomrule
+\end{tabularx}
+
+\subsubsection{Spin / SOC}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Choice & Effect on INCAR \\
+\midrule
+None & Non-magnetic. \\
+Collinear spin (ISPIN=2) & Sets \texttt{ISPIN = 2}; reveals the
+    \emph{Magnetic moment / atom} field (see Section~\ref{sec:magnetic}). \\
+SOC $\parallel$ z/x/y & Sets \texttt{LSORBIT = .TRUE.},
+    \texttt{LNONCOLLINEAR = .TRUE.}, and \texttt{SAXIS};
+    uses the \texttt{vasp\_ncl} binary. \\
+\bottomrule
+\end{tabularx}
+
+\subsubsection{Other flags}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Field & Effect \\
+\midrule
+Hexagonal BZ & Correct $M$ point for hexagonal structures. \\
+2D / slab & Sets $k_z = 1$ (Gamma-only out-of-plane). \\
+GGA+U & Adds Hubbard $U$ rows; see Section~\ref{sec:ggau}. \\
+Execution profile & Select \emph{SLURM HPC} to generate \texttt{sbatch}
+    scripts; edit \texttt{profiles/slurm.json} first. \\
+MPI tasks & Number of CPU cores per calculation. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Task checkboxes}
+
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+Task & Directory & Notes \\
+\midrule
+Structure relaxation & \texttt{01\_relax} &
+    IBRION=2; should run first if geometry is not pre-optimised. \\
+SCF & \texttt{02\_scf} &
+    Self-consistent; required before bands or DOS. \\
+Band structure & \texttt{03\_bands} &
+    Line-mode KPOINTS; see Section~\ref{sec:kpath}. \\
+DOS & \texttt{04\_dos} &
+    Dense k-mesh, LORBIT=11; orbital projections via sumo. \\
+DFPT & \texttt{06\_dfpt} &
+    Born charges and dielectric tensor (IBRION=8). \\
+Phonons & \texttt{07\_phonons} &
+    Phonopy finite-displacement; DFPT needed for NAC. \\
+Wannier90 & \texttt{05\_wannier} &
+    NSCF interface; see Section~\ref{sec:wannier}. \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+Normal execution order: \textbf{relaxation $\to$ SCF $\to$ bands $\to$ DOS}.
+Each step copies POSCAR/CHGCAR from the previous one automatically.
+\end{notebox}
+
+\subsection{Band structure options}
+
+Leave the \emph{k-path} field blank to trigger \textbf{automatic detection}
+from the POSCAR lattice vectors (see Section~\ref{sec:kpath}).
+Enter a path manually to override, e.g.\ \texttt{G-M-K-G}.
+
+\subsection{DOS options}
+
+Add projection rows to request orbital-resolved DOS:
+
+\begin{center}
+Element: \texttt{Mo} \quad Orbitals: \textbf{d} \quad\quad
+Element: \texttt{S}  \quad Orbitals: \textbf{p}
+\end{center}
+
+Sumo-dosplot produces a projected DOS PDF.
+For spin-polarised calculations spin-up is plotted positive and spin-down
+is mirrored below zero automatically.
+
+\subsection{Workflow tab}
+
+Each step shows three controls:
+
+\begin{itemize}
+    \item \textbf{Run} --- submit the step (\texttt{sbatch} on SLURM,
+          \texttt{bash} otherwise).
+    \item \textbf{Edit files} --- open INCAR, KPOINTS, or POSCAR in the
+          browser.  A \texttt{.bak} backup is created on first edit.
+    \item \textbf{Status badge} --- running / completed / warning.
+\end{itemize}
+
+\textbf{Run All Steps} chains every step sequentially and stops on failure.
+
+\subsection{Results tab}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Panel & Contents \\
+\midrule
+Band structure &
+    Spin-polarised: spin-up (blue) and spin-down (red dashed) on the same
+    k-axis, Fermi level at zero.
+    Non-magnetic: single-colour sumo plot. \\
+Cumulative DOS &
+    Stacked filled-area by element.
+    Spin-polarised: up above zero, down mirrored below. \\
+Projected DOS &
+    Orbital-resolved via sumo; spin-down mirrored automatically. \\
+OUTCAR analysis &
+    Energy, Fermi level, total magnetic moment, forces. \\
+\bottomrule
+\end{tabularx}
+
+% ----
+\section{CLI Agents}
+% ----
+
+\subsection{vasp-agent.py --- workstation}
+
+\begin{lstlisting}[language=bash]
+# Run from the directory containing instructions.txt and POSCAR
+./vasp-agent.py
+./vasp-agent.py -i my_inst.txt -s struct.vasp
+
+# After generation
+cd ProjectName
+./run_all.sh          # runs every step in sequence
+./analyze.sh          # plots after all steps complete
+\end{lstlisting}
+
+\subsection{vasp-agent-slurm.py --- SLURM clusters}
+
+\begin{lstlisting}[language=bash]
+./vasp-agent-slurm.py                  # uses profiles/slurm.json
+./vasp-agent-slurm.py --profile slurm
+
+cd ProjectName
+./submit_all.sh        # sbatch with dependency chaining
+squeue -u $USER        # monitor jobs
+./analyze.sh           # run locally after jobs finish
+\end{lstlisting}
+
+Two-phase workflow when convergence tests are requested:
+
+\begin{lstlisting}[language=bash]
+./submit_convergence.sh     # STEP 1
+# review results, then:
+./submit_calculations.sh    # STEP 2 -- prompts for ENCUT/k-mesh
+\end{lstlisting}
+
+\subsection{Generated directory structure}
+
+\begin{lstlisting}
+ProjectName/
+---- instructions.txt
+---- POSCAR
+---- POTCAR               built once from $VASP_POTCAR_DIR
+---- 01_relax/            INCAR  KPOINTS  POSCAR  POTCAR  run.sh
+---- 02_scf/
+---- 03_bands/
+---- 04_dos/
+---- analysis/            plots generated by analyze.sh
+---- run_all.sh           workstation sequential runner
+---- submit_all.sh        SLURM job submission (dependency chained)
+---- analyze.sh           post-processing: plots + OUTCAR extraction
+\end{lstlisting}
+
+% ----
+\section{instructions.txt Format}
+\label{sec:instructions}
+% ----
+
+\subsection{Basic structure}
+
+\begin{lstlisting}
+Project: My material name
+
+Methods: PBEsol functional
+         collinear magnetization
+         GGA+U with U=4.0 on Fe-d orbitals
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Fe-d and O-p)
+
+Convergence: Test k-points 6x6x6 to 12x12x12
+             ENCUT 400-600 eV
+
+MAGMOM: 4.0
+NSW: 100
+EDIFFG: -0.01
+MPI: 128
+NODES: 2
+NTASKS_PER_NODE: 64
+WALLTIME: 12:00:00
+\end{lstlisting}
+
+The parser is case-insensitive and searches the entire file, so section
+order is flexible.
+
+\subsection{Keyword reference}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Keyword & Meaning / example \\
+\midrule
+\texttt{Project:} & Project name; becomes the output folder name. \\
+\texttt{MAGMOM:} &
+    Initial moment in $\mu_{\mathrm{B}}$ per atom (collinear only).
+    Written as \texttt{MAGMOM = N*value}. Default 2.0. \\
+\texttt{ISIF:} &
+    Relaxation type: 3=full, 2=ions only, 4=fixed volume,
+    7=fixed shape, 6=volume only.  Default 3. \\
+\texttt{NSW:} & Maximum ionic steps. Default 100. \\
+\texttt{EDIFFG:} & Force criterion in eV/\AA{}. Default $-0.01$. \\
+\texttt{ENCUT:} & Manual plane-wave cutoff override in eV. \\
+\texttt{NKPTS:} & k-points per band segment. Default 40. \\
+\texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
+\texttt{KPAR:} & Global k-point parallelisation override. \\
+\texttt{NCORE:} & Global cores-per-orbital override. \\
+\texttt{SCF\_KPAR:} etc. &
+    Per-step KPAR: also BANDS\_, DOS\_, RELAX\_, DFPT\_, PHONONS\_. \\
+\texttt{SCF\_NCORE:} etc. &
+    Per-step NCORE; same prefixes as above. \\
+\texttt{NODES:} & Compute nodes (SLURM). \\
+\texttt{NTASKS\_PER\_NODE:} & MPI tasks per node (SLURM). \\
+\texttt{PARTITION:} & SLURM partition name. \\
+\texttt{WALLTIME:} & Job time limit, e.g.\ \texttt{12:00:00}. \\
+\texttt{ACCOUNT:} & SLURM account / allocation. \\
+\texttt{DFPT\_EDIFF:} & EDIFF for DFPT step. Default \texttt{1E-8}. \\
+\texttt{PHONONS\_DIM:} & Supercell dimensions, e.g.\ \texttt{2 2 2}. \\
+\texttt{PHONONS\_MESH:} & q-mesh, e.g.\ \texttt{20 20 20}. \\
+\texttt{PHONONS\_DISP:} & Displacement in \AA{}. Default 0.01. \\
+\texttt{PHONONS\_BAND:} & High-symmetry path for phonon bands. \\
+\texttt{PHONONS\_NAC:} & \texttt{FALSE} to disable NAC. Default TRUE. \\
+\texttt{WANNIER\_NUM\_WANN:} & Number of Wannier functions. \\
+\texttt{WANNIER\_PROJ:} & Projections, e.g.\ \texttt{Ga:s;As:p}. \\
+\texttt{WANNIER\_EWIN:} & Energy window, e.g.\ \texttt{-5.0 to 15.0}. \\
+\bottomrule
+\end{tabularx}
+
+% ----
+\section{Methods}
+% ----
+
+\subsection{Functionals}
+
+Write in the \texttt{Methods:} block:
+
+\begin{lstlisting}
+Methods: PBEsol functional
+Methods: R2SCAN functional
+Methods: HSE06 functional
+Methods: RVV10 functional     # van der Waals
+\end{lstlisting}
+
+Default ENCUT values: PBE 400 eV, PBEsol 450 eV, R2SCAN 680 eV,
+HSE06 400 eV, RVV10 450 eV.
+
+\subsection{Spin-orbit coupling}
+
+\begin{lstlisting}
+Methods: SOC with magnetization in z-direction
+         SOC with magnetization in x-direction
+\end{lstlisting}
+
+Uses \texttt{vasp\_ncl}.  Sets \texttt{LSORBIT = .TRUE.},
+\texttt{LNONCOLLINEAR = .TRUE.}, and the appropriate \texttt{SAXIS} vector.
+
+\subsection{Magnetic materials (collinear spin)}
+\label{sec:magnetic}
+
+\begin{lstlisting}
+Methods: collinear magnetization
+MAGMOM: 4.0
+\end{lstlisting}
+
+The generator sets \texttt{ISPIN = 2} and
+\texttt{MAGMOM = $N \times \text{value}$} in every INCAR, where $N$ is
+the total atom count read from the POSCAR.
+
+\begin{tipbox}
+Typical starting moments: Fe, Co $\approx$ 4--5 $\mu_{\mathrm{B}}$;
+Ni $\approx$ 2 $\mu_{\mathrm{B}}$;
+Cr, Mn $\approx$ 3--4 $\mu_{\mathrm{B}}$;
+rare earths $\approx$ 7 $\mu_{\mathrm{B}}$.
+The value only needs to be in the right ball-park; VASP converges
+the self-consistent moment.
+\end{tipbox}
+
+\textbf{Antiferromagnets:} set a uniform \texttt{MAGMOM} in instructions,
+then manually edit the INCAR to alternate signs:
+\begin{lstlisting}
+MAGMOM = 4.0 -4.0 4.0 -4.0   ! alternating per sublattice
+\end{lstlisting}
+
+\textbf{Spin-resolved plots produced automatically:}
+
+\begin{itemize}
+    \item \emph{Cumulative DOS} --- spin-up above the x-axis (positive);
+          spin-down mirrored below zero.
+          Elements are colour-coded; solid lines = up, dashed = down.
+    \item \emph{Band structure} --- spin-up in blue, spin-down in red
+          dashed, both on the same k-axis with Fermi level at zero.
+    \item \emph{Projected DOS} --- sumo natively negates the spin-down
+          channel, so the orbital-resolved PDF also shows a mirrored layout.
+\end{itemize}
+
+Check the final moment after calculation:
+\begin{lstlisting}[language=bash]
+grep "magnetization (x)" OUTCAR | tail -5
+\end{lstlisting}
+
+\subsection{GGA+U}
+\label{sec:ggau}
+
+\begin{lstlisting}
+Methods: GGA+U with U=4.0 on Fe-d orbitals
+         GGA+U with U=3.0 on Ni-d orbitals
+         GGA+U with U=6.0 on Ce-f orbitals
+\end{lstlisting}
+
+Uses Dudarev scheme (LDAUTYPE=2); $J = 0$ is set automatically.
+Can be combined with \texttt{collinear magnetization}.
+
+In the GUI: check \emph{GGA+U} and add one row per element/orbital.
+
+% ----
+\section{K-Path for Band Structure}
+\label{sec:kpath}
+% ----
+
+\subsection{Auto-detection (recommended)}
+
+Omit the path in \texttt{instructions.txt}, or leave the field blank
+in the GUI:
+
+\begin{lstlisting}
+Tasks: band structure        # no "along ..." -- auto-detect
+\end{lstlisting}
+
+The generator reads POSCAR lattice vectors, computes cell lengths and
+angles, classifies the Bravais lattice, and selects the standard path.
+
+\begin{tabularx}{\linewidth}{@{}llllX@{}}
+\toprule
+Type & Name & Detection criterion & Default path \\
+\midrule
+cF & FCC & $a{=}b{=}c$, angles $\approx 60^{\circ}$
+        & G-X-W-K-G-L-U-W \\
+cI & BCC & $a{=}b{=}c$, angles $\approx 109.5^{\circ}$
+        & G-H-N-G-P-H \\
+cP & Cubic & $a{=}b{=}c$, $90^{\circ}$
+        & G-X-M-G-R-X \\
+hP & Hexagonal & $a{\approx}b$, $\gamma{=}120^{\circ}$
+        & G-M-K-G-A-L-H-A \\
+tP & Tetragonal & $a{\approx}b{\neq}c$, $90^{\circ}$
+        & G-X-M-G-Z-R-A-Z \\
+oP & Orthorhombic & $90^{\circ}$
+        & G-X-S-Y-G-Z-U-R-T-Z \\
+rP & Rhombohedral & $a{=}b{=}c$, equal angles
+        & G-T-F-G-L \\
+mP & Monoclinic & $\alpha{=}\gamma{=}90^{\circ}$, $\beta{\neq}90^{\circ}$
+        & G-Y-A-Z-G-B-D \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+For \textbf{conventional} FCC or BCC cells (right angles, 4 or 2 atoms),
+auto-detection returns the cubic (cP) path.
+Use the \textbf{primitive} cell for an unfolded FCC/BCC band structure ---
+the primitive FCC cell has all angles $\approx 60^{\circ}$ and is
+recognised automatically.
+\end{notebox}
+
+The detected type is written into the KPOINTS comment:
+\begin{lstlisting}
+Line-mode KPOINTS  [FCC -- auto-detected]
+\end{lstlisting}
+
+\subsection{Manual override}
+
+\begin{lstlisting}
+Tasks: band structure along G-X-W-K-G-L
+\end{lstlisting}
+
+Available labels and fractional reciprocal coordinates:
+
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+Label & Coords & Notes \\
+\midrule
+G & (0, 0, 0) & $\Gamma$ \\
+X & (0.5, 0, 0) & generic / hex M in non-hex \\
+M & (0.5, 0.5, 0) & cubic, tetragonal \\
+K & (1/3, 1/3, 0) & hexagonal \\
+R & (0.5, 0.5, 0.5) & cubic \\
+Z & (0, 0, 0.5) & general \\
+A & (0, 0, 0.5) & hex / tet \\
+L & (0.5, 0, 0.5) & hexagonal \\
+H & (1/3, 1/3, 0.5) & hexagonal \\
+S & (0.5, 0.5, 0) & orthorhombic \\
+T & (0, 0.5, 0.5) & orthorhombic \\
+U & (0.5, 0, 0.5) & orthorhombic \\
+Y & (0, 0.5, 0) & ortho / monoclinic \\
+W & (0.5, 0.25, 0.75) & \textbf{FCC primitive} \\
+P & (0.25, 0.25, 0.25) & \textbf{BCC primitive} \\
+N & (0, 0, 0.5) & \textbf{BCC primitive} \\
+\bottomrule
+\end{tabularx}
+
+% ----
+\section{DOS Projections}
+% ----
+
+All of the following forms are accepted:
+
+\begin{lstlisting}
+DOS (projected on Mo-d and S-p)
+DOS with projections on Ni:d and Ni:s
+DOS with projection on Fe-d and O-p
+\end{lstlisting}
+
+Element--orbital syntax: \texttt{El-orbital} or \texttt{El:orbital};
+orbital channels are \texttt{s}, \texttt{p}, \texttt{d}, \texttt{f}.
+
+Sumo-dosplot generates an orbital-resolved PDF in \texttt{analysis/}.
+For spin-polarised calculations, spin-up is positive and spin-down is
+negative (automatic).
+
+% ----
+\section{Convergence Tests}
+% ----
+
+\begin{lstlisting}
+# Range syntax
+Convergence: Test k-points from 6x6x1 to 18x18x1    # 2D
+             Test k-points from 6x6x6 to 12x12x12   # 3D
+             ENCUT 400-600 eV
+
+# Explicit mesh list
+Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9
+\end{lstlisting}
+
+Results in \texttt{00\_convergence/kpoints/} and
+\texttt{00\_convergence/encut/}.
+
+\begin{lstlisting}[language=bash]
+./run_convergence.sh          # workstation
+./submit_convergence.sh       # SLURM
+
+./analyze_convergence.sh      # plots energy / pressure / forces
+\end{lstlisting}
+
+% ----
+\section{Parallelization}
+% ----
+
+\subsection{Auto-defaults}
+
+When KPAR and NCORE are not specified, the agent computes them from
+$N$ = total MPI tasks:
+
+\begin{tabularx}{\linewidth}{@{}llll@{}}
+\toprule
+Step & KPAR & NCORE & Constraint \\
+\midrule
+SCF / DOS / relax & $\lfloor\sqrt{N}\rfloor$ & $N/\mathrm{KPAR}$ & \\
+bands & 1 & $N$ & KPAR=1 for line-mode KPOINTS \\
+DFPT & 1 & $N$ & KPAR=1 required for IBRION=8 \\
+phonons & 1 & $\lfloor\sqrt{N}\rfloor$ & \\
+\bottomrule
+\end{tabularx}
+
+KPAR $\times$ NCORE must divide $N$ evenly; the agent rounds down automatically.
+
+\subsection{Manual overrides}
+
+\begin{lstlisting}
+MPI: 128             # total tasks
+KPAR: 4              # global
+NCORE: 8             # global
+
+SCF_KPAR: 4          # per-step (take priority)
+BANDS_KPAR: 1
+DOS_KPAR: 8
+RELAX_KPAR: 2
+DFPT_KPAR: 1
+PHONONS_KPAR: 1
+
+SCF_NCORE: 8
+BANDS_NCORE: 16
+DOS_NCORE: 8
+\end{lstlisting}
+
+% ----
+\section{SLURM Cluster Settings}
+% ----
+
+\subsection{profiles/slurm.json}
+
+\begin{lstlisting}
+{
+  "vasp_std": "vasp_std",
+  "vasp_ncl": "vasp_ncl",
+  "mpi_cmd":  "srun",
+  "modules":  ["intel/2021", "impi/2021", "vasp/6.3.2"],
+  "slurm": {
+    "partition":       "standard",
+    "nodes":           2,
+    "ntasks_per_node": 64,
+    "time":            "12:00:00",
+    "account":         "mygroup",
+    "output":          "slurm-%j.out",
+    "error":           "slurm-%j.err"
+  }
+}
+\end{lstlisting}
+
+\subsection{Per-project overrides in instructions.txt}
+
+\begin{lstlisting}
+NODES: 4
+NTASKS_PER_NODE: 32
+PARTITION: gpu
+WALLTIME: 48:00:00
+ACCOUNT: myallocation
+\end{lstlisting}
+
+% ----
+\section{Wannier90}
+\label{sec:wannier}
+% ----
+
+\begin{lstlisting}
+Tasks: Wannier90 wannierization
+
+WANNIER_NUM_WANN: 8
+WANNIER_PROJ: Ga:s;As:p
+WANNIER_EWIN: -5.0 to 15.0
+\end{lstlisting}
+
+The agent generates \texttt{05\_wannier/wannier90.win} with the NSCF k-mesh
+and projection block.  After the NSCF run, execute \texttt{wannier90.x}
+from the \texttt{05\_wannier/} directory.
+
+% ----
+\section{Phonons (phonopy)}
+% ----
+
+\begin{lstlisting}
+Tasks: phonons lattice dynamics
+
+PHONONS_DIM: 2 2 2
+PHONONS_MESH: 20 20 20
+PHONONS_DISP: 0.01
+PHONONS_BAND: G M K G A
+PHONONS_NAC: FALSE          # disable non-analytic correction
+\end{lstlisting}
+
+\begin{notebox}
+For the non-analytic correction (important for polar materials), include
+the \texttt{DFPT} task in your list so Born effective charges are available.
+If phonopy is the only post-SCF step, set \texttt{PHONONS\_NAC: FALSE}.
+\end{notebox}
+
+% ----
+\section{Worked Examples}
+% ----
+
+\subsection{MoS\textsubscript{2} monolayer with SOC}
+
+\begin{lstlisting}
+Project: MoS2 monolayer
+
+Methods: PBEsol functional
+         SOC with magnetization in z-direction
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Mo-d and S-p)
+
+Convergence: Test k-points 8x8 to 20x20
+             ENCUT 400-600 eV
+
+MPI: 64
+\end{lstlisting}
+
+Omitting the k-path lets the generator detect hexagonal (hP) from the POSCAR
+and use G-M-K-G-A-L-H-A automatically.
+
+\subsection{Nickel: collinear magnetism with GGA+U}
+
+\begin{lstlisting}
+Project: Nickel GGA+U
+
+Methods: PBEsol functional
+         collinear magnetization
+         GGA+U with U=4.0 on Ni-d orbitals
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Ni-d and Ni-s)
+
+MAGMOM: 2.0
+MPI: 128
+NODES: 2
+NTASKS_PER_NODE: 64
+WALLTIME: 08:00:00
+\end{lstlisting}
+
+With the primitive FCC POSCAR (cell angles $\approx 60^{\circ}$), the
+generator detects cF and uses G-X-W-K-G-L-U-W.
+Band and DOS plots show both spin channels separately.
+
+\subsection{GaAs: phonons with NAC}
+
+\begin{lstlisting}
+Project: GaAs phonons
+
+Methods: PBEsol functional
+
+Tasks: SCF calculation
+       DFPT Born charges and dielectric
+       phonons lattice dynamics
+
+PHONONS_DIM: 4 4 4
+PHONONS_MESH: 20 20 20
+PHONONS_BAND: G X W L G K
+
+MPI: 64
+WALLTIME: 24:00:00
+\end{lstlisting}
+
+DFPT is included so Born effective charges are available for the NAC.
+The phonon band path is specified manually.
+
+\subsection{Bi\textsubscript{2}Se\textsubscript{3} topological insulator}
+
+\begin{lstlisting}
+Project: Bi2Se3 topological
+
+Methods: PBEsol functional
+         SOC with magnetization in z-direction
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Bi-p and Se-p)
+       Wannier90 wannierization
+
+Convergence: Test k-points from 8x8x4 to 16x16x8
+             ENCUT 400-600 eV
+
+WANNIER_NUM_WANN: 18
+WANNIER_PROJ: Bi:p;Se:p
+WANNIER_EWIN: -2.0 to 2.0
+MPI: 128
+\end{lstlisting}
+
+% ----
+\section{Common OUTCAR Checks}
+% ----
+
+\begin{lstlisting}[language=bash]
+# Converged?
+grep "reached required accuracy"  OUTCAR
+
+# Total energy (last ionic step)
+grep "energy  without"            OUTCAR | tail -1
+
+# Fermi level
+grep "E-fermi"                    OUTCAR | tail -1
+
+# Magnetic moment (collinear)
+grep "magnetization (x)"          OUTCAR | tail -5
+
+# Forces
+grep "TOTAL-FORCE"                OUTCAR | tail -20
+
+# Born effective charges (after DFPT)
+grep -A3 "BORN EFFECTIVE CHARGES" OUTCAR | head -20
+\end{lstlisting}
+
+% ----
+\section{Troubleshooting}
+% ----
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Symptom & Solution \\
+\midrule
+POTCAR not found &
+    Check \texttt{VASP\_POTCAR\_DIR} in \texttt{site.env} or the GUI
+    System Setup.  For unusual PAW variants (\texttt{Ga\_d},
+    \texttt{Fe\_sv}), select the correct one in the POTCAR chooser. \\[4pt]
+\texttt{vasp\_std} not found &
+    Set the full path in \texttt{site.env} or GUI System Setup. \\[4pt]
+WARNING: may not have converged &
+    Open OUTCAR; increase NSW (ionic steps) or NELM (electronic steps)
+    in INCAR, then re-run. \\[4pt]
+Wrong band structure ($W = \Gamma$) &
+    The POSCAR is a conventional cubic cell.  Use the primitive cell for
+    FCC/BCC so auto-detection picks cF/cI. \\[4pt]
+Projected DOS missing &
+    Check instructions.txt uses \emph{projected on} or
+    \emph{projections on}; both are accepted.
+    Verify element names match POSCAR. \\[4pt]
+KPAR error &
+    KPAR $\times$ NCORE must divide total MPI tasks.
+    Let the agent use auto-defaults, or set valid values explicitly. \\[4pt]
+GUI not reachable on laptop &
+    Check the SSH tunnel:
+    \texttt{ssh -L 5001:localhost:5001 user@cluster}. \\[4pt]
+Project missing from dropdown &
+    Folder must contain both \texttt{POSCAR} and \texttt{settings.json}
+    and be in the directory where \texttt{vasp-gui.py} was started. \\
+\bottomrule
+\end{tabularx}
+
+% ----
+\section{Version History}
+% ----
+
+\begin{description}
+    \item[v1.0 (2026-03-23)] Initial release --- GUI, workstation agent,
+        PBEsol/R2SCAN/HSE06, SOC, GGA+U, convergence tests,
+        Wannier90, phonopy.
+    \item[v1.1 (2026-04--05)] Per-task KPAR/NCORE smart defaults;
+        SLURM agent with dependency-chained submission;
+        cumulative DOS by element (no pymatgen);
+        copy-from-relax/scf scripts.
+    \item[v1.2 (2026-06)] Collinear magnetism: MAGMOM per atom
+        from POSCAR, spin-resolved band and DOS plots.
+        Auto k-path detection from POSCAR Bravais lattice
+        (8 crystal systems).
+        Fixed DOS projection parsing.
+        Separate GUI and agent quick-reference sheets.
+\end{description}
+
+\vfill\hrule\vspace{6pt}
+\noindent\small
+Source: \url{https://github.com/KeivanS/VASP-Flow}\hfill
+Compiled: \today\hfill
+Maintained by Keivan Esfarjani
+
+\end{document}

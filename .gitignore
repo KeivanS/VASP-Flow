@@ -74,6 +74,8 @@ poscar.GaAs
 poscar.AgCrP2S6
 df
 
-# ── Obsolete documentation ───────────────────────────────────────────────────
-manual.tex
-manual.pdf
+# ── Compiled LaTeX artefacts (source is tracked, build output is not) ────────
+manual.aux
+manual.log
+manual.out
+manual.toc
