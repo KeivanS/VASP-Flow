@@ -41,6 +41,23 @@
 │ ENCUT: 520           manual ENCUT override (eV)                              │
 │ NKPTS: 60            k-points per band segment                               │
 │ MPI: 128             total MPI tasks                                         │
+│ PRESSURE: 10 GPa     constant-P relax: ISIF=3, IBRION=2, PSTRESS (kbar/GPa)  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ RAW INCAR PASSTHROUGH ────────────────────────────────────────────────────────┐
+│ Drop literal INCAR lines into the instructions file; they are merged into     │
+│ the generated INCAR(s). A tag that already exists is overwritten in place;    │
+│ new tags are appended under "User INCAR overrides".                            │
+│                                                                               │
+│   INCAR:                 ← global block, applies to every step                │
+│      LREAL = Auto                                                              │
+│      ALGO  = Fast                                                              │
+│      NELMIN = 6                                                                │
+│   END_INCAR                                                                    │
+│                                                                               │
+│   INCAR scf:             ← per-step block (relax/scf/bands/dos/wannier/...)   │
+│      EDIFF = 1E-8                                                              │
+│   END_INCAR                                                                    │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ FUNCTIONALS ─────────────────────────────────────────────────────────────────┐

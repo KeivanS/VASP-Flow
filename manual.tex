@@ -475,6 +475,12 @@ Keyword & Meaning \\ \midrule
 \texttt{NSW:} & Max ionic steps. Default 100. \\
 \texttt{EDIFFG:} & Force criterion in eV/\AA. Default $-0.01$. \\
 \texttt{ENCUT:} & Manual plane-wave cutoff in eV. \\
+\texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
+  \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
+  \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
+\texttt{INCAR: \ldots\ END\_INCAR} & Block of literal INCAR tags merged
+  into the generated INCAR(s); optionally per-step
+  (Section~\ref{sec:incar-raw}). \\
 \texttt{NKPTS:} & k-points per band segment. Default 40. \\
 \texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
 \texttt{KPAR:} & Global k-point parallelisation. \\
@@ -576,6 +582,87 @@ Methods: GGA+U with U=4.0 on Fe-d orbitals
 
 Dudarev scheme (LDAUTYPE=2); $J = 0$ is set automatically.
 Combine freely with \texttt{collinear magnetization}.
+
+% ============================================================
+\section{Advanced INCAR Control}
+\label{sec:incar}
+% ============================================================
+
+Two mechanisms let you go beyond the built-in keywords without editing
+each generated INCAR by hand: \textbf{raw INCAR passthrough} (inject any
+VASP tag directly) and \textbf{constant-pressure relaxation}.
+
+\subsection{Raw INCAR passthrough}
+\label{sec:incar-raw}
+
+Place literal INCAR lines --- in ordinary VASP syntax --- inside an
+\texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in your
+\texttt{instructions.txt}.  They are merged into the generated INCAR(s):
+
+\begin{lstlisting}
+INCAR:                  # global block -- applies to every step
+   LREAL  = Auto
+   ALGO   = Fast
+   NELMIN = 6
+END_INCAR
+\end{lstlisting}
+
+A tag that the agent already writes is \textbf{overwritten in place}
+(so \texttt{ALGO = Fast} above replaces the default \texttt{ALGO =
+Normal}); any tag the agent does not normally emit is appended under a
+clearly labelled \texttt{\# User INCAR overrides} section, so nothing is
+silently lost.
+
+To target a single step, name it on the header line.  Recognised steps
+are \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
+\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}:
+
+\begin{lstlisting}
+INCAR scf:              # applies only to 02_scf
+   EDIFF = 1E-8
+   SIGMA = 0.10
+END_INCAR
+\end{lstlisting}
+
+\begin{notebox}
+Precedence: a \emph{per-step} block beats the \emph{global} block, and
+both beat the agent's generated defaults.  This is the recommended way to
+set tags the parser has no dedicated keyword for (e.g.\ \texttt{LMAXMIX},
+\texttt{ADDGRID}, \texttt{LVTOT}, \texttt{IVDW}, \texttt{AMIX}).
+\end{notebox}
+
+\subsection{Constant-pressure relaxation}
+\label{sec:pressure}
+
+A single \texttt{PRESSURE} line turns the relaxation into a
+constant-pressure optimisation: the agent forces \texttt{ISIF = 3} (cell
+shape + volume + ions) and \texttt{IBRION = 2}, and imposes the target
+pressure through \texttt{PSTRESS}.
+
+\begin{lstlisting}
+PRESSURE: 10 GPa        # also accepted: "5 kbar", "constant pressure 8"
+\end{lstlisting}
+
+VASP's \texttt{PSTRESS} tag is in \textbf{kBar} (1~GPa $=$ 10~kBar).  The
+agent converts automatically; if no unit is given, \textbf{GPa is
+assumed}.  The resulting \texttt{01\_relax/INCAR} reads, e.g.:
+
+\begin{lstlisting}
+# Constant-pressure relaxation @ 10 GPa  (PSTRESS = 100 kBar)
+IBRION = 2
+ISIF   = 3
+NSW    = 100
+EDIFFG = -0.01
+PSTRESS = 100   ! external pressure in kBar (10 GPa)
+\end{lstlisting}
+
+\begin{tipbox}
+\texttt{PSTRESS} adds the $PV$ term so the relaxed cell sits at the
+requested external pressure.  Use a tight \texttt{EDIFFG} and a
+well-converged \texttt{ENCUT}; the Pulay stress error grows at high
+pressure, so verify with a higher \texttt{ENCUT} before trusting the
+equilibrium volume.
+\end{tipbox}
 
 % ============================================================
 \section{K-Path for Band Structure}
@@ -858,6 +945,46 @@ PHONONS_BAND: G X W L G K
 MPI: 64     WALLTIME: 24:00:00
 \end{lstlisting}
 
+\subsection{High-pressure relaxation with custom INCAR tags}
+\label{sec:ex-pressure}
+
+A constant-pressure cell relaxation at 10~GPa, combined with raw INCAR
+passthrough to tighten convergence and add tags the parser has no
+dedicated keyword for:
+
+\begin{lstlisting}
+Project: Silicon 10GPa
+
+Methods: PBEsol functional
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+
+PRESSURE: 10 GPa          # constant-P relax -> ISIF=3, IBRION=2, PSTRESS=100
+
+# Tags applied to every step
+INCAR:
+   LREAL  = .FALSE.
+   ADDGRID = .TRUE.
+   LMAXMIX = 4
+END_INCAR
+
+# Tighter electronic convergence for the relaxation only
+INCAR relax:
+   EDIFF  = 1E-8
+   EDIFFG = -0.005
+END_INCAR
+
+ENCUT: 600
+MPI: 64
+\end{lstlisting}
+
+The \texttt{01\_relax/INCAR} is generated with \texttt{ISIF=3},
+\texttt{PSTRESS=100}, the global tags appended, and \texttt{EDIFF}/%
+\texttt{EDIFFG} overridden to the per-step values; \texttt{02\_scf} and
+\texttt{03\_bands} receive only the global block.
+
 \subsection{Bi\textsubscript{2}Se\textsubscript{3}: topological insulator}
 
 \begin{lstlisting}
@@ -944,6 +1071,11 @@ Project missing from dropdown &
     Fixed DOS projection parsing.
     Separate GUI and agent quick-reference sheets.
     Rewritten comprehensive LaTeX manual.
+  \item[\textcolor{mainblue}{v1.3} (2026-06-15)]
+    Raw INCAR passthrough (\texttt{INCAR: \ldots\ END\_INCAR}, global or
+    per-step) for arbitrary VASP tags.
+    Constant-pressure relaxation via \texttt{PRESSURE} (ISIF=3, IBRION=2,
+    PSTRESS).
 \end{description}
 
 \vfill

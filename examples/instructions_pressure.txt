@@ -1,0 +1,45 @@
+# ============================================================
+# Example: constant-pressure relaxation + raw INCAR passthrough
+# ------------------------------------------------------------
+# Demonstrates the two v1.3 features:
+#   1. PRESSURE  -> constant-P relaxation (ISIF=3, IBRION=2, PSTRESS)
+#   2. INCAR: ... END_INCAR blocks -> inject literal VASP tags
+#
+# Run with:
+#   ./vasp-agent.py -i examples/instructions_pressure.txt -s examples/POSCAR_MoS2
+# ============================================================
+
+Project: Silicon 10GPa
+
+Methods: PBEsol functional
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+
+# --- Constant-pressure relaxation -----------------------------------
+# Imposes 10 GPa. VASP PSTRESS is in kBar (1 GPa = 10 kBar), so this
+# becomes PSTRESS = 100. Forces ISIF=3 and IBRION=2 automatically.
+# Units accepted: GPa (default if omitted) or kbar.
+PRESSURE: 10 GPa
+
+# --- Raw INCAR passthrough: global block (every step) ---------------
+# Tags that the agent already writes are overwritten in place; new tags
+# are appended under a "# User INCAR overrides" section.
+INCAR:
+   LREAL   = .FALSE.
+   ADDGRID = .TRUE.
+   LMAXMIX = 4
+END_INCAR
+
+# --- Raw INCAR passthrough: per-step block (relax only) -------------
+# Recognised steps: relax, scf, bands, dos, wannier, dfpt, phonons.
+# A per-step block beats the global block beats the generated defaults.
+INCAR relax:
+   EDIFF  = 1E-8
+   EDIFFG = -0.005
+
+END_INCAR
+
+ENCUT: 600
+MPI: 64

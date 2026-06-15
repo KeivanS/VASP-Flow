@@ -430,6 +430,7 @@ class VASPInputGenerator:
         lines += self._u_lines()
         lines.extend(self._get_parallel_lines('bands'))  # KPAR=1 for Wannier
         lines.extend(["# Output", "LWAVE = .FALSE.", "LCHARG = .FALSE.", "LORBIT = 11"])
+        lines = self._apply_incar_overrides(lines, 'wannier')
         return '\n'.join(lines) + '\n'
 
     def _parse_poscar_geometry(self) -> str:
@@ -593,7 +594,7 @@ echo "  OK: wannier90.nnkp written"
 echo "Step 2: VASP NSCF at $(date)"
 {launch_cmd} > vasp.out 2>&1
 echo "  VASP done — checking output ..."
-grep -i "WANNIER\|Routine DWANN" vasp.out | tail -3 || \
+grep -i "WANNIER\\|Routine DWANN" vasp.out | tail -3 || \
     echo "  (no WANNIER lines found in vasp.out — check LWANNIER90 in INCAR)"
 
 # Step 3: wannier90.x — compute maximally-localised WFs
@@ -672,6 +673,7 @@ fi
         lines += self._u_lines()
         lines.extend(self._get_parallel_lines('dfpt'))
         lines.extend(["LWAVE  = .FALSE.", "LCHARG = .FALSE."])
+        lines = self._apply_incar_overrides(lines, 'dfpt')
         return '\n'.join(lines) + '\n'
 
     def _extract_born_script(self) -> str:
@@ -842,6 +844,7 @@ echo "DFPT done. See born_charges.txt and BORN (phonopy NAC format)."
         lines += self._u_lines()
         lines.extend(self._get_parallel_lines('scf'))
         lines.extend(["LWAVE  = .FALSE.", "LCHARG = .FALSE."])
+        lines = self._apply_incar_overrides(lines, 'phonons')
         return '\n'.join(lines) + '\n'
 
     def _generate_phonopy_band_conf(self, dim: str, band: str, nac: bool) -> str:
@@ -1036,6 +1039,56 @@ echo "      Data:  band.yaml  FORCE_SETS"
         """Return ENCUT: instruction-specified value, or 500 default."""
         return self.instructions.get('encut_val') or 500
 
+    @staticmethod
+    def _incar_tag_name(line: str):
+        """Return the upper-cased INCAR tag name from a line, or None.
+
+        'EDIFF = 1E-6   ! comment'  ->  'EDIFF'
+        '# heading'                  ->  None
+        """
+        s = line.strip()
+        if not s or s.startswith('#') or s.startswith('!') or '=' not in s:
+            return None
+        return s.split('=', 1)[0].strip().upper()
+
+    def _apply_incar_overrides(self, lines: list, step: str) -> list:
+        """Merge user-supplied raw INCAR tags into a generated INCAR line list.
+
+        Tags from the global ('all') block plus the per-step block are applied,
+        with the per-step block winning on conflicts and both winning over the
+        generated defaults. A tag that matches an existing generated line
+        replaces it in place; any remaining tags are appended under a clearly
+        labelled section so nothing is silently dropped.
+        """
+        raw = self.instructions.get('incar_raw', {}) or {}
+        overrides = list(raw.get('all', [])) + list(raw.get(step, []))
+        if not overrides:
+            return lines
+
+        # Later entries win (per-step block listed after the global one).
+        ov_map, ordered = {}, []
+        for o in overrides:
+            tag = self._incar_tag_name(o)
+            if tag is None:
+                continue
+            if tag not in ov_map:
+                ordered.append(tag)
+            ov_map[tag] = o.strip()
+
+        used, new_lines = set(), []
+        for line in lines:
+            tag = self._incar_tag_name(line)
+            if tag and tag in ov_map:
+                new_lines.append(ov_map[tag])
+                used.add(tag)
+            else:
+                new_lines.append(line)
+
+        extra = [ov_map[t] for t in ordered if t not in used]
+        if extra:
+            new_lines += ["", "# User INCAR overrides (from instructions file)"] + extra
+        return new_lines
+
     def _functional_lines(self) -> list:
         """Return INCAR lines for the chosen functional."""
         f = self.instructions.get('functional', 'PBE')
@@ -1170,14 +1223,30 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 "LDAUPRINT = 2", ""]
 
     def _generate_incar_relax(self) -> str:
-        """Generate INCAR for relaxation."""
-        encut  = self._encut()
-        isif   = self.instructions.get('isif')   or 3
-        nsw    = self.instructions.get('nsw')    or 100
-        ediffg = self.instructions.get('ediffg') or -0.01
+        """Generate INCAR for relaxation.
+
+        If an external pressure is requested (PRESSURE in the instructions file)
+        the step becomes a constant-pressure relaxation: ISIF=3 (relax cell
+        shape + volume + ions) and IBRION=2, with the target pressure imposed
+        via PSTRESS (kBar).
+        """
+        encut    = self._encut()
+        nsw      = self.instructions.get('nsw')    or 100
+        ediffg   = self.instructions.get('ediffg') or -0.01
+        pressure = self.instructions.get('pressure', {}) or {}
+        const_p  = pressure.get('enabled', False)
+
+        # ISIF=3 (full cell relaxation) is the default and is required for a
+        # meaningful constant-pressure run; an explicit user ISIF still wins.
+        isif = self.instructions.get('isif') or 3
+
+        header = "# Relaxation calculation"
+        if const_p:
+            header = (f"# Constant-pressure relaxation @ {pressure['value']} "
+                      f"{pressure['unit']}  (PSTRESS = {pressure['pstress_kbar']:g} kBar)")
 
         lines = [
-            "# Relaxation calculation",
+            header,
             "SYSTEM = " + self.instructions.get('project_name', 'Relaxation'),
             "",
             "# Electronic structure",
@@ -1192,6 +1261,13 @@ echo "      Data:  band.yaml  FORCE_SETS"
             f"ISIF = {isif}",
             f"NSW = {nsw}",
             f"EDIFFG = {ediffg}",
+        ]
+        if const_p:
+            lines += [
+                f"PSTRESS = {pressure['pstress_kbar']:g}   "
+                f"! external pressure in kBar ({pressure['value']} {pressure['unit']})",
+            ]
+        lines += [
             "",
             "# Electronic smearing",
             "ISMEAR = 0",
@@ -1206,6 +1282,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines += self._u_lines()
         lines.extend(self._get_parallel_lines('relax'))
         lines.extend(["# Output", "LWAVE = .TRUE.", "LCHARG = .TRUE.", "LORBIT = 11"])
+        lines = self._apply_incar_overrides(lines, 'relax')
         return '\n'.join(lines) + '\n'
 
     def _generate_incar_scf(self) -> str:
@@ -1239,6 +1316,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         
         lines.extend(self._get_parallel_lines('scf'))
         lines.extend(["# Output", "LWAVE = .TRUE.", "LCHARG = .TRUE.", "LORBIT = 11"])
+        lines = self._apply_incar_overrides(lines, 'scf')
         return '\n'.join(lines) + '\n'
 
     def _generate_incar_bands(self) -> str:
@@ -1271,6 +1349,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines += self._u_lines()
         lines.extend(self._get_parallel_lines('bands'))
         lines.extend(["# Output", "LWAVE = .FALSE.", "LCHARG = .FALSE.", "LORBIT = 11"])
+        lines = self._apply_incar_overrides(lines, 'bands')
         return '\n'.join(lines) + '\n'
 
     def _generate_incar_dos(self) -> str:
@@ -1311,8 +1390,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "LWAVE = .FALSE.",
             "LCHARG = .FALSE.",
         ])
+        lines = self._apply_incar_overrides(lines, 'dos')
         return '\n'.join(lines) + '\n'
-    
+
     def _generate_kpoints_auto(self, density: str = 'medium') -> str:
         """Generate automatic Gamma-centred KPOINTS file.
 

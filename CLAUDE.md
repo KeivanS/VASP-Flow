@@ -77,6 +77,10 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 
 Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, MPI settings (KPAR, NCORE, np).
 
+**Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
+
+**Raw INCAR passthrough:** an `INCAR: … END_INCAR` block in the instructions file injects literal INCAR tags into the generated INCAR(s). Per-step blocks use `INCAR <step>:` (relax/scf/bands/dos/wannier/dfpt/phonons); an unqualified block applies to all steps. Parsed into `incar_raw` ({'all'|step: ['TAG = val', …]}); merged by `VASPInputGenerator._apply_incar_overrides()`, which overwrites matching generated tags in place and appends the rest under a "User INCAR overrides" comment.
+
 ## vasp_input_generator.py
 
 `VASPInputGenerator` class. Key methods: `generate_relax_input()`, `generate_scf_input()`, `generate_bands_input()`, `generate_dos_input()`, `generate_wannier_input()`, `generate_dfpt_input()`, `generate_phonons_input()`.
