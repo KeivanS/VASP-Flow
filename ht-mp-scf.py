@@ -58,6 +58,17 @@ AGENT_SLURM     = os.path.join(REPO_DIR, 'vasp-agent-slurm.py')
 DEFAULT_LIST    = 'highthrouput_list'      # spelling per the project convention
 STAGE_DIR       = '_ht_inputs'
 
+# Atomic numbers Z for elements 1..118 (symbol -> Z). Small static table,
+# so no need to query Materials Project for it.
+_PERIODIC = (
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni "
+    "Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe "
+    "Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg "
+    "Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg "
+    "Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og"
+).split()
+ELEMENT_Z = {sym: i + 1 for i, sym in enumerate(_PERIODIC)}
+
 
 # ── input list ──────────────────────────────────────────────────────────────
 def read_id_list(path):
@@ -158,6 +169,34 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts):
             lines.append(f"{key}: {val}")
     with open(path, 'w') as f:
         f.write("\n".join(lines) + "\n")
+
+
+def write_element_table(material_elements, path):
+    """Tabulate the elements (and their Z) seen across the screening set.
+
+    material_elements: dict  mp_id -> list of element symbols.
+    Writes a two-column Z/Element table plus a per-material breakdown to
+    *path* and returns the text so the caller can echo it too.
+    """
+    zkey = lambda s: ELEMENT_Z.get(s, 999)
+    unique = sorted({e for els in material_elements.values() for e in els}, key=zkey)
+
+    lines = [f"Elements across {len(material_elements)} material(s)",
+             "",
+             f"  {'Z':>3}  Element",
+             f"  {'-'*3}  {'-'*7}"]
+    for e in unique:
+        z = ELEMENT_Z.get(e, '?')
+        lines.append(f"  {z:>3}  {e}")
+    lines += ["", "Per material:"]
+    for mid, els in material_elements.items():
+        tag = ", ".join(f"{e}({ELEMENT_Z.get(e, '?')})" for e in els)
+        lines.append(f"  {mid:<14} {tag}")
+
+    text = "\n".join(lines) + "\n"
+    with open(path, 'w') as f:
+        f.write(text)
+    return text
 
 
 # ── runall.sh ───────────────────────────────────────────────────────────────
@@ -314,6 +353,7 @@ def main():
     os.makedirs(stage_root, exist_ok=True)
 
     ok, failed = [], []
+    material_elements = {}
     for mp_id in ids:
         print(f"  fetching {mp_id} ...", end=" ", flush=True)
         try:
@@ -328,6 +368,9 @@ def main():
         write_instructions(os.path.join(d, 'instructions.txt'),
                            mp_id, args.functional, args.mpi, args.encut, slurm_opts)
         nat = len(structure)
+        els = sorted({str(s) for s in structure.composition.elements},
+                     key=lambda s: ELEMENT_Z.get(s, 999))
+        material_elements[mp_id] = els
         print(f"OK  ({structure.composition.reduced_formula}, {nat} atoms, primitive)")
         ok.append(mp_id)
 
@@ -337,7 +380,13 @@ def main():
     runall = os.path.join(os.getcwd(), 'runall.sh')
     write_runall(runall, ok, agent_kind, args.profile, chain=args.chain)
 
+    # Tabulate the elements and their atomic numbers across the screening set
+    table = write_element_table(material_elements,
+                                os.path.join(stage_root, 'elements_Z.txt'))
+    print("\n" + table.rstrip())
+
     print(f"\nStaged {len(ok)} material(s) in {STAGE_DIR}/")
+    print(f"Element/Z table written to {STAGE_DIR}/elements_Z.txt")
     if failed:
         print(f"Skipped {len(failed)} (download failed): {', '.join(failed)}")
     print(f"\nWrote runall.sh. Next:\n")
