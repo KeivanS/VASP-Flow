@@ -1,0 +1,4 @@
+# Materials Project IDs, one per line
+mp-149      # Si (diamond)
+mp-2534     # GaAs
+mp-149      # duplicate, ignored

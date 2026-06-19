@@ -430,6 +430,69 @@ ProjectName/
 \end{lstlisting}
 
 % ============================================================
+\section{High-Throughput Screening (Materials Project)}
+\label{sec:highthroughput}
+% ============================================================
+
+\texttt{ht-mp-scf.py} drives a batch of SCF + ELF calculations straight
+from Materials Project IDs.  For every \texttt{mp-id} it downloads the
+\textbf{primitive} cell from MP, stages a per-material
+\texttt{instructions.txt} (an SCF task plus an \texttt{INCAR scf:} block
+setting \texttt{LELF = .TRUE.} for the electron localization function),
+and writes a \texttt{runall.sh} that calls the chosen agent to build the
+inputs and then runs or submits each job.
+
+\begin{lstlisting}[language=bash]
+pip install pymatgen mp-api          # MP download + primitive standardisation
+export MP_API_KEY=...                 # Materials Project API key
+export VASP_POTCAR_DIR=...            # POTCAR library (used by the agent)
+
+# one mp-id per line (blank lines and # comments ignored)
+printf 'mp-149\nmp-2534\n' > highthrouput_list
+
+./ht-mp-scf.py --agent local  --mpi 16        # workstation
+./ht-mp-scf.py --agent slurm  --profile slurm # cluster (chained by default)
+
+./runall.sh                           # build inputs + run/submit every job
+\end{lstlisting}
+
+The ELFCAR for each material is written to \texttt{<mp-id>/02\_scf/}.
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Option & Meaning \\ \midrule
+\texttt{-{}-agent} & \texttt{local} (vasp-agent.py) or \texttt{slurm}
+  (vasp-agent-slurm.py); prompts if omitted. \\
+\texttt{-{}-list} & ID file; default \texttt{highthrouput\_list}. \\
+\texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
+\texttt{-{}-mpi} & MPI tasks per job. \\
+\texttt{-{}-encut} & Optional ENCUT override (eV). \\
+\texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM only; see below. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Execution order}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Mode & Behaviour \\ \midrule
+local & \texttt{run\_all.sh} blocks --- materials run strictly
+  one-at-a-time. \\
+slurm \texttt{-{}-chain} (default) & Each material's SCF is submitted with
+  \texttt{-{}-dependency=afterok} on the previous one, so the cluster runs
+  them sequentially even though all are queued up front. \\
+slurm \texttt{-{}-no-chain} & Materials are submitted independently and run
+  whenever the scheduler allows. \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+The driver fetches structures over the network (Materials Project), so
+run it on a node with internet --- typically the login node.
+\texttt{runall.sh} performs no downloads and can run on a compute node.
+\end{notebox}
+
+% ============================================================
 \section{instructions.txt Format}
 \label{sec:instructions}
 % ============================================================

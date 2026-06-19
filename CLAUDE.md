@@ -9,10 +9,14 @@ Browser-based GUI for setting up, running, and analyzing DFT calculations with V
 ```
 vasp-gui.py                  # Flask server + embedded HTML/CSS/JS SPA (main entry point)
 vasp-agent.py                # Workflow orchestration agent (CLI and library)
+vasp-agent-slurm.py          # SLURM edition: SBATCH scripts + dependency-chained submission
+ht-mp-scf.py                 # High-throughput driver: MP primitive cells → SCF + ELF batch
 modules/
   instruction_parser.py      # Parses natural language instructions → settings dict
   vasp_input_generator.py    # Generates INCAR, KPOINTS, POTCAR, run.sh per step
 ```
+
+**High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (SCF task + `INCAR scf:` block with `LELF=.TRUE.` for ELF), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). SLURM runs are chained across materials via `--dependency=afterok` by default (`--no-chain` to submit independently).
 
 **Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons}
 
