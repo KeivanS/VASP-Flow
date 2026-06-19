@@ -1142,7 +1142,62 @@ Project missing from dropdown &
     per-step) for arbitrary VASP tags.
     Constant-pressure relaxation via \texttt{PRESSURE} (ISIF=3, IBRION=2,
     PSTRESS).
+  \item[\textcolor{mainblue}{v1.4} (2026-06-19)]
+    High-throughput driver \texttt{ht-mp-scf.py}: Materials Project primitive
+    cells $\to$ batch SCF + ELF, with per-material element/$Z$ table and
+    cross-material \texttt{afterok} chaining on SLURM.
 \end{description}
+
+% ============================================================
+\section*{Addendum: High-Throughput Quick Reference}
+\addcontentsline{toc}{section}{Addendum: High-Throughput Quick Reference}
+\label{sec:addendum-ht}
+% ============================================================
+
+Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
+Section~\ref{sec:highthroughput}).  For each Materials Project ID it
+downloads the \textbf{primitive} cell, stages an SCF calculation that also
+writes the electron localization function (\texttt{LELF = .TRUE.}
+$\rightarrow$ \texttt{ELFCAR}), and builds a \texttt{runall.sh}.
+
+\begin{lstlisting}[language=bash]
+pip install pymatgen mp-api
+export MP_API_KEY=...            # Materials Project key
+export VASP_POTCAR_DIR=...       # POTCAR library (used by the agent)
+
+printf 'mp-149\nmp-2534\n' > highthrouput_list   # one mp-id per line
+
+./ht-mp-scf.py --agent local  --mpi 16           # workstation, sequential
+./ht-mp-scf.py --agent slurm  --profile slurm    # cluster, afterok-chained
+./ht-mp-scf.py --agent slurm  --no-chain         # cluster, independent
+
+./runall.sh                      # build inputs + run/submit each SCF
+\end{lstlisting}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Output & Location \\ \midrule
+ELFCAR (electron localization) & \texttt{<mp-id>/02\_scf/ELFCAR} \\
+Staged inputs (POSCAR + instructions) & \texttt{\_ht\_inputs/<mp-id>/} \\
+Element / $Z$ table & \texttt{\_ht\_inputs/elements\_Z.txt} \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+\textbf{Transfer to a workstation:} only the project folder is needed
+(code, \texttt{modules/}, \texttt{profiles/}); VASP binaries and the POTCAR
+library already live there.  \texttt{ht-mp-scf.py} needs internet for the MP
+download, so run it on the login node --- \texttt{runall.sh} does none.
+\end{notebox}
+
+\begin{notebox}
+\textbf{If the download step errors with}
+\texttt{'dict' object has no attribute 'number'}: that is an spglib /
+pymatgen version mismatch.  Fix the root cause with
+\texttt{pip install -U spglib}.  The driver also falls back to
+\texttt{Structure.get\_primitive\_structure()} automatically, so a run is
+never blocked by it.
+\end{notebox}
 
 \vfill
 \noindent{\color{mainblue}\rule{\linewidth}{0.5pt}}\\[4pt]

@@ -135,8 +135,30 @@ def fetch_primitive_structure(mp_id, api_key):
     if struct is None:
         raise RuntimeError("; ".join(errors) or "unknown MP error")
 
-    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-    return SpacegroupAnalyzer(struct).get_primitive_standard_structure()
+    return _to_primitive(struct)
+
+
+def _to_primitive(struct):
+    """Return the primitive cell, robust across spglib / pymatgen versions.
+
+    Prefers the spglib-standardized primitive cell. Some installations raise
+    here -- e.g. "'dict' object has no attribute 'number'" when an older
+    spglib (< 2.5, dataset is a dict) is paired with a newer pymatgen (which
+    expects attribute access). In that case fall back to pymatgen's own
+    primitive-cell finder, and finally to the cell as downloaded, so the run
+    is never blocked by an environment mismatch.
+
+    Fix the root cause with:  pip install -U spglib
+    """
+    try:
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        return SpacegroupAnalyzer(struct).get_primitive_standard_structure()
+    except Exception:
+        pass
+    try:
+        return struct.get_primitive_structure()
+    except Exception:
+        return struct
 
 
 # ── per-material staging ────────────────────────────────────────────────────

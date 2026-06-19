@@ -295,6 +295,36 @@
 │ MPI: 64                                                                       │
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ HIGH-THROUGHPUT: MP -> SCF + ELF (ht-mp-scf.py) ─────────────────────────────┐
+│ Batch SCF + ELF (ELFCAR) over a list of Materials Project IDs.                │
+│ Downloads each PRIMITIVE cell from MP; builds inputs via the agent.           │
+│                                                                               │
+│ Setup:                                                                        │
+│   pip install pymatgen mp-api    MP download (one time)                       │
+│   export MP_API_KEY=...          Materials Project API key                    │
+│   export VASP_POTCAR_DIR=...     POTCAR library (used by the agent)           │
+│                                                                               │
+│ Input list (one mp-id per line; # comments and blanks ignored):               │
+│   printf 'mp-149\nmp-2534\n' > highthrouput_list                              │
+│                                                                               │
+│ Run:                                                                          │
+│   ./ht-mp-scf.py --agent local  --mpi 16    workstation (sequential)          │
+│   ./ht-mp-scf.py --agent slurm  --profile slurm   cluster (chained)           │
+│   ./runall.sh                   build folders + run/submit each SCF           │
+│                                                                               │
+│ Options:                                                                      │
+│   --agent local|slurm   which agent (prompts if omitted)                      │
+│   --functional PBE      PBE (default) / PBEsol / R2SCAN / ...                 │
+│   --encut 600           optional ENCUT override (eV)                          │
+│   --chain / --no-chain  SLURM: afterok-chain materials (default on)           │
+│                                                                               │
+│ Output:                                                                       │
+│   <mp-id>/02_scf/ELFCAR        electron localization function                 │
+│   _ht_inputs/elements_Z.txt    elements in the set + atomic numbers Z         │
+│                                                                               │
+│ ELF tag (auto-added via raw INCAR passthrough):  LELF = .TRUE.                │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐
 │ VASP_POTCAR_DIR not set   export VASP_POTCAR_DIR=/path/to/potpaw_PBE         │
 │ POTCAR element missing    add _sv or _pv variant to potcar_choices.json      │
