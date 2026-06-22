@@ -41,6 +41,23 @@
 │ ENCUT: 520           manual ENCUT override (eV)                              │
 │ NKPTS: 60            k-points per band segment                               │
 │ MPI: 128             total MPI tasks                                         │
+│ PRESSURE: 10 GPa     constant-P relax: ISIF=3, IBRION=2, PSTRESS (kbar/GPa)  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ RAW INCAR PASSTHROUGH ────────────────────────────────────────────────────────┐
+│ Drop literal INCAR lines into the instructions file; they are merged into     │
+│ the generated INCAR(s). A tag that already exists is overwritten in place;    │
+│ new tags are appended under "User INCAR overrides".                            │
+│                                                                               │
+│   INCAR:                 ← global block, applies to every step                │
+│      LREAL = Auto                                                              │
+│      ALGO  = Fast                                                              │
+│      NELMIN = 6                                                                │
+│   END_INCAR                                                                    │
+│                                                                               │
+│   INCAR scf:             ← per-step block (relax/scf/bands/dos/wannier/...)   │
+│      EDIFF = 1E-8                                                              │
+│   END_INCAR                                                                    │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ FUNCTIONALS ─────────────────────────────────────────────────────────────────┐
@@ -276,6 +293,37 @@
 │              ENCUT 400-600 eV                                                 │
 │                                                                               │
 │ MPI: 64                                                                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ HIGH-THROUGHPUT: MP -> SCF + ELF (ht-mp-scf.py) ─────────────────────────────┐
+│ Batch SCF + ELF (ELFCAR) over a list of Materials Project IDs.                │
+│ Downloads each PRIMITIVE cell from MP; builds inputs via the agent.           │
+│                                                                               │
+│ Setup:                                                                        │
+│   pip install pymatgen mp-api    MP download (one time)                       │
+│   export MP_API_KEY=...          Materials Project API key                    │
+│   export VASP_POTCAR_DIR=...     POTCAR library (used by the agent)           │
+│                                                                               │
+│ Input list (one mp-id per line; # comments and blanks ignored):               │
+│   printf 'mp-149\nmp-2534\n' > highthrouput_list                              │
+│                                                                               │
+│ Run:                                                                          │
+│   ./ht-mp-scf.py --agent local  --mpi 16    workstation (sequential)          │
+│   ./ht-mp-scf.py --agent slurm  --profile slurm   cluster (chained)           │
+│   ./runall.sh                   build folders + run/submit each SCF           │
+│                                                                               │
+│ Options:                                                                      │
+│   --agent local|slurm   which agent (prompts if omitted)                      │
+│   --functional PBE      PBE (default) / PBEsol / R2SCAN / ...                 │
+│   --encut 600           optional ENCUT override (eV)                          │
+│   --kmesh '10 10 10'   SCF Gamma-mesh; medium 10x10x10 default (editable)     │
+│   --chain / --no-chain  SLURM: afterok-chain materials (default on)           │
+│                                                                               │
+│ Output:                                                                       │
+│   <mp-id>/02_scf/ELFCAR        electron localization function                 │
+│   _ht_inputs/elements_Z.txt    elements in the set + atomic numbers Z         │
+│                                                                               │
+│ ELF tag (auto-added via raw INCAR passthrough):  LELF = .TRUE.                │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐

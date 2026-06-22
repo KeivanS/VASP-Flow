@@ -9,10 +9,14 @@ Browser-based GUI for setting up, running, and analyzing DFT calculations with V
 ```
 vasp-gui.py                  # Flask server + embedded HTML/CSS/JS SPA (main entry point)
 vasp-agent.py                # Workflow orchestration agent (CLI and library)
+vasp-agent-slurm.py          # SLURM edition: SBATCH scripts + dependency-chained submission
+ht-mp-scf.py                 # High-throughput driver: MP primitive cells → SCF + ELF batch
 modules/
   instruction_parser.py      # Parses natural language instructions → settings dict
   vasp_input_generator.py    # Generates INCAR, KPOINTS, POTCAR, run.sh per step
 ```
+
+**High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (SCF task + `INCAR scf:` block with `LELF=.TRUE.` for ELF), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). SLURM runs are chained across materials via `--dependency=afterok` by default (`--no-chain` to submit independently).
 
 **Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons}
 
@@ -75,7 +79,11 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 
 ## instruction_parser.py
 
-Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, MPI settings (KPAR, NCORE, np).
+Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, explicit k-mesh override (KMESH), MPI settings (KPAR, NCORE, np).
+
+**Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
+
+**Raw INCAR passthrough:** an `INCAR: … END_INCAR` block in the instructions file injects literal INCAR tags into the generated INCAR(s). Per-step blocks use `INCAR <step>:` (relax/scf/bands/dos/wannier/dfpt/phonons); an unqualified block applies to all steps. Parsed into `incar_raw` ({'all'|step: ['TAG = val', …]}); merged by `VASPInputGenerator._apply_incar_overrides()`, which overwrites matching generated tags in place and appends the rest under a "User INCAR overrides" comment.
 
 ## vasp_input_generator.py
 

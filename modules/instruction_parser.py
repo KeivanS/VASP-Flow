@@ -79,6 +79,12 @@ class InstructionParser:
             # Band structure resolution
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
+            # Explicit auto-mesh override, e.g. "KMESH: 8 8 8" or "KMESH: 12"
+            'kmesh':          self._extract_kmesh(content),
+            # Constant-pressure relaxation (ISIF=3, IBRION=2, PSTRESS)
+            'pressure':       self._extract_pressure(content),
+            # Raw INCAR tags passed straight through (global + per-step)
+            'incar_raw':      self._extract_incar_raw(content),
         }
 
     def _extract_str_key(self, content: str, pattern: str, default=None):
@@ -305,6 +311,126 @@ class InstructionParser:
                                             default=0.01),
             'nac':  not nac_false,
         }
+
+    def _extract_kmesh(self, content: str):
+        """Extract an explicit Gamma-mesh override for the automatic KPOINTS.
+
+        Overrides the tiered density (low/medium/high/very_high) used by the
+        generator's automatic mesh. Accepted forms (case-insensitive):
+
+            KMESH: 8 8 8     KMESH = 8x8x8     KMESH: 12   (-> 12 12 12)
+
+        Returns [nx, ny, nz] or None. For 2-D, give the third value
+        explicitly (e.g. KMESH: 12 12 1).
+        """
+        m = re.search(r'KMESH\s*[:=]\s*(\d+(?:\s*[x×,\s]\s*\d+){0,2})',
+                      content, re.IGNORECASE)
+        if not m:
+            return None
+        nums = [int(n) for n in re.findall(r'\d+', m.group(1))]
+        if not nums:
+            return None
+        if len(nums) == 1:
+            return [nums[0], nums[0], nums[0]]
+        if len(nums) == 2:
+            return [nums[0], nums[1], nums[1]]
+        return nums[:3]
+
+    def _extract_pressure(self, content: str) -> dict:
+        """Extract an externally imposed pressure for constant-pressure relaxation.
+
+        Recognised forms (case-insensitive):
+            PRESSURE = 10 GPa
+            PRESSURE: 5 kbar
+            pressure 10 GPa
+            constant pressure 10 GPa
+            apply 50 kbar pressure
+
+        VASP's PSTRESS tag is in kBar (1 GPa = 10 kBar). If no unit is given
+        the value is assumed to be in GPa (the convention most users quote),
+        and that assumption is recorded so the INCAR comment can flag it.
+
+        Returns {'enabled': bool, 'value': float, 'unit': 'GPa'|'kbar',
+                 'pstress_kbar': float}.
+        """
+        info = {'enabled': False, 'value': None, 'unit': None, 'pstress_kbar': None}
+
+        m = re.search(
+            r'(?:constant\s+|apply\s+|external\s+)?'
+            r'press(?:ure)?\s*[:=]?\s*([-+]?\d*\.?\d+)\s*(GPa|kbar|kB)?',
+            content, re.IGNORECASE)
+        if not m:
+            # also catch "apply 50 kbar pressure" (value before the word)
+            m = re.search(
+                r'(?:apply|external|impose)\s+([-+]?\d*\.?\d+)\s*(GPa|kbar|kB)\s+press',
+                content, re.IGNORECASE)
+        if not m:
+            return info
+
+        value = float(m.group(1))
+        unit  = (m.group(2) or '').lower()
+        if unit in ('kbar', 'kb'):
+            unit_label = 'kbar'
+            pstress = value
+        else:
+            # default / explicit GPa
+            unit_label = 'GPa'
+            pstress = value * 10.0   # 1 GPa = 10 kBar
+
+        info.update({'enabled': True, 'value': value,
+                     'unit': unit_label, 'pstress_kbar': pstress})
+        return info
+
+    def _extract_incar_raw(self, content: str) -> dict:
+        """Extract raw INCAR tag blocks written in normal VASP syntax.
+
+        Lets the user drop literal INCAR lines into the instructions file so
+        they end up verbatim in the generated INCAR(s). Two block forms are
+        supported (case-insensitive header, terminated by END_INCAR / END INCAR):
+
+            INCAR:                 # applies to every step
+                LREAL = Auto
+                ALGO  = Fast
+                NELMIN = 6
+            END_INCAR
+
+            INCAR scf:             # applies only to the named step
+                SIGMA = 0.1
+            END_INCAR
+
+        Recognised step names: relax, scf, bands, dos, wannier, dfpt, phonons
+        (a block with no name, or named 'all', applies to all steps).
+
+        Returns a dict mapping 'all'/<step> -> list of raw 'TAG = value' lines.
+        Lines that don't look like INCAR assignments are ignored; inline
+        comments (after the value) are preserved.
+        """
+        valid_steps = {'relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons'}
+        raw = {}
+
+        block_re = re.compile(
+            r'^[ \t]*INCAR(?:[ \t_]+([A-Za-z]+))?[ \t]*:[ \t]*\n'
+            r'(.*?)'
+            r'^[ \t]*END[ _]?INCAR[ \t]*$',
+            re.IGNORECASE | re.DOTALL | re.MULTILINE)
+
+        for m in block_re.finditer(content):
+            name = (m.group(1) or 'all').lower()
+            if name != 'all' and name not in valid_steps:
+                # unknown qualifier → treat as global so the tags aren't lost
+                name = 'all'
+            tags = []
+            for line in m.group(2).splitlines():
+                s = line.strip()
+                if not s or s.startswith('#') or s.startswith('!'):
+                    continue
+                if '=' not in s:
+                    continue
+                tags.append(s)
+            if tags:
+                raw.setdefault(name, []).extend(tags)
+
+        return raw
 
     def _extract_transport(self, content: str) -> bool:
         """Check if transport calculations are requested"""

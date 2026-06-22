@@ -430,6 +430,78 @@ ProjectName/
 \end{lstlisting}
 
 % ============================================================
+\section{High-Throughput Screening (Materials Project)}
+\label{sec:highthroughput}
+% ============================================================
+
+\texttt{ht-mp-scf.py} drives a batch of SCF + ELF calculations straight
+from Materials Project IDs.  For every \texttt{mp-id} it downloads the
+\textbf{primitive} cell from MP, stages a per-material
+\texttt{instructions.txt} (an SCF task plus an \texttt{INCAR scf:} block
+setting \texttt{LELF = .TRUE.} for the electron localization function),
+and writes a \texttt{runall.sh} that calls the chosen agent to build the
+inputs and then runs or submits each job.  Each SCF uses a medium
+\texttt{10 10 10} $\Gamma$-mesh by default; edit the \texttt{KMESH} line in
+\texttt{\_ht\_inputs/<id>/instructions.txt} (or pass \texttt{-{}-kmesh}) to
+change it.
+
+\begin{lstlisting}[language=bash]
+pip install pymatgen mp-api          # MP download + primitive standardisation
+export MP_API_KEY=...                 # Materials Project API key
+export VASP_POTCAR_DIR=...            # POTCAR library (used by the agent)
+
+# one mp-id per line (blank lines and # comments ignored)
+printf 'mp-149\nmp-2534\n' > highthrouput_list
+
+./ht-mp-scf.py --agent local  --mpi 16        # workstation
+./ht-mp-scf.py --agent slurm  --profile slurm # cluster (chained by default)
+
+./runall.sh                           # build inputs + run/submit every job
+\end{lstlisting}
+
+The ELFCAR for each material is written to \texttt{<mp-id>/02\_scf/}.
+A summary \texttt{\_ht\_inputs/elements\_Z.txt} tabulates every element in
+the screening set with its atomic number $Z$ (from a built-in table --- no
+MP query), plus a per-material breakdown.
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Option & Meaning \\ \midrule
+\texttt{-{}-agent} & \texttt{local} (vasp-agent.py) or \texttt{slurm}
+  (vasp-agent-slurm.py); prompts if omitted. \\
+\texttt{-{}-list} & ID file; default \texttt{highthrouput\_list}. \\
+\texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
+\texttt{-{}-mpi} & MPI tasks per job. \\
+\texttt{-{}-encut} & Optional ENCUT override (eV). \\
+\texttt{-{}-kmesh} & SCF $\Gamma$-mesh, e.g. \texttt{'8 8 8'} or \texttt{'12'}
+  (cubic); default medium \texttt{10 10 10}. Per-material edits via the
+  \texttt{KMESH} line in \texttt{instructions.txt}. \\
+\texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM only; see below. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Execution order}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Mode & Behaviour \\ \midrule
+local & \texttt{run\_all.sh} blocks --- materials run strictly
+  one-at-a-time. \\
+slurm \texttt{-{}-chain} (default) & Each material's SCF is submitted with
+  \texttt{-{}-dependency=afterok} on the previous one, so the cluster runs
+  them sequentially even though all are queued up front. \\
+slurm \texttt{-{}-no-chain} & Materials are submitted independently and run
+  whenever the scheduler allows. \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+The driver fetches structures over the network (Materials Project), so
+run it on a node with internet --- typically the login node.
+\texttt{runall.sh} performs no downloads and can run on a compute node.
+\end{notebox}
+
+% ============================================================
 \section{instructions.txt Format}
 \label{sec:instructions}
 % ============================================================
@@ -475,6 +547,15 @@ Keyword & Meaning \\ \midrule
 \texttt{NSW:} & Max ionic steps. Default 100. \\
 \texttt{EDIFFG:} & Force criterion in eV/\AA. Default $-0.01$. \\
 \texttt{ENCUT:} & Manual plane-wave cutoff in eV. \\
+\texttt{KMESH:} & Explicit Gamma k-mesh overriding the automatic density,
+  e.g.\ \texttt{8 8 8} or \texttt{12} (cubic).  Applies to every automatic
+  mesh (relax/SCF/DOS); for 2-D give the third value (\texttt{12 12 1}). \\
+\texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
+  \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
+  \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
+\texttt{INCAR: \ldots\ END\_INCAR} & Block of literal INCAR tags merged
+  into the generated INCAR(s); optionally per-step
+  (Section~\ref{sec:incar-raw}). \\
 \texttt{NKPTS:} & k-points per band segment. Default 40. \\
 \texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
 \texttt{KPAR:} & Global k-point parallelisation. \\
@@ -576,6 +657,87 @@ Methods: GGA+U with U=4.0 on Fe-d orbitals
 
 Dudarev scheme (LDAUTYPE=2); $J = 0$ is set automatically.
 Combine freely with \texttt{collinear magnetization}.
+
+% ============================================================
+\section{Advanced INCAR Control}
+\label{sec:incar}
+% ============================================================
+
+Two mechanisms let you go beyond the built-in keywords without editing
+each generated INCAR by hand: \textbf{raw INCAR passthrough} (inject any
+VASP tag directly) and \textbf{constant-pressure relaxation}.
+
+\subsection{Raw INCAR passthrough}
+\label{sec:incar-raw}
+
+Place literal INCAR lines --- in ordinary VASP syntax --- inside an
+\texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in your
+\texttt{instructions.txt}.  They are merged into the generated INCAR(s):
+
+\begin{lstlisting}
+INCAR:                  # global block -- applies to every step
+   LREAL  = Auto
+   ALGO   = Fast
+   NELMIN = 6
+END_INCAR
+\end{lstlisting}
+
+A tag that the agent already writes is \textbf{overwritten in place}
+(so \texttt{ALGO = Fast} above replaces the default \texttt{ALGO =
+Normal}); any tag the agent does not normally emit is appended under a
+clearly labelled \texttt{\# User INCAR overrides} section, so nothing is
+silently lost.
+
+To target a single step, name it on the header line.  Recognised steps
+are \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
+\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}:
+
+\begin{lstlisting}
+INCAR scf:              # applies only to 02_scf
+   EDIFF = 1E-8
+   SIGMA = 0.10
+END_INCAR
+\end{lstlisting}
+
+\begin{notebox}
+Precedence: a \emph{per-step} block beats the \emph{global} block, and
+both beat the agent's generated defaults.  This is the recommended way to
+set tags the parser has no dedicated keyword for (e.g.\ \texttt{LMAXMIX},
+\texttt{ADDGRID}, \texttt{LVTOT}, \texttt{IVDW}, \texttt{AMIX}).
+\end{notebox}
+
+\subsection{Constant-pressure relaxation}
+\label{sec:pressure}
+
+A single \texttt{PRESSURE} line turns the relaxation into a
+constant-pressure optimisation: the agent forces \texttt{ISIF = 3} (cell
+shape + volume + ions) and \texttt{IBRION = 2}, and imposes the target
+pressure through \texttt{PSTRESS}.
+
+\begin{lstlisting}
+PRESSURE: 10 GPa        # also accepted: "5 kbar", "constant pressure 8"
+\end{lstlisting}
+
+VASP's \texttt{PSTRESS} tag is in \textbf{kBar} (1~GPa $=$ 10~kBar).  The
+agent converts automatically; if no unit is given, \textbf{GPa is
+assumed}.  The resulting \texttt{01\_relax/INCAR} reads, e.g.:
+
+\begin{lstlisting}
+# Constant-pressure relaxation @ 10 GPa  (PSTRESS = 100 kBar)
+IBRION = 2
+ISIF   = 3
+NSW    = 100
+EDIFFG = -0.01
+PSTRESS = 100   ! external pressure in kBar (10 GPa)
+\end{lstlisting}
+
+\begin{tipbox}
+\texttt{PSTRESS} adds the $PV$ term so the relaxed cell sits at the
+requested external pressure.  Use a tight \texttt{EDIFFG} and a
+well-converged \texttt{ENCUT}; the Pulay stress error grows at high
+pressure, so verify with a higher \texttt{ENCUT} before trusting the
+equilibrium volume.
+\end{tipbox}
 
 % ============================================================
 \section{K-Path for Band Structure}
@@ -858,6 +1020,46 @@ PHONONS_BAND: G X W L G K
 MPI: 64     WALLTIME: 24:00:00
 \end{lstlisting}
 
+\subsection{High-pressure relaxation with custom INCAR tags}
+\label{sec:ex-pressure}
+
+A constant-pressure cell relaxation at 10~GPa, combined with raw INCAR
+passthrough to tighten convergence and add tags the parser has no
+dedicated keyword for:
+
+\begin{lstlisting}
+Project: Silicon 10GPa
+
+Methods: PBEsol functional
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+
+PRESSURE: 10 GPa          # constant-P relax -> ISIF=3, IBRION=2, PSTRESS=100
+
+# Tags applied to every step
+INCAR:
+   LREAL  = .FALSE.
+   ADDGRID = .TRUE.
+   LMAXMIX = 4
+END_INCAR
+
+# Tighter electronic convergence for the relaxation only
+INCAR relax:
+   EDIFF  = 1E-8
+   EDIFFG = -0.005
+END_INCAR
+
+ENCUT: 600
+MPI: 64
+\end{lstlisting}
+
+The \texttt{01\_relax/INCAR} is generated with \texttt{ISIF=3},
+\texttt{PSTRESS=100}, the global tags appended, and \texttt{EDIFF}/%
+\texttt{EDIFFG} overridden to the per-step values; \texttt{02\_scf} and
+\texttt{03\_bands} receive only the global block.
+
 \subsection{Bi\textsubscript{2}Se\textsubscript{3}: topological insulator}
 
 \begin{lstlisting}
@@ -944,7 +1146,69 @@ Project missing from dropdown &
     Fixed DOS projection parsing.
     Separate GUI and agent quick-reference sheets.
     Rewritten comprehensive LaTeX manual.
+  \item[\textcolor{mainblue}{v1.3} (2026-06-15)]
+    Raw INCAR passthrough (\texttt{INCAR: \ldots\ END\_INCAR}, global or
+    per-step) for arbitrary VASP tags.
+    Constant-pressure relaxation via \texttt{PRESSURE} (ISIF=3, IBRION=2,
+    PSTRESS).
+  \item[\textcolor{mainblue}{v1.4} (2026-06-19)]
+    High-throughput driver \texttt{ht-mp-scf.py}: Materials Project primitive
+    cells $\to$ batch SCF + ELF, with per-material element/$Z$ table and
+    cross-material \texttt{afterok} chaining on SLURM.
 \end{description}
+
+% ============================================================
+\section*{Addendum: High-Throughput Quick Reference}
+\addcontentsline{toc}{section}{Addendum: High-Throughput Quick Reference}
+\label{sec:addendum-ht}
+% ============================================================
+
+Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
+Section~\ref{sec:highthroughput}).  For each Materials Project ID it
+downloads the \textbf{primitive} cell, stages an SCF calculation that also
+writes the electron localization function (\texttt{LELF = .TRUE.}
+$\rightarrow$ \texttt{ELFCAR}) on a medium \texttt{10 10 10} $\Gamma$-mesh
+(default; editable per material or via \texttt{-{}-kmesh}), and builds a
+\texttt{runall.sh}.
+
+\begin{lstlisting}[language=bash]
+pip install pymatgen mp-api
+export MP_API_KEY=...            # Materials Project key
+export VASP_POTCAR_DIR=...       # POTCAR library (used by the agent)
+
+printf 'mp-149\nmp-2534\n' > highthrouput_list   # one mp-id per line
+
+./ht-mp-scf.py --agent local  --mpi 16           # workstation, sequential
+./ht-mp-scf.py --agent slurm  --profile slurm    # cluster, afterok-chained
+./ht-mp-scf.py --agent slurm  --no-chain         # cluster, independent
+
+./runall.sh                      # build inputs + run/submit each SCF
+\end{lstlisting}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Output & Location \\ \midrule
+ELFCAR (electron localization) & \texttt{<mp-id>/02\_scf/ELFCAR} \\
+Staged inputs (POSCAR + instructions) & \texttt{\_ht\_inputs/<mp-id>/} \\
+Element / $Z$ table & \texttt{\_ht\_inputs/elements\_Z.txt} \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+\textbf{Transfer to a workstation:} only the project folder is needed
+(code, \texttt{modules/}, \texttt{profiles/}); VASP binaries and the POTCAR
+library already live there.  \texttt{ht-mp-scf.py} needs internet for the MP
+download, so run it on the login node --- \texttt{runall.sh} does none.
+\end{notebox}
+
+\begin{notebox}
+\textbf{If the download step errors with}
+\texttt{'dict' object has no attribute 'number'}: that is an spglib /
+pymatgen version mismatch.  Fix the root cause with
+\texttt{pip install -U spglib}.  The driver also falls back to
+\texttt{Structure.get\_primitive\_structure()} automatically, so a run is
+never blocked by it.
+\end{notebox}
 
 \vfill
 \noindent{\color{mainblue}\rule{\linewidth}{0.5pt}}\\[4pt]
