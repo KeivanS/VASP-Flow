@@ -595,6 +595,10 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig, ax = plt.subplots(figsize=(7, 5))
 
+    # Total DOS from DOSCAR header (col 1 = up, col 2 = down for ISPIN=2)
+    tot_up_full   = tot[:, 1] if spin_pol else tot[:, 1]
+    tot_down_full = tot[:, 2] if spin_pol else None
+
     if spin_pol:
         cum_up   = np.zeros(mask.sum())
         cum_down = np.zeros(mask.sum())
@@ -609,14 +613,18 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
             ax.fill_between(en, -prev_down, -cum_down, alpha=0.30, color=color)
             ax.plot(en, -cum_down, color=color, lw=1.2, ls='--')
 
+        # Total DOS on top (black lines)
+        ax.plot(en,  tot_up_full[mask],  color='k', lw=1.6, zorder=5)
+        ax.plot(en, -tot_down_full[mask], color='k', lw=1.6, zorder=5, ls='--')
+
         ax.axhline(0, color='k', lw=0.9)
-        ymax_v = max(cum_up.max(), cum_down.max()) * 1.1 or 1
+        ymax_v = max(tot_up_full[mask].max(), tot_down_full[mask].max()) * 1.1 or 1
         ax.set_ylim(-ymax_v, ymax_v)
-        ax.set_ylabel('Cumulative DOS (states/eV)   ↑ up  /  ↓ down', fontsize=10)
+        ax.set_ylabel('DOS (states/eV)   ↑ up  /  ↓ down', fontsize=10)
         handles = [Line2D([0],[0], color=colors[i % len(colors)], lw=1.5, label=el)
                    for i, el in enumerate(elements_ordered)]
-        handles += [Line2D([0],[0], color='k', lw=1.2, label='spin ↑'),
-                    Line2D([0],[0], color='k', lw=1.2, ls='--', label='spin ↓')]
+        handles += [Line2D([0],[0], color='k', lw=1.6, label='Total ↑'),
+                    Line2D([0],[0], color='k', lw=1.6, ls='--', label='Total ↓')]
         ax.legend(handles=handles, fontsize=8, loc='upper left')
     else:
         cumulative = np.zeros(mask.sum())
@@ -626,8 +634,10 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
             color = colors[i % len(colors)]
             ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)
             ax.plot(en, cumulative, color=color, lw=1.2)
+        # Total DOS on top (black line)
+        ax.plot(en, tot_up_full[mask], color='k', lw=1.6, zorder=5, label='Total')
         ax.set_ylim(bottom=0)
-        ax.set_ylabel('Cumulative DOS (states/eV)', fontsize=12)
+        ax.set_ylabel('DOS (states/eV)', fontsize=12)
         ax.legend(fontsize=9, loc='upper left')
 
     sc = ScalarFormatter(useOffset=False, useMathText=False)
@@ -693,7 +703,11 @@ def _parse_kpoints_for_bands(kp_file):
 
 
 def _spin_band_plot(bands_dir, efermi, ymin, ymax, ana_dir, base):
-    """Plot spin-up (blue) and spin-down (red dashed) bands from vasprun.xml."""
+    """Plot bands directly from vasprun.xml (no sumo/pymatgen needed).
+
+    Handles both spin-polarized (up=blue, down=red dashed) and non-spin
+    (single blue) band structures. Used as the sumo-independent fallback
+    when sumo-bandplot crashes or is unavailable. Returns True on success."""
     import xml.etree.ElementTree as ET
     import numpy as np
     import matplotlib
@@ -729,15 +743,16 @@ def _spin_band_plot(bands_dir, efermi, ymin, ymax, ana_dir, base):
     if eig_parent is None:
         return False
     spins = eig_parent.findall('set')
-    if len(spins) < 2:
-        return False  # not spin-polarized
+    if not spins:
+        return False
+    spin_polarized = len(spins) >= 2
 
     def _parse_spin(spin_set):
         return np.array([[float(r.text.split()[0]) for r in ks.findall('r')]
                           for ks in spin_set.findall('set')])
 
     ev_up   = _parse_spin(spins[0]) - efermi
-    ev_down = _parse_spin(spins[1]) - efermi
+    ev_down = (_parse_spin(spins[1]) - efermi) if spin_polarized else None
     nbands  = ev_up.shape[1]
 
     # ── k-distances (cumulative path length) ─────────────────────────────
@@ -797,7 +812,9 @@ def _spin_band_plot(bands_dir, efermi, ymin, ymax, ana_dir, base):
     for b in range(nbands):
         for seg in segs:
             ax.plot(kdist[seg], ev_up[seg, b],   color=up_c, lw=0.9, alpha=0.85)
-            ax.plot(kdist[seg], ev_down[seg, b],  color=dn_c, lw=0.9, alpha=0.85, ls='--')
+            if spin_polarized:
+                ax.plot(kdist[seg], ev_down[seg, b], color=dn_c, lw=0.9,
+                        alpha=0.85, ls='--')
 
     for pos in set(ticks):
         ax.axvline(pos, color='k', lw=0.8, zorder=0)
@@ -813,10 +830,11 @@ def _spin_band_plot(bands_dir, efermi, ymin, ymax, ana_dir, base):
     except (TypeError, ValueError):
         ax.set_ylim(-4, 4)
     ax.set_ylabel('Energy − $E_F$ (eV)', fontsize=12)
-    ax.legend(handles=[
-        Line2D([0],[0], color=up_c, lw=1.5, label='spin ↑'),
-        Line2D([0],[0], color=dn_c, lw=1.5, ls='--', label='spin ↓'),
-    ], fontsize=10, loc='upper right')
+    if spin_polarized:
+        ax.legend(handles=[
+            Line2D([0],[0], color=up_c, lw=1.5, label='spin ↑'),
+            Line2D([0],[0], color=dn_c, lw=1.5, ls='--', label='spin ↓'),
+        ], fontsize=10, loc='upper right')
     ax.grid(True, axis='y', alpha=0.15)
     plt.tight_layout()
 
@@ -912,14 +930,18 @@ def api_plot(slug, ptype):
                 is_spin_pol = bool(re.search(r'ISPIN\s*=\s*2',
                                              Path(incar_p).read_text(errors='replace')))
 
-            spin_plot_ok = False
+            band_png = os.path.join(ana, f'{base}_band.png')
+            plot_ok  = False
+
+            # Spin-polarized → custom vasprun plotter (sumo mishandles spin)
             if is_spin_pol and efermi is not None:
                 try:
-                    spin_plot_ok = bool(_spin_band_plot(src, efermi, ymin, ymax, ana, base))
+                    plot_ok = bool(_spin_band_plot(src, efermi, ymin, ymax, ana, base))
                 except Exception:
-                    spin_plot_ok = False
+                    plot_ok = False
 
-            if not spin_plot_ok:
+            # Non-spin → sumo first (nicer gap/labels); fall back below if it crashes
+            if not plot_ok and not is_spin_pol:
                 label_args = ['--labels', labels] if labels else []
                 for fmt in ('png', 'pdf'):
                     subprocess.run(
@@ -929,6 +951,14 @@ def api_plot(slug, ptype):
                         capture_output=True, cwd=src)
                 for f in os.listdir(src):
                     if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
+                plot_ok = os.path.exists(band_png)
+
+            # Final fallback: sumo crashed/unavailable → plot straight from vasprun
+            if not plot_ok and efermi is not None:
+                try:
+                    _spin_band_plot(src, efermi, ymin, ymax, ana, base)
+                except Exception:
+                    pass
     else:
         src = os.path.join(pd_, '04_dos')
         if os.path.isdir(src):

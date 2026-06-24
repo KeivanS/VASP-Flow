@@ -368,7 +368,9 @@ Each step shows three controls: \textbf{Run} (submit the step),
 \thead
 Panel & Contents \\ \midrule
 Band structure & Spin-polarised: blue = $\uparrow$, red dashed = $\downarrow$,
-  same k-axis, $E_F = 0$.  Non-magnetic: single-colour sumo plot. \\
+  same k-axis, $E_F = 0$.  Non-magnetic: single-colour sumo plot.
+  If sumo fails (e.g.\ a pymatgen gap-detection crash) the GUI falls back to a
+  built-in \texttt{vasprun.xml} plotter so a band plot still renders. \\
 Cumulative DOS & Stacked filled-area by element.
   Spin-polarised: up positive, down mirrored. \\
 Projected DOS & Orbital-resolved via sumo; spin-down negated
@@ -1124,7 +1126,13 @@ GUI unreachable &
   Check SSH tunnel: \texttt{ssh -L 5001:localhost:5001 user@cluster}. \\[3pt]
 Project missing from dropdown &
   Folder must contain \texttt{POSCAR} + \texttt{settings.json} in the
-  directory where \texttt{vasp-gui.py} was started. \\
+  directory where \texttt{vasp-gui.py} was started. \\[3pt]
+Band plot empty or not shown &
+  Usually \texttt{sumo-bandplot} crashed on this band structure; the GUI now
+  falls back to a built-in plotter automatically.  An empty plot also means a
+  wrong $E_F$: the Fermi level is read from \texttt{04\_dos/OUTCAR} (then
+  \texttt{02\_scf/OUTCAR}), since \texttt{03\_bands} eigenvalues share the
+  NSCF/DOS energy reference. \\
 \bottomrule
 \end{tabularx}
 
@@ -1155,6 +1163,11 @@ Project missing from dropdown &
     High-throughput driver \texttt{ht-mp-scf.py}: Materials Project primitive
     cells $\to$ batch SCF + ELF, with per-material element/$Z$ table and
     cross-material \texttt{afterok} chaining on SLURM.
+  \item[\textcolor{mainblue}{v1.5} (2026-06-24)]
+    Robust band plotting: built-in \texttt{vasprun.xml} fallback when
+    \texttt{sumo-bandplot} crashes (now handles non-spin as well as spin).
+    Fixed the matplotlib fallback (\texttt{plot\_results.py}) to resolve the
+    real Fermi level and emit PNG, not just PDF.
 \end{description}
 
 % ============================================================

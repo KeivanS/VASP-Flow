@@ -716,6 +716,9 @@ class VASPWorkflowAgent:
             'elements_ordered = list(dict.fromkeys(ion_elements))',
             'colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]',
             'fig, ax = plt.subplots(figsize=(7, 5))',
+            '# Total DOS from DOSCAR header (used as reference black line)',
+            'tot_up   = tot[:,1][mask]',
+            'tot_down = tot[:,2][mask] if spin_pol else None',
             'if spin_pol:',
             '    from matplotlib.lines import Line2D',
             '    cum_up = np.zeros(mask.sum())',
@@ -728,14 +731,16 @@ class VASPWorkflowAgent:
             '        ax.plot(en,  cum_up,  color=color, lw=1.2)',
             '        ax.fill_between(en, -prev_dn, -cum_down, alpha=0.30, color=color)',
             '        ax.plot(en, -cum_down, color=color, lw=1.2, ls="--")',
+            '    ax.plot(en,  tot_up,   color="k", lw=1.6, zorder=5)',
+            '    ax.plot(en, -tot_down, color="k", lw=1.6, zorder=5, ls="--")',
             '    ax.axhline(0, color="k", lw=0.9)',
-            '    ymax_v = max(cum_up.max(), cum_down.max()) * 1.1 or 1',
+            '    ymax_v = max(tot_up.max(), tot_down.max()) * 1.1 or 1',
             '    ax.set_ylim(-ymax_v, ymax_v)',
-            '    ax.set_ylabel("Cumulative DOS  ↑ up  /  ↓ down  (states/eV)", fontsize=10)',
+            '    ax.set_ylabel("DOS (states/eV)   ↑ up  /  ↓ down", fontsize=10)',
             '    hs  = [Line2D([0],[0], color=colors[i%len(colors)], lw=1.5, label=el)',
             '           for i, el in enumerate(elements_ordered)]',
-            '    hs += [Line2D([0],[0], color="k", lw=1.2, label="spin ↑"),',
-            '           Line2D([0],[0], color="k", lw=1.2, ls="--", label="spin ↓")]',
+            '    hs += [Line2D([0],[0], color="k", lw=1.6, label="Total ↑"),',
+            '           Line2D([0],[0], color="k", lw=1.6, ls="--", label="Total ↓")]',
             '    ax.legend(handles=hs, fontsize=8, loc="upper left")',
             'else:',
             '    cumulative = np.zeros(mask.sum())',
@@ -745,8 +750,9 @@ class VASPWorkflowAgent:
             '        color = colors[i % len(colors)]',
             '        ax.fill_between(en, prev, cumulative, alpha=0.35, color=color, label=el)',
             '        ax.plot(en, cumulative, color=color, lw=1.2)',
+            '    ax.plot(en, tot_up, color="k", lw=1.6, zorder=5, label="Total")',
             '    ax.set_ylim(bottom=0)',
-            '    ax.set_ylabel("Cumulative DOS (states/eV)", fontsize=12)',
+            '    ax.set_ylabel("DOS (states/eV)", fontsize=12)',
             '    ax.legend(fontsize=9, loc="upper left")',
             '',
             'sc = ScalarFormatter(useOffset=False, useMathText=False)',
@@ -1038,15 +1044,18 @@ class VASPWorkflowAgent:
             f.write("import numpy as np, matplotlib.pyplot as plt, os\n\n")
             f.write("HERE = os.path.dirname(os.path.abspath(__file__))\n")
             f.write("ROOT = os.path.join(HERE, '..')\n\n")
-            f.write("def efermi(outcar):\n")
-            f.write("    for line in open(outcar):\n")
-            f.write("        if 'E-fermi' in line: return float(line.split()[2])\n")
+            # Prefer the DOS (dense-mesh) Fermi: 03_bands eigenvalues are an NSCF
+            # continuation sharing the DOS energy reference, which can differ from
+            # the SCF run's. Fall back to SCF, then 0.
+            f.write("def _resolve_ef():\n")
+            f.write("    for rel in ['04_dos/OUTCAR', '02_scf/OUTCAR']:\n")
+            f.write("        p = os.path.join(ROOT, rel)\n")
+            f.write("        if not os.path.exists(p): continue\n")
+            f.write("        for line in open(p):\n")
+            f.write("            if 'E-fermi' in line: return float(line.split()[2])\n")
             f.write("    return 0.0\n\n")
-            if has_scf:
-                f.write("ef = efermi(os.path.join(ROOT, '02_scf/OUTCAR'))\n")
-                f.write("print(f'E_F = {ef:.4f} eV')\n\n")
-            else:
-                f.write("ef = 0.0\n\n")
+            f.write("ef = _resolve_ef()\n")
+            f.write("print(f'E_F = {ef:.4f} eV')\n\n")
             if has_bands:
                 f.write("# ── bands ─────────────────────────────────────\n")
                 f.write("ev = os.path.join(ROOT, '03_bands/EIGENVAL')\n")
@@ -1060,8 +1069,9 @@ class VASPWorkflowAgent:
                 f.write("ax.axhline(0,color='k',lw=0.5,ls='--')\n")
                 f.write("ax.set(ylim=(-4,4),ylabel='E−EF (eV)',xlabel='k-index',title='Bands')\n")
                 f.write("plt.tight_layout()\n")
+                f.write("fig.savefig(os.path.join(HERE,'bands.png'),dpi=150)\n")
                 f.write("fig.savefig(os.path.join(HERE,'bands.pdf'),dpi=300)\n")
-                f.write("print('Saved bands.pdf')\n\n")
+                f.write("print('Saved bands.png + bands.pdf')\n\n")
             if has_dos:
                 f.write("# ── DOS ───────────────────────────────────────\n")
                 f.write("dc = os.path.join(ROOT, '04_dos/DOSCAR')\n")
@@ -1099,8 +1109,9 @@ class VASPWorkflowAgent:
                 f.write("ax.axvline(0,color='gray',lw=0.5,ls='--')\n")
                 f.write("ax.set(xlabel='DOS (states/eV)',ylabel='E−EF (eV)',ylim=(-5,5),title='DOS')\n")
                 f.write("plt.tight_layout()\n")
+                f.write("fig.savefig(os.path.join(HERE,'dos.png'),dpi=150)\n")
                 f.write("fig.savefig(os.path.join(HERE,'dos.pdf'),dpi=300)\n")
-                f.write("print('Saved dos.pdf')\n\n")
+                f.write("print('Saved dos.png + dos.pdf')\n\n")
             f.write("plt.show()\n")
         chmod_x(py)
 
