@@ -834,14 +834,15 @@ class VASPWorkflowAgent:
             'eig_parent = root.find(".//eigenvalues/array/set")',
             'if eig_parent is None: print("ERROR: eigenvalues not found"); sys.exit(1)',
             'spins = eig_parent.findall("set")',
-            'if len(spins) < 2: print("ERROR: not spin-polarized"); sys.exit(1)',
+            'if not spins: print("ERROR: no eigenvalues"); sys.exit(1)',
+            'spin_polarized = len(spins) >= 2',
             '',
             'def parse_spin(s):',
             '    return np.array([[float(r.text.split()[0]) for r in ks.findall("r")]',
             '                      for ks in s.findall("set")])',
             '',
             'ev_up   = parse_spin(spins[0]) - efermi',
-            'ev_down = parse_spin(spins[1]) - efermi',
+            'ev_down = (parse_spin(spins[1]) - efermi) if spin_polarized else None',
             'nbands  = ev_up.shape[1]',
             '',
             '# k-distances',
@@ -902,17 +903,19 @@ class VASPWorkflowAgent:
             'for b in range(nbands):',
             '    for seg in segs:',
             '        ax.plot(kdist[seg], ev_up[seg,b],   color=up_c, lw=0.9, alpha=0.85)',
-            '        ax.plot(kdist[seg], ev_down[seg,b],  color=dn_c, lw=0.9, alpha=0.85, ls="--")',
+            '        if spin_polarized:',
+            '            ax.plot(kdist[seg], ev_down[seg,b], color=dn_c, lw=0.9, alpha=0.85, ls="--")',
             'for pos in set(ticks): ax.axvline(pos, color="k", lw=0.8, zorder=0)',
             'if ticks: ax.set_xticks(ticks); ax.set_xticklabels(tick_labels, fontsize=11)',
             'ax.axhline(0, color="k", lw=0.5, ls=":")',
             'ax.set_xlim(kdist[0], kdist[-1])',
             'ax.set_ylim(-4, 4)',
             'ax.set_ylabel("Energy − $E_F$ (eV)", fontsize=12)',
-            'ax.legend(handles=[',
-            '    Line2D([0],[0], color=up_c, lw=1.5, label="spin ↑"),',
-            '    Line2D([0],[0], color=dn_c, lw=1.5, ls="--", label="spin ↓"),',
-            '], fontsize=10, loc="upper right")',
+            'if spin_polarized:',
+            '    ax.legend(handles=[',
+            '        Line2D([0],[0], color=up_c, lw=1.5, label="spin ↑"),',
+            '        Line2D([0],[0], color=dn_c, lw=1.5, ls="--", label="spin ↓"),',
+            '    ], fontsize=10, loc="upper right")',
             'ax.grid(True, axis="y", alpha=0.15)',
             'plt.tight_layout()',
             '',
@@ -990,10 +993,14 @@ class VASPWorkflowAgent:
                 f.write('        sumo-bandplot --prefix "$(basename $HERE)" --ymin -4 --ymax 4 2>&1\n')
                 f.write('        mv *_band.* "$HERE/analysis/" 2>/dev/null || true\n')
                 f.write('        cd "$HERE"\n')
+                f.write('        if ! ls "$HERE"/analysis/*_band.png &>/dev/null; then\n')
+                f.write('            echo "  sumo produced no plot — using built-in vasprun plotter"\n')
+                f.write('            python3 "$HERE/analysis/plot_spin_bands.py" 2>&1\n')
+                f.write('        fi\n')
                 f.write('        echo "  Saved: analysis/*_band.*"\n')
                 f.write('    else\n')
-                f.write('        echo "  sumo not found — copying EIGENVAL"\n')
-                f.write('        cp "$HERE/03_bands/EIGENVAL" "$HERE/analysis/"\n')
+                f.write('        echo "  sumo not found — using built-in vasprun plotter"\n')
+                f.write('        python3 "$HERE/analysis/plot_spin_bands.py" 2>&1\n')
                 f.write('    fi\n')
                 f.write('fi\n\n')
 

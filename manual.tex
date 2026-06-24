@@ -1164,10 +1164,11 @@ Band plot empty or not shown &
     cells $\to$ batch SCF + ELF, with per-material element/$Z$ table and
     cross-material \texttt{afterok} chaining on SLURM.
   \item[\textcolor{mainblue}{v1.5} (2026-06-24)]
-    Robust band plotting: built-in \texttt{vasprun.xml} fallback when
-    \texttt{sumo-bandplot} crashes (now handles non-spin as well as spin).
-    Fixed the matplotlib fallback (\texttt{plot\_results.py}) to resolve the
-    real Fermi level and emit PNG, not just PDF.
+    Robust band plotting across the GUI and both CLI agents (workstation +
+    SLURM): the built-in \texttt{vasprun.xml} plotter now handles non-spin as
+    well as spin, and is used automatically when \texttt{sumo-bandplot} crashes
+    or is unavailable.  Fixed the matplotlib fallback (\texttt{plot\_results.py})
+    to resolve the real Fermi level and emit PNG, not just PDF.
 \end{description}
 
 % ============================================================
