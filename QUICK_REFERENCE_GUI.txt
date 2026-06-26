@@ -97,7 +97,7 @@
 │   Element: S    Orbitals: ☑p ☐s                                              │
 │                                                                               │
 │ Spin-polarized DOS (ISPIN=2):                                                 │
-│   Cumulative DOS  → spin-up above x-axis, spin-down mirrored below           │
+│   DOS  → per-element stacked + total DOS (black); up above, down mirrored    │
 │   Projected DOS   → same mirroring (sumo handles this automatically)         │
 └───────────────────────────────────────────────────────────────────────────────┘
 
@@ -130,7 +130,7 @@
 │   ▶ Run sumo-bandplot   regenerate (non-magnetic only)                        │
 │   ⬇ PDF   download publication-quality PDF                                   │
 │                                                                               │
-│ Cumulative DOS   Stacked filled-area plot by element, from DOSCAR            │
+│ DOS              Per-element stacked areas + total DOS (black), from DOSCAR  │
 │   Spin-polarized: up above zero, down mirrored below                         │
 │                                                                               │
 │ Projected DOS    Orbital-resolved via sumo (requires sumo installed)         │

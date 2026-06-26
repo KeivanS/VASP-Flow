@@ -87,8 +87,8 @@
 │   Fe, Co: 4–5    Ni: 2    Cr, Mn: 3–4    rare earths: 7                     │
 │                                                                               │
 │ Plots after DOS/bands run:                                                    │
-│   Cumulative DOS : spin-up positive, spin-down mirrored below x-axis         │
-│   Band structure : spin-up blue, spin-down red dashed                        │
+│   DOS : per-element stacked + total DOS (black); up positive, down mirrored  │
+│   Band structure : up blue, down red dashed (non-spin = single blue)         │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ GGA+U ───────────────────────────────────────────────────────────────────────┐
@@ -316,6 +316,7 @@
 │   --agent local|slurm   which agent (prompts if omitted)                      │
 │   --functional PBE      PBE (default) / PBEsol / R2SCAN / ...                 │
 │   --encut 600           optional ENCUT override (eV)                          │
+│   --kmesh '10 10 10'   SCF Gamma-mesh; medium 10x10x10 default (editable)     │
 │   --chain / --no-chain  SLURM: afterok-chain materials (default on)           │
 │                                                                               │
 │ Output:                                                                       │

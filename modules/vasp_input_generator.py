@@ -243,12 +243,66 @@ class VASPInputGenerator:
             f.write(job_script)
         os.chmod(f"{output_dir}/run.sh", 0o755)
     
+    def _ncore_for(self, step: str) -> int:
+        """Parse the NCORE value the parallel block would emit for `step`."""
+        import re
+        for ln in self._get_parallel_lines(step):
+            m = re.match(r'\s*NCORE\s*=\s*(\d+)', ln)
+            if m:
+                return int(m.group(1))
+        return 1
+
+    def _lobster_nbands(self, potcar_path: str, ncore: int = 1):
+        """NBANDS large enough for a later LOBSTER analysis, or None.
+
+        LOBSTER requires NBANDS >= the number of local basis functions
+        (sum over atoms of s/p/d/f orbital multiplicities for the
+        pbeVaspFit2015 basis), which usually exceeds the occupied-band count.
+        Returns None if pymatgen / the POTCAR are unavailable so SCF generation
+        never fails just because the band count could not be computed.
+        """
+        if not potcar_path or not os.path.isfile(potcar_path):
+            return None
+        try:
+            import math
+            from pymatgen.core import Structure
+            from pymatgen.io.vasp.inputs import Potcar
+            from pymatgen.io.lobster import Lobsterin
+        except Exception:
+            return None
+        try:
+            mult = {'s': 1, 'p': 3, 'd': 5, 'f': 7}
+            st = Structure.from_file(self.poscar)
+            pot = Potcar.from_file(potcar_path)
+            symbols = [p.symbol for p in pot]
+            zval = {p.symbol.split('_')[0]: float(p.zval) for p in pot}
+            counts = {}
+            for site in st:
+                el = site.specie.symbol
+                counts[el] = counts.get(el, 0) + 1
+            nelect = sum(zval[el] * n for el, n in counts.items())
+            per_el = {}
+            for entry in Lobsterin.get_basis(st, potcar_symbols=symbols):
+                toks = entry.split()
+                el = toks[0].split('_')[0]
+                per_el[el] = sum(mult[o[-1]] for o in toks[1:])
+            n_basis = sum(per_el[el] * counts[el] for el in counts)
+            nb = max(n_basis, math.ceil(nelect / 2))
+            if ncore and ncore > 1:
+                nb = int(math.ceil(nb / ncore) * ncore)
+            return nb
+        except Exception:
+            return None
+
     def generate_scf_input(self, output_dir: str, from_relax: str = None):
         """Generate input files for self-consistent calculation"""
         os.makedirs(output_dir, exist_ok=True)
-        
-        # INCAR
-        incar_content = self._generate_incar_scf()
+
+        # INCAR — set NBANDS up front so the WAVECAR is LOBSTER-ready.
+        # The project POTCAR is built one level up before steps are generated.
+        potcar_path = os.path.join(os.path.dirname(os.path.abspath(output_dir)), 'POTCAR')
+        nbands = self._lobster_nbands(potcar_path, self._ncore_for('scf'))
+        incar_content = self._generate_incar_scf(nbands=nbands)
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
@@ -1285,7 +1339,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines = self._apply_incar_overrides(lines, 'relax')
         return '\n'.join(lines) + '\n'
 
-    def _generate_incar_scf(self) -> str:
+    def _generate_incar_scf(self, nbands: int = None) -> str:
         """Generate INCAR for SCF calculation."""
         encut = self._encut()
         lines = [
@@ -1298,6 +1352,10 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "EDIFF = 1E-6",
             "NELM = 100",
             "ALGO = Normal",
+        ]
+        if nbands:
+            lines.append(f"NBANDS = {nbands}   # >= number of LOBSTER local basis functions")
+        lines += [
             "",
             "# Static calculation",
             "IBRION = -1",
@@ -1404,7 +1462,22 @@ echo "      Data:  band.yaml  FORCE_SETS"
         For 2-D slab calculations (e.g. MoS2 monolayer) the out-of-plane
         direction is already sampled by a single k-point, so kz = 1.
         Adjust is_2d via the instructions dict if needed.
+
+        An explicit KMESH in the instructions (parsed to a 3-int list) overrides
+        the tiered density for every automatic mesh in the workflow.
         """
+        # Explicit user override (KMESH in instructions) wins over the tier.
+        kmesh = self.instructions.get('kmesh')
+        if kmesh:
+            nx, ny, nz = kmesh
+            return (
+                f"Automatic Gamma mesh (user KMESH)\n"
+                f"0\n"
+                f"Gamma\n"
+                f"  {nx}  {ny}  {nz}\n"
+                f"  0    0    0\n"
+            )
+
         # In-plane mesh density for each tier
         density_map = {
             'low':       6,

@@ -79,6 +79,8 @@ class InstructionParser:
             # Band structure resolution
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
+            # Explicit auto-mesh override, e.g. "KMESH: 8 8 8" or "KMESH: 12"
+            'kmesh':          self._extract_kmesh(content),
             # Constant-pressure relaxation (ISIF=3, IBRION=2, PSTRESS)
             'pressure':       self._extract_pressure(content),
             # Raw INCAR tags passed straight through (global + per-step)
@@ -309,6 +311,30 @@ class InstructionParser:
                                             default=0.01),
             'nac':  not nac_false,
         }
+
+    def _extract_kmesh(self, content: str):
+        """Extract an explicit Gamma-mesh override for the automatic KPOINTS.
+
+        Overrides the tiered density (low/medium/high/very_high) used by the
+        generator's automatic mesh. Accepted forms (case-insensitive):
+
+            KMESH: 8 8 8     KMESH = 8x8x8     KMESH: 12   (-> 12 12 12)
+
+        Returns [nx, ny, nz] or None. For 2-D, give the third value
+        explicitly (e.g. KMESH: 12 12 1).
+        """
+        m = re.search(r'KMESH\s*[:=]\s*(\d+(?:\s*[x×,\s]\s*\d+){0,2})',
+                      content, re.IGNORECASE)
+        if not m:
+            return None
+        nums = [int(n) for n in re.findall(r'\d+', m.group(1))]
+        if not nums:
+            return None
+        if len(nums) == 1:
+            return [nums[0], nums[0], nums[0]]
+        if len(nums) == 2:
+            return [nums[0], nums[1], nums[1]]
+        return nums[:3]
 
     def _extract_pressure(self, content: str) -> dict:
         """Extract an externally imposed pressure for constant-pressure relaxation.

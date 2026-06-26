@@ -5,7 +5,9 @@ High-Throughput MP -> SCF + ELF driver
 Reads a list of Materials Project IDs (one per line) from an input file,
 downloads the PRIMITIVE-cell POSCAR for each from the Materials Project,
 and stages a per-material SCF calculation that also computes the electron
-localization function (ELF -> ELFCAR, via LELF = .TRUE.).
+localization function (ELF -> ELFCAR, via LELF = .TRUE.).  Each SCF uses a
+medium 10x10x10 Gamma k-mesh by default, which the user can edit (per
+material in _ht_inputs/<id>/instructions.txt, or globally via --kmesh).
 
 Folder/input construction and job execution are delegated to the existing
 agents:
@@ -168,7 +170,7 @@ def write_poscar(structure, path):
     Poscar(structure).write_file(path)
 
 
-def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts):
+def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=None):
     """Write a minimal SCF+ELF instructions.txt for one material."""
     lines = [
         f"Project: {mp_id}",
@@ -180,10 +182,14 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts):
         "# Electron localization function -> ELFCAR (raw INCAR passthrough)",
         "INCAR scf:",
         "   LELF = .TRUE.",
+        "   KPAR = 1         ! ELF (LELF) is not implemented for KPAR>1 in VASP",
         "END_INCAR",
         "",
         f"MPI: {mpi}",
     ]
+    if kmesh:
+        lines.append("# Medium k-mesh by default; edit this line to change density")
+        lines.append(f"KMESH: {kmesh}")
     if encut:
         lines.append(f"ENCUT: {encut}")
     for key, val in (slurm_opts or {}).items():
@@ -235,7 +241,9 @@ def write_runall(path, ids, agent_kind, profile, chain=True):
                      independent and run whenever the scheduler allows.
     """
     agent    = AGENT_SLURM if agent_kind == 'slurm' else AGENT_LOCAL
-    prof     = f' -p "{profile}"' if (agent_kind == 'slurm' or profile) else ''
+    # Only pass a profile for the SLURM agent; the local agent uses site.env
+    # defaults (passing the SLURM profile would force srun/SBATCH).
+    prof     = f' -p "{profile}"' if agent_kind == 'slurm' else ''
     id_array = " ".join(ids)
 
     with open(path, 'w') as f:
@@ -335,6 +343,10 @@ def main():
                     help="MPI tasks per job (sets MPI: in instructions). Default 1.")
     ap.add_argument('--encut', type=int, default=None,
                     help="optional ENCUT override (eV)")
+    ap.add_argument('--kmesh', default='10 10 10',
+                    help="SCF Gamma k-mesh, e.g. '8 8 8' or '12' (cubic). "
+                         "Default: medium 10x10x10 grid. Edit per material in "
+                         "_ht_inputs/<id>/instructions.txt, or override here.")
     ap.add_argument('--profile', default='slurm',
                     help="agent profile name (SLURM); default 'slurm'")
     ap.add_argument('--chain', dest='chain', action='store_true', default=True,
@@ -369,6 +381,7 @@ def main():
     print(f"\nHigh-throughput SCF + ELF setup")
     print(f"  agent      : {agent_kind}")
     print(f"  functional : {args.functional}")
+    print(f"  k-mesh     : {args.kmesh}  (medium default; editable per material)")
     print(f"  IDs        : {len(ids)}  ({args.list})\n")
 
     stage_root = os.path.join(os.getcwd(), STAGE_DIR)
@@ -388,7 +401,8 @@ def main():
         os.makedirs(d, exist_ok=True)
         write_poscar(structure, os.path.join(d, 'POSCAR'))
         write_instructions(os.path.join(d, 'instructions.txt'),
-                           mp_id, args.functional, args.mpi, args.encut, slurm_opts)
+                           mp_id, args.functional, args.mpi, args.encut, slurm_opts,
+                           kmesh=args.kmesh)
         nat = len(structure)
         els = sorted({str(s) for s in structure.composition.elements},
                      key=lambda s: ELEMENT_Z.get(s, 999))

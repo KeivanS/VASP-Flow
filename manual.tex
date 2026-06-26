@@ -368,7 +368,9 @@ Each step shows three controls: \textbf{Run} (submit the step),
 \thead
 Panel & Contents \\ \midrule
 Band structure & Spin-polarised: blue = $\uparrow$, red dashed = $\downarrow$,
-  same k-axis, $E_F = 0$.  Non-magnetic: single-colour sumo plot. \\
+  same k-axis, $E_F = 0$.  Non-magnetic: single-colour sumo plot.
+  If sumo fails (e.g.\ a pymatgen gap-detection crash) the GUI falls back to a
+  built-in \texttt{vasprun.xml} plotter so a band plot still renders. \\
 Cumulative DOS & Stacked filled-area by element.
   Spin-polarised: up positive, down mirrored. \\
 Projected DOS & Orbital-resolved via sumo; spin-down negated
@@ -440,7 +442,10 @@ from Materials Project IDs.  For every \texttt{mp-id} it downloads the
 \texttt{instructions.txt} (an SCF task plus an \texttt{INCAR scf:} block
 setting \texttt{LELF = .TRUE.} for the electron localization function),
 and writes a \texttt{runall.sh} that calls the chosen agent to build the
-inputs and then runs or submits each job.
+inputs and then runs or submits each job.  Each SCF uses a medium
+\texttt{10 10 10} $\Gamma$-mesh by default; edit the \texttt{KMESH} line in
+\texttt{\_ht\_inputs/<id>/instructions.txt} (or pass \texttt{-{}-kmesh}) to
+change it.
 
 \begin{lstlisting}[language=bash]
 pip install pymatgen mp-api          # MP download + primitive standardisation
@@ -470,6 +475,9 @@ Option & Meaning \\ \midrule
 \texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
 \texttt{-{}-mpi} & MPI tasks per job. \\
 \texttt{-{}-encut} & Optional ENCUT override (eV). \\
+\texttt{-{}-kmesh} & SCF $\Gamma$-mesh, e.g. \texttt{'8 8 8'} or \texttt{'12'}
+  (cubic); default medium \texttt{10 10 10}. Per-material edits via the
+  \texttt{KMESH} line in \texttt{instructions.txt}. \\
 \texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM only; see below. \\
 \bottomrule
 \end{tabularx}
@@ -541,6 +549,9 @@ Keyword & Meaning \\ \midrule
 \texttt{NSW:} & Max ionic steps. Default 100. \\
 \texttt{EDIFFG:} & Force criterion in eV/\AA. Default $-0.01$. \\
 \texttt{ENCUT:} & Manual plane-wave cutoff in eV. \\
+\texttt{KMESH:} & Explicit Gamma k-mesh overriding the automatic density,
+  e.g.\ \texttt{8 8 8} or \texttt{12} (cubic).  Applies to every automatic
+  mesh (relax/SCF/DOS); for 2-D give the third value (\texttt{12 12 1}). \\
 \texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
   \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
   \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
@@ -1115,7 +1126,13 @@ GUI unreachable &
   Check SSH tunnel: \texttt{ssh -L 5001:localhost:5001 user@cluster}. \\[3pt]
 Project missing from dropdown &
   Folder must contain \texttt{POSCAR} + \texttt{settings.json} in the
-  directory where \texttt{vasp-gui.py} was started. \\
+  directory where \texttt{vasp-gui.py} was started. \\[3pt]
+Band plot empty or not shown &
+  Usually \texttt{sumo-bandplot} crashed on this band structure; the GUI now
+  falls back to a built-in plotter automatically.  An empty plot also means a
+  wrong $E_F$: the Fermi level is read from \texttt{04\_dos/OUTCAR} (then
+  \texttt{02\_scf/OUTCAR}), since \texttt{03\_bands} eigenvalues share the
+  NSCF/DOS energy reference. \\
 \bottomrule
 \end{tabularx}
 
@@ -1146,6 +1163,12 @@ Project missing from dropdown &
     High-throughput driver \texttt{ht-mp-scf.py}: Materials Project primitive
     cells $\to$ batch SCF + ELF, with per-material element/$Z$ table and
     cross-material \texttt{afterok} chaining on SLURM.
+  \item[\textcolor{mainblue}{v1.5} (2026-06-24)]
+    Robust band plotting across the GUI and both CLI agents (workstation +
+    SLURM): the built-in \texttt{vasprun.xml} plotter now handles non-spin as
+    well as spin, and is used automatically when \texttt{sumo-bandplot} crashes
+    or is unavailable.  Fixed the matplotlib fallback (\texttt{plot\_results.py})
+    to resolve the real Fermi level and emit PNG, not just PDF.
 \end{description}
 
 % ============================================================
@@ -1158,7 +1181,9 @@ Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
 Section~\ref{sec:highthroughput}).  For each Materials Project ID it
 downloads the \textbf{primitive} cell, stages an SCF calculation that also
 writes the electron localization function (\texttt{LELF = .TRUE.}
-$\rightarrow$ \texttt{ELFCAR}), and builds a \texttt{runall.sh}.
+$\rightarrow$ \texttt{ELFCAR}) on a medium \texttt{10 10 10} $\Gamma$-mesh
+(default; editable per material or via \texttt{-{}-kmesh}), and builds a
+\texttt{runall.sh}.
 
 \begin{lstlisting}[language=bash]
 pip install pymatgen mp-api

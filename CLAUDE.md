@@ -79,7 +79,7 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 
 ## instruction_parser.py
 
-Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, MPI settings (KPAR, NCORE, np).
+Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, explicit k-mesh override (KMESH), MPI settings (KPAR, NCORE, np).
 
 **Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
 
