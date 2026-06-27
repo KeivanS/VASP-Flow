@@ -108,6 +108,7 @@
 │ Wannier90 / wannierization 05_wannier                                         │
 │ DFPT / Born charges        06_dfpt   IBRION=8, LEPSILON=.TRUE.               │
 │ phonons / lattice dynamics 07_phonons phonopy finite-displacement             │
+│ lobster / COHP / COBI / COOP  08_lobster  ISYM=0 NSCF + LOBSTER               │
 │                                                                               │
 │ Minimum required order: SCF before bands or DOS.                             │
 │ Relaxation should be first if geometry is not pre-optimised.                 │
@@ -236,6 +237,25 @@
 │ Note: DFPT Born charges are needed for NAC. Include DFPT task or set NAC off.│
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ LOBSTER  (COHP / COBI / COOP bonding analysis) ──────────────────────────────┐
+│ Tasks: LOBSTER COHP/COBI analysis   (also: cohp, cobi, coop, bonding)         │
+│                                                                               │
+│ Adds 08_lobster: a symmetry-off (ISYM=0) NSCF reading 02_scf/CHGCAR, then     │
+│ runs the lobster binary. ISYM=0 is REQUIRED -- a symmetrized k-mesh gives     │
+│ unusable COHP/ICOHP (wrong sign, |Δ| > 100%). NBANDS is auto-set to >= the    │
+│ LOBSTER basis-function count; LMAXMIX from the elements (6 f / 4 d / 2 sp).   │
+│ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX).                            │
+│                                                                               │
+│ Example instructions.txt:                                                     │
+│     Project: NaCl                                                             │
+│     Methods: PBE functional                                                   │
+│     Tasks: SCF, LOBSTER COHP/COBI analysis                                    │
+│     MPI: 16                                                                   │
+│                                                                               │
+│ Run:        ./vasp-agent.py            (builds 02_scf + 08_lobster, runs both)│
+│ Aggregate:  python3 lobster_postprocess.py   -> lobster_acohp_acobi.csv       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ DIRECTORY STRUCTURE ─────────────────────────────────────────────────────────┐
 │ ProjectName/                                                                  │
 │ ├── instructions.txt      copy of your input                                 │
@@ -245,6 +265,7 @@
 │ ├── 02_scf/               INCAR  KPOINTS  POSCAR  POTCAR  run.sh             │
 │ ├── 03_bands/             INCAR  KPOINTS         POTCAR  run.sh             │
 │ ├── 04_dos/               INCAR  KPOINTS         POTCAR  run.sh             │
+│ ├── 08_lobster/            INCAR  KPOINTS  POTCAR  copy_from_scf.sh  run.sh   │
 │ ├── analysis/             plots and output files                              │
 │ ├── run_all.sh            run every step in order (workstation)              │
 │ └── analyze.sh            generate plots after all steps complete            │

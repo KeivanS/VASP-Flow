@@ -170,14 +170,16 @@ def write_poscar(structure, path):
     Poscar(structure).write_file(path)
 
 
-def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=None):
+def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=None,
+                       lobster=True):
     """Write a minimal SCF+ELF instructions.txt for one material."""
+    tasks = "SCF calculation" + (", LOBSTER COHP/COBI analysis" if lobster else "")
     lines = [
         f"Project: {mp_id}",
         "# High-throughput SCF + ELF from a Materials Project primitive cell",
         f"Methods: {functional} functional",
         "",
-        "Tasks: SCF calculation",
+        f"Tasks: {tasks}",
         "",
         "# Electron localization function -> ELFCAR (raw INCAR passthrough)",
         "INCAR scf:",
@@ -343,6 +345,10 @@ def main():
                     help="MPI tasks per job (sets MPI: in instructions). Default 1.")
     ap.add_argument('--encut', type=int, default=None,
                     help="optional ENCUT override (eV)")
+    ap.add_argument('--lobster', dest='lobster', action='store_true', default=True,
+                    help="add a LOBSTER (08_lobster) bonding-analysis step (default on)")
+    ap.add_argument('--no-lobster', dest='lobster', action='store_false',
+                    help="do not add the LOBSTER step")
     ap.add_argument('--kmesh', default='10 10 10',
                     help="SCF Gamma k-mesh, e.g. '8 8 8' or '12' (cubic). "
                          "Default: medium 10x10x10 grid. Edit per material in "
@@ -402,7 +408,7 @@ def main():
         write_poscar(structure, os.path.join(d, 'POSCAR'))
         write_instructions(os.path.join(d, 'instructions.txt'),
                            mp_id, args.functional, args.mpi, args.encut, slurm_opts,
-                           kmesh=args.kmesh)
+                           kmesh=args.kmesh, lobster=args.lobster)
         nat = len(structure)
         els = sorted({str(s) for s in structure.composition.elements},
                      key=lambda s: ELEMENT_Z.get(s, 999))

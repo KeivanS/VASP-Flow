@@ -213,8 +213,12 @@ class SLURMVASPAgent:
             return f"{self.mpi_cmd} {self.ntasks} {self.vasp_exec}"
 
     def _write_step_script(self, step_dir: str, job_name: str,
-                           time_override: str = None):
-        """Replace the VASPInputGenerator-produced run.sh with a SLURM batch script."""
+                           time_override: str = None, post: str = None):
+        """Replace the VASPInputGenerator-produced run.sh with a SLURM batch script.
+
+        `post`, if given, is extra shell appended after the VASP run (e.g. the
+        LOBSTER pass), executed on the compute node within the same job.
+        """
         script = os.path.join(step_dir, 'run.sh')
         abs_dir = os.path.abspath(step_dir)
         with open(script, 'w') as f:
@@ -228,7 +232,36 @@ class SLURMVASPAgent:
                     f.write(f'bash {abs_dir}/{copy_script}\n\n')
             f.write(f"{self._vasp_run_line()}\n")
             f.write('\necho "Exit status: $?"\n')
+            if post:
+                f.write("\n" + post + "\n")
         chmod_x(script)
+
+    def _lobster_post(self) -> str:
+        """Shell appended after VASP in the LOBSTER step: build lobsterin from
+        the DOSCAR energy window and run the lobster binary on the compute node.
+        The binary is resolved via the generator (site.env LOBSTER_X / profile)."""
+        return self._LOBSTER_POST.replace('@LOBSTER@', self.generator._get_lobster_exec())
+
+    _LOBSTER_POST = r'''
+# --- LOBSTER bonding analysis (after the symmetry-off NSCF) ---
+LOBSTER_BIN="${LOBSTER_BIN:-@LOBSTER@}"
+if [ -f DOSCAR ]; then
+    read emax emin nedos efermi _ < <(sed -n '6p' DOSCAR)
+    starteng=$(awk -v a="$emin" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
+    endeng=$(awk   -v a="$emax" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
+    cat > lobsterin <<LOB
+basisSet pbeVaspFit2015
+cohpGenerator from 0.8 to 4
+cobiGenerator from 0.8 to 4
+COHPStartEnergy $starteng
+COHPEndEnergy $endeng
+gaussianSmearingWidth 0.05
+LOB
+    echo "Running LOBSTER ($LOBSTER_BIN)"
+    "$LOBSTER_BIN" > lobster.out 2>&1 || echo "  LOBSTER failed -- see lobster.out"
+else
+    echo "ERROR: no DOSCAR (NSCF failed?); skipping LOBSTER"
+fi'''
 
     # ── main workflow ─────────────────────────────────────────────────────
 
@@ -319,6 +352,15 @@ class SLURMVASPAgent:
             self._write_step_script(d, f"{proj}_phonons")
             calc_dirs['phonons'] = d
             print(f"  07_phonons/  INCAR  KPOINTS  POTCAR  run.sh (SLURM)")
+
+        if 'lobster' in tasks:
+            d = os.path.join(pd, '08_lobster')
+            scf_d = calc_dirs.get('scf', os.path.join(pd, '02_scf'))
+            self.generator.generate_lobster_input(d, scf_d)
+            link_potcar(d, potcar_path)
+            self._write_step_script(d, f"{proj}_lobster", post=self._lobster_post())
+            calc_dirs['lobster'] = d
+            print(f"  08_lobster/  INCAR  KPOINTS  POTCAR  copy_from_scf.sh  run.sh (SLURM)")
 
         # ── convergence tests ─────────────────────────────────────────────
         conv = inst.get('convergence', {})
@@ -502,7 +544,7 @@ class SLURMVASPAgent:
     def _gen_submit_all(self, calc_dirs):
         """submit_all.sh — submit every production step with dependency chaining."""
         path = os.path.join(self.project_dir, 'submit_all.sh')
-        ordered = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons']
+        ordered = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons', 'lobster']
                    if k in calc_dirs]
         with open(path, 'w') as f:
             f.write("#!/bin/bash\n")
@@ -564,7 +606,7 @@ class SLURMVASPAgent:
         """submit_calculations.sh — PHASE 2: prompt for ENCUT/k-mesh, patch
         input files, then submit production jobs with dependency chaining."""
         path = os.path.join(self.project_dir, 'submit_calculations.sh')
-        ordered = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons']
+        ordered = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons', 'lobster']
                    if k in calc_dirs]
         with open(path, 'w') as f:
             f.write("#!/bin/bash\n")

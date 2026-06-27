@@ -17,6 +17,7 @@ _VASP_GAM    = os.environ.get('VASP_GAM',    '~/BIN/vasp_gam')
 _MPI_LAUNCH  = os.environ.get('MPI_LAUNCH',  'mpirun -np')
 _MPI_NP      = int(os.environ.get('MPI_NP',  '1'))
 _WANNIER90_X = os.environ.get('WANNIER90_X', 'wannier90.x')
+_LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster-5.1.0-OSX')
 
 # ── Default k-paths per Bravais lattice type (Setyawan & Curtarolo 2010) ─────
 # All coordinates are fractional reciprocal (VASP "rec" format) in the
@@ -160,6 +161,10 @@ class VASPInputGenerator:
             return self._profile_get('vasp_gam', _VASP_GAM)
         return self._profile_get('vasp_std', _VASP_STD)
 
+    def _get_lobster_exec(self) -> str:
+        """LOBSTER binary (profile 'lobster_x' overrides site.env LOBSTER_X)."""
+        return self._profile_get('lobster_x', _LOBSTER_X)
+
     def _get_mpi_cmd(self, vasp_exec: str) -> str:
         """Build the MPI launch line. Profile mpi_cmd overrides site.env MPI_LAUNCH.
 
@@ -294,6 +299,19 @@ class VASPInputGenerator:
         except Exception:
             return None
 
+    def _lmaxmix(self) -> int:
+        """LMAXMIX from the elements present: 6 if any f-block, 4 if any d, else 2."""
+        try:
+            from pymatgen.core import Element
+            blocks = {Element(e).block for e in self.elements}
+            if 'f' in blocks:
+                return 6
+            if 'd' in blocks:
+                return 4
+        except Exception:
+            pass
+        return 2
+
     def generate_scf_input(self, output_dir: str, from_relax: str = None):
         """Generate input files for self-consistent calculation"""
         os.makedirs(output_dir, exist_ok=True)
@@ -409,7 +427,42 @@ class VASPInputGenerator:
         with open(f"{output_dir}/run.sh", 'w') as f:
             f.write(job_script)
         os.chmod(f"{output_dir}/run.sh", 0o755)
-    
+
+    def generate_lobster_input(self, output_dir: str, from_scf: str):
+        """Generate the LOBSTER step (08_lobster).
+
+        A symmetry-off (ISYM=0) NSCF that reads 02_scf's CHGCAR and writes a
+        WAVECAR LOBSTER can consume, followed by a LOBSTER run. NBANDS is set
+        >= the number of LOBSTER basis functions and LMAXMIX from the elements.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+
+        # NBANDS from the project-level POTCAR (built one level up before steps).
+        potcar_path = os.path.join(os.path.dirname(os.path.abspath(output_dir)), 'POTCAR')
+        nbands = self._lobster_nbands(potcar_path, self._ncore_for('scf'))
+
+        with open(f"{output_dir}/INCAR", 'w') as f:
+            f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
+
+        # Same k-mesh density as the SCF.
+        with open(f"{output_dir}/KPOINTS", 'w') as f:
+            f.write(self._generate_kpoints_auto(density='high'))
+
+        # Pull the converged charge density from the SCF at runtime.
+        rel_scf = os.path.relpath(from_scf, output_dir)
+        with open(f"{output_dir}/copy_from_scf.sh", 'w') as f:
+            f.write("#!/bin/bash\n")
+            f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+            f.write(f'SCF_DIR="$HERE/{rel_scf}"\n')
+            f.write('cp "$SCF_DIR/CHGCAR" "$HERE/"\n')
+            f.write('echo "  CHGCAR copied from 02_scf"\n')
+            self._write_copy_if_newer(f, '$SCF_DIR', 'POSCAR', 'POSCAR', '02_scf')
+        os.chmod(f"{output_dir}/copy_from_scf.sh", 0o755)
+
+        with open(f"{output_dir}/run.sh", 'w') as f:
+            f.write(self._generate_job_script_lobster(self._get_vasp_exec()))
+        os.chmod(f"{output_dir}/run.sh", 0o755)
+
     def generate_wannier_input(self, output_dir: str, from_scf: str):
         """Generate input files for the VASP → Wannier90 interface (NSCF step)."""
         os.makedirs(output_dir, exist_ok=True)
@@ -1451,6 +1504,54 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines = self._apply_incar_overrides(lines, 'dos')
         return '\n'.join(lines) + '\n'
 
+    def _generate_incar_lobster(self, nbands: int = None, lmax: int = 2) -> str:
+        """INCAR for the LOBSTER NSCF: ISYM=0, fixed charge, WAVECAR for LOBSTER."""
+        encut = self._encut()
+        lines = [
+            "# LOBSTER preparation: symmetry-off NSCF from the SCF charge density",
+            "SYSTEM = " + self.instructions.get('project_name', 'LOBSTER'),
+            "",
+            "# Electronic structure",
+            "PREC = Accurate",
+            f"ENCUT = {encut}",
+            "EDIFF = 1E-6",
+            "NELM = 100",
+            "ALGO = Normal",
+        ]
+        if nbands:
+            lines.append(f"NBANDS = {nbands}   # >= number of LOBSTER local basis functions")
+        lines += [
+            "",
+            "# Non-self-consistent from SCF CHGCAR; symmetry OFF is REQUIRED by LOBSTER",
+            "ICHARG = 11",
+            "ISTART = 1",
+            "ISYM = 0",
+            "IBRION = -1",
+            "NSW = 0",
+            f"LMAXMIX = {lmax}",
+            "",
+            "# Smearing (Gaussian, matches LOBSTER's gaussianSmearingWidth)",
+            "ISMEAR = 0",
+            "SIGMA = 0.05",
+            "",
+        ]
+        fl = self._functional_lines()
+        if fl:
+            lines += fl + [""]
+        lines += self._mag_lines()
+        lines += self._soc_lines()
+        lines += self._u_lines()
+        lines.extend(self._get_parallel_lines('scf'))
+        lines.extend([
+            "# Output (WAVECAR is read by LOBSTER; dense DOSCAR for the energy window)",
+            "LORBIT = 11",
+            "NEDOS = 3000",
+            "LWAVE = .TRUE.",
+            "LCHARG = .FALSE.",
+        ])
+        lines = self._apply_incar_overrides(lines, 'lobster')
+        return '\n'.join(lines) + '\n'
+
     def _generate_kpoints_auto(self, density: str = 'medium') -> str:
         """Generate automatic Gamma-centred KPOINTS file.
 
@@ -1625,3 +1726,60 @@ else
 fi
 """
         return script
+
+    def _generate_job_script_lobster(self, vasp_exec: str) -> str:
+        """run.sh for 08_lobster: symmetry-off NSCF, then a LOBSTER run.
+
+        Built with token replacement (not an f-string) so the embedded shell
+        '$' expansions, heredoc, and awk '{...}' survive verbatim.
+        """
+        launch_cmd = self._get_mpi_cmd(vasp_exec)
+        lobster_bin = self._get_lobster_exec()
+        preamble = self._run_sh_preamble('vasp_lobster')
+        template = r'''#!/bin/bash
+@PREAMBLE@# run.sh for lobster (symmetry-off NSCF + LOBSTER)
+# VASP binary : @VEXEC@
+# Launch      : @LAUNCH@
+# LOBSTER bin : @LOBSTER@   (override at runtime with $LOBSTER_BIN)
+
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+if [ ! -f "$HERE/POTCAR" ]; then
+    echo "ERROR: POTCAR not found in $HERE"; exit 1
+fi
+
+# Pull the converged charge density from 02_scf
+if [ -f "$HERE/copy_from_scf.sh" ]; then
+    bash "$HERE/copy_from_scf.sh"
+fi
+
+# 1) Symmetry-off (ISYM=0) NSCF -> WAVECAR that LOBSTER can read
+echo "Starting LOBSTER NSCF (@VEXEC@) at $(date)"
+@LAUNCH@ > vasp.out 2>&1
+
+# 2) Build lobsterin from the DOSCAR energy window (Fermi-referenced, E_F = 0)
+LOBSTER_BIN="${LOBSTER_BIN:-@LOBSTER@}"
+if [ ! -f DOSCAR ]; then echo "ERROR: no DOSCAR (NSCF failed?)"; exit 1; fi
+read emax emin nedos efermi _ < <(sed -n '6p' DOSCAR)
+starteng=$(awk -v a="$emin" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
+endeng=$(awk   -v a="$emax" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
+cat > lobsterin <<LOB
+basisSet pbeVaspFit2015
+cohpGenerator from 0.8 to 4
+cobiGenerator from 0.8 to 4
+COHPStartEnergy $starteng
+COHPEndEnergy $endeng
+gaussianSmearingWidth 0.05
+LOB
+
+# 3) Run LOBSTER
+echo "Running LOBSTER ($LOBSTER_BIN) at $(date)"
+"$LOBSTER_BIN" > lobster.out 2>&1 || { echo "  LOBSTER failed -- see lobster.out"; exit 1; }
+echo "  charge spilling:"; grep -i spilling lobster.out | grep '%' || true
+echo "  Done: COHPCAR/COBICAR/COOPCAR + ICO*LIST.lobster in $HERE"
+'''
+        return (template.replace('@PREAMBLE@', preamble)
+                        .replace('@VEXEC@', vasp_exec)
+                        .replace('@LAUNCH@', launch_cmd)
+                        .replace('@LOBSTER@', lobster_bin))

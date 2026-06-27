@@ -18,7 +18,7 @@ modules/
 
 **High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (SCF task + `INCAR scf:` block with `LELF=.TRUE.` for ELF), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). SLURM runs are chained across materials via `--dependency=afterok` by default (`--no-chain` to submit independently).
 
-**Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons}
+**Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons, 08_lobster}
 
 ## Running the Project
 
@@ -76,10 +76,13 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 | `05_wannier` | Wannier90 NSCF interface |
 | `06_dfpt` | Born charges + dielectric (IBRION=8) |
 | `07_phonons` | Phonopy finite-displacement supercells |
+| `08_lobster` | LOBSTER bonding analysis: symmetry-off (ISYM=0) NSCF from `02_scf` CHGCAR + lobster run (COHP/COBI/COOP) |
 
 ## instruction_parser.py
 
-Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, explicit k-mesh override (KMESH), MPI settings (KPAR, NCORE, np).
+Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, explicit k-mesh override (KMESH), LOBSTER/COHP/COBI bonding analysis (auto-adds an `scf` dependency), MPI settings (KPAR, NCORE, np).
+
+**LOBSTER step (`08_lobster`):** triggered by a `lobster`/`COHP`/`COBI`/`COOP`/`bonding analysis` task. `generate_lobster_input()` emits a symmetry-off NSCF (`ISYM=0`, `ICHARG=11` reading `02_scf/CHGCAR`, `NBANDS` ≥ number of LOBSTER basis functions via `_lobster_nbands()`, `LMAXMIX` from `_lmaxmix()`, `LWAVE=.TRUE.`); `run.sh` then builds `lobsterin` from the DOSCAR energy window and runs the lobster binary (`$LOBSTER_BIN`, default `lobster-5.1.0-OSX`). Aggregate per-bond ICOHP/ICOBI/ICOOP + antibonding integrals into a CSV with `lobster_postprocess.py` (reads `08_lobster/`, falling back to `02_scf/`).
 
 **Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
 

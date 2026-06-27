@@ -183,16 +183,22 @@ class InstructionParser:
             'transport': ['transport', 'boltzwann', 'boltzmann'],
             'dfpt': ['dfpt', 'born charges', 'born effective', 'dielectric', 'lepsilon'],
             'phonons': ['phonon', 'phonons', 'phonopy', 'vibrational', 'lattice dynamics'],
+            'lobster': ['lobster', 'cohp', 'cobi', 'coop', 'crystal orbital',
+                        'bonding analysis'],
         }
-        
+
         content_lower = content.lower()
         for task, keywords in task_keywords.items():
             if any(kw in content_lower for kw in keywords):
                 tasks.append(task)
-        
+
+        # LOBSTER analyses need the SCF charge density to start from.
+        if 'lobster' in tasks and 'scf' not in tasks:
+            tasks.append('scf')
+
         # Ensure logical order
         task_order = ['relax', 'scf', 'bands', 'dos', 'fatbands', 'wannier', 'transport',
-                      'dfpt', 'phonons']
+                      'dfpt', 'phonons', 'lobster']
         ordered_tasks = [t for t in task_order if t in tasks]
         
         return ordered_tasks

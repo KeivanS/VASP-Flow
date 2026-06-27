@@ -71,6 +71,7 @@
 │ ☐ DFPT                   Born charges + dielectric tensor (IBRION=8)         │
 │ ☐ Phonons                Phonopy finite-displacement (needs DFPT for NAC)    │
 │ ☐ Wannier90              NSCF interface for Wannierization                    │
+│ ☐ LOBSTER                COHP/COBI/COOP bonding (08_lobster; needs SCF)       │
 │                                                                               │
 │ Normal order: Relaxation → SCF → Bands → DOS                                 │
 └───────────────────────────────────────────────────────────────────────────────┘

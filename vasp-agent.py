@@ -192,6 +192,14 @@ class VASPWorkflowAgent:
             calc_dirs['phonons'] = d
             print(f"  07_phonons/  INCAR  KPOINTS  POTCAR  band.conf  mesh.conf  run.sh")
 
+        if 'lobster' in tasks:
+            d = os.path.join(pd, '08_lobster')
+            scf_d = calc_dirs.get('scf', os.path.join(pd, '02_scf'))
+            self.generator.generate_lobster_input(d, scf_d)
+            link_potcar(d, potcar_path)
+            calc_dirs['lobster'] = d
+            print(f"  08_lobster/  INCAR  KPOINTS  POTCAR  copy_from_scf.sh  run.sh")
+
         # ── convergence tests ─────────────────────────────────────────────
         conv = inst.get('convergence', {})
         has_convergence = (conv.get('kpoints', {}).get('enabled') or
@@ -260,7 +268,7 @@ class VASPWorkflowAgent:
     def _gen_run_all(self, calc_dirs):
         """Single run_all.sh for the no-convergence case."""
         path = os.path.join(self.project_dir, 'run_all.sh')
-        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons'] if k in calc_dirs]
+        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons', 'lobster'] if k in calc_dirs]
         with open(path, 'w') as f:
             f.write("#!/bin/bash\n")
             f.write(f"# Run all calculations for: {self.project_label}\n\n")
@@ -316,7 +324,7 @@ class VASPWorkflowAgent:
     def _gen_run_calculations(self, calc_dirs):
         """PHASE 2 script — patches ENCUT/KPOINTS from user input then runs calculations."""
         path = os.path.join(self.project_dir, 'run_calculations.sh')
-        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons'] if k in calc_dirs]
+        ordered_keys = [k for k in ['relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons', 'lobster'] if k in calc_dirs]
         # directories that use an automatic k-mesh (not line-mode)
         auto_kpoints_dirs = [os.path.basename(calc_dirs[k])
                              for k in ordered_keys if k not in ('bands',)]

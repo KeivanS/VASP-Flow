@@ -78,6 +78,20 @@ def _slug(name):
 
 def _pd(slug):    return os.path.join(CONFIG['projects_dir'], slug)
 
+def _bin_path_env():
+    """Environment with the Python interpreter's bin/ prepended to PATH.
+
+    sumo (sumo-bandplot / sumo-dosplot) is installed alongside the Python that
+    runs this server, so its console scripts live in os.path.dirname(sys.executable).
+    When the GUI is launched by full path (e.g. make run with PYTHON=.../python3)
+    without conda activated, that bin/ is NOT on PATH and the sumo subprocesses
+    fail with 'command not found'. Prepending it makes them resolvable.
+    """
+    env = dict(os.environ)
+    bindir = os.path.dirname(sys.executable)
+    env['PATH'] = bindir + os.pathsep + env.get('PATH', '')
+    return env
+
 def _steps(slug):
     pd = _pd(slug)
     if not os.path.isdir(pd): return []
@@ -218,6 +232,7 @@ def api_generate():
     if d.get('wannier'): tasks.append('Wannier90 wannierization')
     if d.get('dfpt'):    tasks.append('DFPT Born charges and dielectric')
     if d.get('phonons'): tasks.append('phonons lattice dynamics')
+    if d.get('lobster'): tasks.append('LOBSTER COHP/COBI bonding analysis')
 
     mpi = max(1, int(d.get('mpi_np', CONFIG['mpi_np']) or 1))
 
@@ -654,6 +669,92 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
     return True
 
 
+def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
+    """Plot COHP, COBI or COOP vs energy from *CAR.lobster (portrait).
+
+    Thick black = TOTAL over all bonds (sum, per cell). Thin overlaid lines =
+    the nearest-neighbour shell of each element pair (sum of its equivalent
+    bonds), on the same scale as the total. Energy is the vertical axis
+    (Fermi-referenced, E_F = 0); the descriptor is horizontal (bonding +).
+
+    which='cohp' plots -COHP; 'cobi'/'coop' plot the value directly (positive =
+    bonding for all three after the sign flip). Bonding region shaded green,
+    antibonding red.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import re
+    from collections import defaultdict
+
+    files = {'cohp': 'COHPCAR.lobster', 'cobi': 'COBICAR.lobster',
+             'coop': 'COOPCAR.lobster'}
+    path = os.path.join(lobster_dir, files.get(which, 'COHPCAR.lobster'))
+    if not os.path.isfile(path):
+        return False
+    lines  = open(path).readlines()
+    ctrl   = lines[1].split()
+    ncol, nspin = int(ctrl[0]), int(ctrl[1])
+    labels = [lines[2 + k].strip() for k in range(ncol)]
+    data   = np.array([ln.split() for ln in lines[2 + ncol:] if ln.strip()], dtype=float)
+    if data.size == 0:
+        return False
+    E    = data[:, 0]
+    sign = -1.0 if which == 'cohp' else 1.0     # plot bonding-positive
+
+    def curve(idx):                              # idx 1.. = bonds; summed over spins
+        y = np.zeros(len(E))
+        for s in range(nspin):
+            y += data[:, 1 + s * 2 * ncol + 2 * idx]
+        return sign * y
+
+    # TOTAL over all bonds (each contact is listed both directions → /2 = per cell)
+    label_re = re.compile(r"No\.\d+:([A-Za-z]+)\d+->([A-Za-z]+)\d+\(([0-9.]+)\)")
+    groups = defaultdict(list)                   # "A-B" -> [(dist, idx), ...]
+    total  = np.zeros(len(E))
+    for k in range(1, ncol):
+        total += curve(k)
+        mlab = label_re.match(labels[k])
+        if mlab:
+            a, b, dist = mlab.group(1), mlab.group(2), float(mlab.group(3))
+            groups["-".join(sorted((a, b)))].append((dist, k))
+    total /= 2.0
+
+    # Nearest-neighbour shell per element pair (sum of equivalent bonds, per cell)
+    nn = []
+    for pair, items in sorted(groups.items()):
+        dmin = min(d for d, _ in items)
+        cols = [k for d, k in items if abs(d - dmin) < 0.05]
+        nn.append((f"{pair} ({dmin:.2f} Å)", sum(curve(k) for k in cols) / 2.0))
+
+    emin = float(CONFIG.get('dos_xmin', -10))
+    emax = float(CONFIG.get('dos_xmax', 5))
+    m  = (E >= emin) & (E <= emax)
+    Em = E[m]
+    xlabel = {'cohp': '−COHP', 'cobi': 'COBI', 'coop': 'COOP'}[which] + ' (bonding +)'
+
+    fig, ax = plt.subplots(figsize=(3.6, 6.4))   # portrait: energy vertical
+    t = total[m]
+    ax.fill_betweenx(Em, 0, t, where=(t >= 0), color='#2a9d4a', alpha=0.30)
+    ax.fill_betweenx(Em, 0, t, where=(t < 0),  color='#c0392b', alpha=0.30)
+    ax.plot(t, Em, color='k', lw=1.8, label='total (all bonds)')
+    for lbl, yy in nn:                            # nearest-neighbour overlays (thin)
+        ax.plot(yy[m], Em, lw=0.9, alpha=0.9, label=lbl)
+    ax.axvline(0, color='k', lw=0.7)              # bonding / antibonding boundary
+    ax.axhline(0, color='gray', lw=0.9, ls='--')  # Fermi level
+    ax.set_ylim(emin, emax)
+    ax.set_ylabel('Energy − $E_F$ (eV)', fontsize=11)
+    ax.set_xlabel(xlabel, fontsize=11)
+    ax.set_title(f'{which.upper()} — {project_label}', fontsize=10)
+    ax.legend(fontsize=7, loc='lower right')
+    ax.grid(True, alpha=0.2)
+    plt.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    return True
+
+
 # ── spin-resolved band structure plot ─────────────────────────────────────────
 
 def _fmt_hs_label(s):
@@ -876,6 +977,22 @@ def api_plot(slug, ptype):
     # Normalise: bare 'dos' → prefer projected
     if ptype == 'dos': ptype = 'dos_proj'
 
+    # ── LOBSTER COHP / COBI / COOP vs energy (from 08_lobster, else 02_scf) ──
+    if ptype in ('cohp', 'cobi', 'coop'):
+        out = os.path.join(ana, f'{base}_{ptype}.png')
+        fname = {'cohp': 'COHPCAR.lobster', 'cobi': 'COBICAR.lobster',
+                 'coop': 'COOPCAR.lobster'}[ptype]
+        # Always regenerate (fast; reads a small file) so the plot reflects the
+        # current code/data rather than a stale cached PNG.
+        for ld in (os.path.join(pd_, '08_lobster'), os.path.join(pd_, '02_scf')):
+            if os.path.isfile(os.path.join(ld, fname)):
+                if _cohp_cobi_plot(ld, out, slug, ptype) and os.path.exists(out):
+                    return send_file(out, mimetype='image/png')
+                break
+        if os.path.exists(out):                  # fall back to a cached copy
+            return send_file(out, mimetype='image/png')
+        return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
+
     if ptype == 'bands':
         candidates = [
             os.path.join(ana,             f'{base}_band.png'),
@@ -948,7 +1065,7 @@ def api_plot(slug, ptype):
                         ['sumo-bandplot','--prefix',base,
                          '--ymin', ymin, '--ymax', ymax,
                          '--format', fmt] + label_args,
-                        capture_output=True, cwd=src)
+                        capture_output=True, cwd=src, env=_bin_path_env())
                 for f in os.listdir(src):
                     if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
                 plot_ok = os.path.exists(band_png)
@@ -984,7 +1101,7 @@ def api_plot(slug, ptype):
                         ['sumo-dosplot','--prefix',f'{base}_proj',
                          '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'],
                          '--format', fmt]+orb_flag,
-                        capture_output=True, cwd=src)
+                        capture_output=True, cwd=src, env=_bin_path_env())
             for f in os.listdir(src):
                 if '_dos.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
 
@@ -1052,6 +1169,19 @@ def api_plot_pdf(slug, ptype):
     pd_  = _pd(slug)
     ana  = os.path.join(pd_, 'analysis')
     base = _slug_base(slug)
+    if ptype in ('cohp', 'cobi', 'coop'):
+        os.makedirs(ana, exist_ok=True)
+        out = os.path.join(ana, f'{base}_{ptype}.pdf')
+        fname = {'cohp': 'COHPCAR.lobster', 'cobi': 'COBICAR.lobster',
+                 'coop': 'COOPCAR.lobster'}[ptype]
+        for ld in (os.path.join(pd_, '08_lobster'), os.path.join(pd_, '02_scf')):
+            if os.path.isfile(os.path.join(ld, fname)):
+                _cohp_cobi_plot(ld, out, slug, ptype)
+                break
+        if os.path.exists(out):
+            return send_file(out, mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(out))
+        return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
     if ptype == 'bands':
         candidates = [os.path.join(ana, f'{base}_band.pdf'),
                       os.path.join(pd_, '03_bands', f'{base}_band.pdf')]
@@ -1415,6 +1545,8 @@ def api_run_sumo(slug, stype):
     if os.path.exists(tmp): os.remove(tmp)   # never reuse a stale script
     with open(tmp, 'w') as f:
         f.write('#!/bin/bash\nset -e\n')
+        # Ensure sumo (installed next to this server's Python) is on PATH.
+        f.write(f'export PATH="{os.path.dirname(sys.executable)}:$PATH"\n')
         if stype == 'bands':
             src = os.path.join(pd_, '03_bands')
             # Patch efermi in vasprun.xml from DOS (dense k-mesh) or SCF outcar
@@ -2060,6 +2192,18 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     </div>
   </div>
 
+  <!-- LOBSTER -->
+  <div class="task-block" id="tb-lobster">
+    <div class="task-header" id="th-lobster">
+      <label class="ck"><input type="checkbox" id="t_lobster" onchange="toggleTask('lobster',this)"> LOBSTER Bonding Analysis (COHP/COBI/COOP)</label>
+    </div>
+    <div class="task-body" id="tbody-lobster" style="display:none">
+      <div style="font-size:11px;color:var(--sub);margin-top:6px;">
+        Adds an <code>08_lobster</code> step: a symmetry-off (ISYM=0) NSCF from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
+      </div>
+    </div>
+  </div>
+
   <!-- DFPT -->
   <div class="task-block" id="tb-dfpt">
     <div class="task-header" id="th-dfpt">
@@ -2405,7 +2549,7 @@ async function loadProjectSettings(){
     s('manual_kmesh_dos',settings.manual_kmesh_dos);
 
     // Task checkboxes + body visibility
-    const tasks=['relax','scf','bands','dos','dfpt','phonons','wannier'];
+    const tasks=['relax','scf','bands','dos','dfpt','phonons','wannier','lobster'];
     tasks.forEach(t=>{
       const cb=document.getElementById('t_'+t);
       if(cb){
@@ -2681,7 +2825,7 @@ async function saveProjectSettings(){
     relax:  chk('t_relax'), scf:  chk('t_scf'),
     bands:  chk('t_bands'), dos:  chk('t_dos'),
     dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
-    wannier:chk('t_wannier'),
+    wannier:chk('t_wannier'), lobster:chk('t_lobster'),
     relax_type:   v('relax_type'),
     nsw:          parseInt(v('nsw'))||100,
     ediffg:       parseFloat(v('ediffg'))||-0.01,
@@ -2765,6 +2909,8 @@ async function generate(){
     // dfpt
     dfpt:       chk('t_dfpt'),
     dfpt_ediff: v('dfpt_ediff')||'1E-8',
+    // lobster
+    lobster:       chk('t_lobster'),
     // phonons
     phonons:       chk('t_phonons'),
     phonons_dim:   v('phonons_dim')||'2 2 2',
@@ -3127,6 +3273,37 @@ async function buildResults(){
     </div>
   </div>`;
 
+  // ── LOBSTER bonding (COHP / COBI / COOP vs energy, portrait) ───────────
+  h+=`<div class="card">
+    <div class="card-title">LOBSTER Bonding (COHP / COBI / COOP)</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <button class="btn btn-ghost btn-sm" onclick="replotLobster()">↻ Re-plot</button>
+      <a href="/api/plot_pdf/${PROJECT}/cohp" class="btn btn-ghost btn-sm" download title="Download COHP PDF">⬇ COHP PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/cobi" class="btn btn-ghost btn-sm" download title="Download COBI PDF">⬇ COBI PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/coop" class="btn btn-ghost btn-sm" download title="Download COOP PDF">⬇ COOP PDF</a>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <div class="plot-card" style="flex:1;min-width:200px;max-width:320px;">
+        <h4>−COHP(E)</h4>
+        <img id="img-cohp" src="/api/plot/${PROJECT}/cohp?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>−COHP(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
+      </div>
+      <div class="plot-card" style="flex:1;min-width:200px;max-width:320px;">
+        <h4>COBI(E)</h4>
+        <img id="img-cobi" src="/api/plot/${PROJECT}/cobi?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>COBI(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
+      </div>
+      <div class="plot-card" style="flex:1;min-width:200px;max-width:320px;">
+        <h4>COOP(E)</h4>
+        <img id="img-coop" src="/api/plot/${PROJECT}/coop?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>COOP(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
+      </div>
+    </div>
+  </div>`;
+
   // ── Born charges + dielectric ──────────────────────────────────────────
   h+=`<div class="card" id="card-born">
     <div class="card-title">Born Effective Charges &amp; Dielectric Tensor</div>
@@ -3200,6 +3377,22 @@ async function rerunSumo(){
   if(!PROJECT) return;
   await fetch('/api/clear_plots/'+PROJECT);
   buildResults();
+}
+
+function replotLobster(){
+  // Reload the COHP/COBI/COOP images (server always regenerates them).
+  if(!PROJECT) return;
+  // If any image element was destroyed by a previous onerror, rebuild the
+  // whole Results page so the <img> tags come back.
+  if(['cohp','cobi','coop'].some(w=>!document.getElementById('img-'+w))){
+    buildResults();
+    return;
+  }
+  const ts=Date.now();
+  ['cohp','cobi','coop'].forEach(w=>{
+    const img=document.getElementById('img-'+w);
+    if(img) img.src=`/api/plot/${PROJECT}/${w}?t=${ts}`;
+  });
 }
 
 async function loadBornCharges(){
