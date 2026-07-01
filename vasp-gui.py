@@ -234,6 +234,11 @@ def api_generate():
     if d.get('phonons'): tasks.append('phonons lattice dynamics')
     if d.get('lobster'): tasks.append('LOBSTER COHP/COBI bonding analysis')
 
+    lobster_sigma = str(d.get('lobster_sigma', '') or '').strip()
+    lobster_isym  = str(d.get('lobster_isym', '') or '').strip()
+    if lobster_isym not in ('0', '-1'):   # LOBSTER requires symmetry off
+        lobster_isym = ''                 # blank -> generator default (0)
+
     mpi = max(1, int(d.get('mpi_np', CONFIG['mpi_np']) or 1))
 
     # POTCAR settings
@@ -252,6 +257,12 @@ def api_generate():
     if d.get('dfpt'):
         ediff = d.get('dfpt_ediff', '1E-8').strip()
         if ediff: lines.append(f'DFPT_EDIFF: {ediff}')
+
+    # LOBSTER smearing / NSCF symmetry (defaults applied downstream if blank)
+    if d.get('lobster') and lobster_sigma:
+        lines.append(f'LOBSTER_SIGMA: {lobster_sigma}')
+    if d.get('lobster') and lobster_isym:
+        lines.append(f'LOBSTER_ISYM: {lobster_isym}')
 
     # Phonons parameters
     if d.get('phonons'):
@@ -353,6 +364,16 @@ def api_project_settings(slug):
     settings = {}
     if os.path.exists(proj_file):
         try: settings = json.loads(Path(proj_file).read_text())
+        except Exception: pass
+    # DOS projections live in their own dos_proj.json (always written when set);
+    # use it as the source of truth so projections survive reload even if an
+    # earlier regenerate wrote project.json without them.
+    proj_json = os.path.join(pd_, 'dos_proj.json')
+    if os.path.exists(proj_json):
+        try:
+            dp = json.loads(Path(proj_json).read_text())
+            if dp:
+                settings['dos_proj'] = dp
         except Exception: pass
     poscar = ''
     if os.path.exists(poscar_file):
@@ -548,6 +569,21 @@ def api_outcar(slug, step):
 
     return jsonify(tail=tail, info=info)
 
+# matplotlib (pyplot/Agg) keeps global state and is NOT thread-safe. The Flask
+# server is threaded and the Results LOBSTER card fires 3 plot requests at once,
+# so concurrent renders race and some plots silently fail. Serialize all plot
+# generation through one reentrant lock.
+_PLOT_LOCK = threading.RLock()
+
+def _plot_locked(fn):
+    import functools
+    @functools.wraps(fn)
+    def _wrap(*a, **k):
+        with _PLOT_LOCK:
+            return fn(*a, **k)
+    return _wrap
+
+@_plot_locked
 def _cumulative_dos_plot(dos_dir, out_png, project_label):
     """Read DOSCAR + POSCAR and save a cumulative DOS PNG. No pymatgen needed.
     Spin-polarized: spin-up plotted positive, spin-down mirrored negative."""
@@ -669,6 +705,126 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
     return True
 
 
+@_plot_locked
+def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list):
+    """Cumulative (stacked) orbital-projected DOS from DOSCAR (LORBIT=11).
+
+    proj_list = [{element, orbitals:[s,p,d,f]}]. Each (element, orbital) series
+    is summed over all atoms of that element and stacked, so the curves don't
+    overlap. Total DOS overlaid as a black line. Spin-polarized: up positive,
+    down mirrored. Returns False if nothing to plot.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import ScalarFormatter
+    import numpy as np
+    from collections import defaultdict
+
+    if not proj_list:
+        return False
+    ion_elements = []
+    for fname in ('CONTCAR', 'POSCAR'):
+        p = os.path.join(dos_dir, fname)
+        if os.path.isfile(p):
+            ls = open(p).readlines()
+            for el, cnt in zip(ls[5].split(), [int(x) for x in ls[6].split()]):
+                ion_elements.extend([el] * cnt)
+            break
+    doscar = os.path.join(dos_dir, 'DOSCAR')
+    if not ion_elements or not os.path.isfile(doscar):
+        return False
+    raw = open(doscar).readlines()
+    nions = int(raw[0].split()[0])
+    parts = raw[5].split()
+    nedos, efermi = int(parts[2]), float(parts[3])
+    tot = np.array([[float(x) for x in l.split()] for l in raw[6:6 + nedos]])
+    energies = tot[:, 0] - efermi
+    spin_pol = tot.shape[1] == 5
+
+    # lm-index ranges [start, end) within a per-ion block (s=1,p=3,d=5,f=7)
+    LM = {'s': (0, 1), 'p': (1, 4), 'd': (4, 9), 'f': (9, 16)}
+    def orb_cols(orb):
+        lo, hi = LM[orb]
+        if spin_pol:                       # cols: E, then (up,dn) per lm
+            return [1 + 2 * j for j in range(lo, hi)], [2 + 2 * j for j in range(lo, hi)]
+        return [1 + j for j in range(lo, hi)], []
+
+    requested = [(p['element'], orb) for p in proj_list for orb in p.get('orbitals', [])]
+    up = defaultdict(lambda: np.zeros(nedos))
+    dn = defaultdict(lambda: np.zeros(nedos))
+    offset = 6 + nedos
+    for i in range(nions):
+        el = ion_elements[i] if i < len(ion_elements) else f'ion{i}'
+        start = offset + i * (nedos + 1) + 1
+        d = np.array([[float(x) for x in l.split()] for l in raw[start:start + nedos]])
+        for rel, orb in requested:
+            if rel != el:
+                continue
+            cu, cd = orb_cols(orb)
+            cu = [c for c in cu if c < d.shape[1]]
+            cd = [c for c in cd if c < d.shape[1]]
+            key = f'{el} {orb}'
+            if cu: up[key] += d[:, cu].sum(axis=1)
+            if cd: dn[key] += d[:, cd].sum(axis=1)
+
+    keys, seen = [], set()
+    for el, orb in requested:
+        k = f'{el} {orb}'
+        if k in up and k not in seen:
+            seen.add(k); keys.append(k)
+    if not keys:
+        return False
+
+    xmin = float(CONFIG.get('dos_xmin', -6))
+    xmax = float(CONFIG.get('dos_xmax', 6))
+    mask = (energies >= xmin) & (energies <= xmax)
+    en = energies[mask]
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    fig, ax = plt.subplots(figsize=(7, 5))
+    tot_up = tot[:, 1]
+    tot_dn = tot[:, 2] if spin_pol else None
+
+    if spin_pol:
+        cu = np.zeros(mask.sum()); cd = np.zeros(mask.sum())
+        for i, k in enumerate(keys):
+            c = colors[i % len(colors)]
+            pu = cu.copy(); cu = cu + up[k][mask]
+            pd = cd.copy(); cd = cd + dn[k][mask]
+            ax.fill_between(en, pu, cu, alpha=0.35, color=c, label=k)
+            ax.plot(en, cu, color=c, lw=1.0)
+            ax.fill_between(en, -pd, -cd, alpha=0.35, color=c)
+            ax.plot(en, -cd, color=c, lw=1.0, ls='--')
+        ax.plot(en,  tot_up[mask], color='k', lw=1.6, zorder=5, label='Total')
+        ax.plot(en, -tot_dn[mask], color='k', lw=1.6, zorder=5, ls='--')
+        ax.axhline(0, color='k', lw=0.9)
+        ax.set_ylabel('DOS (states/eV)   ↑ up  /  ↓ down', fontsize=10)
+    else:
+        cu = np.zeros(mask.sum())
+        for i, k in enumerate(keys):
+            c = colors[i % len(colors)]
+            pu = cu.copy(); cu = cu + up[k][mask]
+            ax.fill_between(en, pu, cu, alpha=0.35, color=c, label=k)
+            ax.plot(en, cu, color=c, lw=1.0)
+        ax.plot(en, tot_up[mask], color='k', lw=1.6, zorder=5, label='Total')
+        ax.set_ylim(bottom=0)
+        ax.set_ylabel('DOS (states/eV)', fontsize=12)
+
+    sc = ScalarFormatter(useOffset=False, useMathText=False); sc.set_scientific(False)
+    ax.yaxis.set_major_formatter(sc)
+    ax.axvline(0, color='gray', ls='--', lw=0.8)
+    ax.set_xlim(xmin, xmax)
+    ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
+    ax.set_title(f'Projected DOS (cumulative) — {project_label}')
+    ax.legend(fontsize=8, loc='upper left')
+    ax.grid(True, alpha=0.2)
+    plt.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    return True
+
+
+@_plot_locked
 def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
     """Plot COHP, COBI or COOP vs energy from *CAR.lobster (portrait).
 
@@ -803,6 +959,7 @@ def _parse_kpoints_for_bands(kp_file):
         return None, [], True
 
 
+@_plot_locked
 def _spin_band_plot(bands_dir, efermi, ymin, ymax, ana_dir, base):
     """Plot bands directly from vasprun.xml (no sumo/pymatgen needed).
 
@@ -1005,11 +1162,9 @@ def api_plot(slug, ptype):
             os.path.join(pd_,'04_dos', f'{base}_proj_dos.png'),
             # no fallback to total DOS — show "not available" if proj doesn't exist
         ]
-    else:  # dos_total → cumulative
+    else:  # dos_total → cumulative (total black line + element-stacked areas)
         candidates = [
             os.path.join(ana,          f'{base}_cumulative_dos.png'),
-            os.path.join(ana,          f'{base}_total_dos.png'),
-            os.path.join(pd_,'04_dos', f'{base}_total_dos.png'),
             os.path.join(ana,          'dos.png'),
         ]
 
@@ -1079,31 +1234,18 @@ def api_plot(slug, ptype):
     else:
         src = os.path.join(pd_, '04_dos')
         if os.path.isdir(src):
-            orb_flag = []
+            proj_list = []
             proj_json = os.path.join(pd_, 'dos_proj.json')
             if os.path.exists(proj_json):
-                try:
-                    proj_data = json.loads(Path(proj_json).read_text())
-                    om = defaultdict(list)
-                    for p in proj_data:
-                        for orb in p.get('orbitals', []):
-                            om[p['element']].append(orb)
-                    sumo_orb = '; '.join(f"{el} {' '.join(orbs)}" for el, orbs in om.items())
-                    if sumo_orb:
-                        orb_flag = ['--orbitals', sumo_orb]
-                except Exception:
-                    pass
-            # Cumulative DOS (replaces sumo total-DOS plot)
+                try: proj_list = json.loads(Path(proj_json).read_text())
+                except Exception: pass
+            # Both DOS plots are our own cumulative (stacked) plotters:
+            #   total  = total black + element-stacked
+            #   proj   = (element, orbital)-stacked
             _cumulative_dos_plot(src, os.path.join(ana, f'{base}_cumulative_dos.png'), slug)
-            for fmt in ('png', 'pdf'):
-                if orb_flag:
-                    subprocess.run(
-                        ['sumo-dosplot','--prefix',f'{base}_proj',
-                         '--xmin', CONFIG['dos_xmin'], '--xmax', CONFIG['dos_xmax'],
-                         '--format', fmt]+orb_flag,
-                        capture_output=True, cwd=src, env=_bin_path_env())
-            for f in os.listdir(src):
-                if '_dos.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
+            if proj_list:
+                _cumulative_proj_dos_plot(src, os.path.join(ana, f'{base}_proj_dos.png'),
+                                          slug, proj_list)
 
     for p in candidates:
         if os.path.exists(p): return send_file(p, mimetype='image/png')
@@ -1185,12 +1327,28 @@ def api_plot_pdf(slug, ptype):
     if ptype == 'bands':
         candidates = [os.path.join(ana, f'{base}_band.pdf'),
                       os.path.join(pd_, '03_bands', f'{base}_band.pdf')]
-    elif ptype == 'dos_proj':
-        candidates = [os.path.join(ana, f'{base}_proj_dos.pdf'),
-                      os.path.join(pd_, '04_dos', f'{base}_proj_dos.pdf')]
-    else:
-        candidates = [os.path.join(ana, f'{base}_total_dos.pdf'),
-                      os.path.join(pd_, '04_dos', f'{base}_total_dos.pdf')]
+    elif ptype == 'dos_proj':  # cumulative projected DOS as PDF on demand
+        os.makedirs(ana, exist_ok=True)
+        out = os.path.join(ana, f'{base}_proj_dos.pdf')
+        proj_json = os.path.join(pd_, 'dos_proj.json')
+        proj_list = []
+        if os.path.exists(proj_json):
+            try: proj_list = json.loads(Path(proj_json).read_text())
+            except Exception: pass
+        if proj_list:
+            _cumulative_proj_dos_plot(os.path.join(pd_, '04_dos'), out, slug, proj_list)
+        if os.path.exists(out):
+            return send_file(out, mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(out))
+        return jsonify(error='Projected DOS not available — select projections + run 04_dos'), 404
+    else:  # dos_total → generate the cumulative total as PDF on demand
+        os.makedirs(ana, exist_ok=True)
+        out = os.path.join(ana, f'{base}_cumulative_dos.pdf')
+        _cumulative_dos_plot(os.path.join(pd_, '04_dos'), out, slug)
+        if os.path.exists(out):
+            return send_file(out, mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(out))
+        return jsonify(error='Total DOS not available — run 04_dos first'), 404
     for p in candidates:
         if os.path.exists(p):
             return send_file(p, mimetype='application/pdf', as_attachment=True,
@@ -1541,6 +1699,21 @@ def api_run_sumo(slug, stype):
                (stype == 'dos'   and '_dos.'  in f):
                 os.remove(os.path.join(ana, f))
 
+    # Both DOS plots are our own cumulative (stacked) plotters — sumo overlays
+    # and has no real "total" mode. Generate both here in Python.
+    if stype == 'dos':
+        src_dos = os.path.join(pd_, '04_dos')
+        _cumulative_dos_plot(src_dos, os.path.join(ana, f'{base}_cumulative_dos.png'), slug)
+        proj_json = os.path.join(pd_, 'dos_proj.json')
+        if os.path.exists(proj_json):
+            try:
+                proj_list = json.loads(Path(proj_json).read_text())
+                if proj_list:
+                    _cumulative_proj_dos_plot(src_dos,
+                        os.path.join(ana, f'{base}_proj_dos.png'), slug, proj_list)
+            except Exception:
+                pass
+
     tmp = os.path.join(pd_, f'_run_sumo_{stype}.sh')
     if os.path.exists(tmp): os.remove(tmp)   # never reuse a stale script
     with open(tmp, 'w') as f:
@@ -1576,34 +1749,9 @@ def api_run_sumo(slug, stype):
             f.write(f'mv *_band.* "{ana}/" 2>/dev/null || true\n')
             f.write('echo "Band plot (PNG + PDF) saved to analysis/"\n')
         else:
-            src = os.path.join(pd_, '04_dos')
-            orb_flag = ''
-            proj_json = os.path.join(pd_, 'dos_proj.json')
-            if os.path.exists(proj_json):
-                try:
-                    proj_data = json.loads(Path(proj_json).read_text())
-                    om = defaultdict(list)
-                    for p in proj_data:
-                        for orb in p.get('orbitals', []):
-                            om[p['element']].append(orb)
-                    sumo_orb = '; '.join(f"{el} {' '.join(orbs)}"
-                                       for el, orbs in om.items())
-                    if sumo_orb:
-                        orb_flag = f'--orbitals "{sumo_orb}"'
-                except Exception:
-                    pass
-            f.write(f'cd "{src}"\n')
-            f.write(f'sumo-dosplot --prefix "{base}_total" '
-                    f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format png\n')
-            f.write(f'sumo-dosplot --prefix "{base}_total" '
-                    f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format pdf\n')
-            if orb_flag:
-                f.write(f'sumo-dosplot --prefix "{base}_proj" {orb_flag} '
-                        f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format png\n')
-                f.write(f'sumo-dosplot --prefix "{base}_proj" {orb_flag} '
-                        f'--xmin {CONFIG["dos_xmin"]} --xmax {CONFIG["dos_xmax"]} --format pdf\n')
-            f.write(f'mv *_dos.* "{ana}/" 2>/dev/null || true\n')
-            f.write('echo "DOS plots (PNG + PDF) saved to analysis/"\n')
+            # DOS plots (total + projected) are generated above as cumulative
+            # stacked plots in Python; nothing to run here.
+            f.write('echo "DOS plots (total + projected, cumulative) saved to analysis/."\n')
     os.chmod(tmp, 0o755)
     return jsonify(job_key=_launch(tmp, slug, f'sumo_{stype}'))
 
@@ -1625,9 +1773,11 @@ def api_summary(slug):
         out[step] = info
     return jsonify(out)
 
-# Files shown in the modal — INCAR/KPOINTS/POSCAR are editable; rest read-only
+# Files shown in the modal. Editable inputs vs read-only outputs/logs.
 INPUT_FILES    = ['INCAR', 'KPOINTS', 'POSCAR']
-READONLY_FILES = {'OUTCAR', 'OSZICAR', 'vasp.out'}
+LOBSTER_INPUTS = ['INCAR', 'lobsterin']   # INCAR = the ISYM=0 NSCF for LOBSTER
+LOBSTER_OUTPUTS = ['lobsterout', 'lobster.out']
+READONLY_FILES = {'OUTCAR', 'OSZICAR', 'vasp.out', 'lobsterout', 'lobster.out'}
 
 def _step_dir(slug, step):
     """Resolve the filesystem directory for a step; '_root' maps to project root."""
@@ -1650,20 +1800,23 @@ def api_files(slug, step):
             if os.path.isfile(p):
                 files.append({'name': name, 'readonly': False})
     else:
+        is_lobster = 'lobster' in step
+        editable_inputs = LOBSTER_INPUTS if is_lobster else INPUT_FILES
+        output_files    = LOBSTER_OUTPUTS if is_lobster else ['OUTCAR', 'OSZICAR', 'vasp.out']
         # Editable input files first
-        for name in INPUT_FILES:
+        for name in editable_inputs:
             p = os.path.join(step_dir, name)
             if os.path.isfile(p) and not os.path.islink(p):
                 files.append({'name': name, 'readonly': False})
         # Output / log files (read-only)
-        for name in ['OUTCAR', 'OSZICAR', 'vasp.out']:
+        for name in output_files:
             p = os.path.join(step_dir, name)
             if os.path.isfile(p):
                 files.append({'name': name, 'readonly': True})
-        # Shell scripts (read-only)
+        # Shell scripts (editable; regenerating the workflow overwrites them)
         for name in sorted(os.listdir(step_dir)):
             if name.endswith('.sh'):
-                files.append({'name': name, 'readonly': True})
+                files.append({'name': name, 'readonly': False})
     return jsonify(files=files)
 
 @app.route('/api/file/<slug>/<step>/<filename>', methods=['GET', 'POST'])
@@ -1675,7 +1828,7 @@ def api_file(slug, step, filename):
     if not os.path.isfile(path):
         return jsonify(error='File not found'), 404
 
-    is_readonly = filename in READONLY_FILES or filename.endswith('.sh')
+    is_readonly = filename in READONLY_FILES
 
     if request.method == 'GET':
         txt   = Path(path).read_text(errors='replace')
@@ -2198,8 +2351,14 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <label class="ck"><input type="checkbox" id="t_lobster" onchange="toggleTask('lobster',this)"> LOBSTER Bonding Analysis (COHP/COBI/COOP)</label>
     </div>
     <div class="task-body" id="tbody-lobster" style="display:none">
+      <div class="g3">
+        <div class="f"><label>Gaussian smearing (eV)</label>
+          <input id="lobster_sigma" placeholder="0.10"></div>
+        <div class="f"><label>ISYM (NSCF, 0 or -1 only)</label>
+          <input id="lobster_isym" placeholder="0"></div>
+      </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Adds an <code>08_lobster</code> step: a symmetry-off (ISYM=0) NSCF from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
+        Adds an <code>08_lobster</code> step: a symmetry-off (ISYM=0) NSCF from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
       </div>
     </div>
   </div>
@@ -2305,6 +2464,14 @@ const STEP_FILES = [
   { name: 'OSZICAR',  icon: '📊' },
   { name: 'vasp.out', icon: '📄' },
   { name: 'run.sh',   icon: '⚙'  },
+];
+// 08_lobster shows only the lobster-relevant files (INCAR = the ISYM=0 NSCF).
+const LOBSTER_STEP_FILES = [
+  { name: 'INCAR',      icon: '✏'  },
+  { name: 'lobsterin',  icon: '✏'  },
+  { name: 'lobsterout', icon: '📋' },
+  { name: 'lobster.out',icon: '📄' },
+  { name: 'run.sh',     icon: '⚙'  },
 ];
 
 // ── state ──────────────────────────────────────────────────────────────────
@@ -2439,11 +2606,11 @@ async function populateProfileList(){
       opt.value=p.id; opt.textContent=p.name;
       sel.appendChild(opt);
     });
-    // Auto-select based on saved profile_mode
-    if(CFG.profile_mode==='slurm'){
-      const slurmOpt=[...sel.options].find(o=>o.value==='slurm');
-      if(slurmOpt){ slurmOpt.selected=true; onProfileChange(); }
-    }
+    // Default to 'workstation' (local) unless the saved mode is slurm.
+    const want = (CFG.profile_mode==='slurm') ? 'slurm' : 'workstation';
+    const opt=[...sel.options].find(o=>o.value===want);
+    if(opt) opt.selected=true; else sel.selectedIndex=0;
+    onProfileChange();
   }catch{}
 }
 
@@ -2522,7 +2689,9 @@ async function loadProjectSettings(){
 
     // Basic fields
     if(poscar) s('poscar', poscar);
-    s('project_name', settings.project_name||'');
+    // Use the FOLDER name as the project name so regenerating updates this same
+    // folder instead of forking a new one from a differing stored name.
+    s('project_name', slug);
     s('potcar_dir',   settings.potcar_dir);
     s('functional',   settings.functional);
     s('spin_mode',    settings.spin_mode);
@@ -2593,6 +2762,8 @@ async function loadProjectSettings(){
 
     // DFPT params
     s('dfpt_ediff', settings.dfpt_ediff);
+    s('lobster_sigma', settings.lobster_sigma);
+    s('lobster_isym', settings.lobster_isym);
 
     // Phonons params
     s('phonons_dim',  settings.phonons_dim);
@@ -2826,6 +2997,7 @@ async function saveProjectSettings(){
     bands:  chk('t_bands'), dos:  chk('t_dos'),
     dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
     wannier:chk('t_wannier'), lobster:chk('t_lobster'),
+    lobster_sigma: v('lobster_sigma'), lobster_isym: v('lobster_isym'),
     relax_type:   v('relax_type'),
     nsw:          parseInt(v('nsw'))||100,
     ediffg:       parseFloat(v('ediffg'))||-0.01,
@@ -2911,6 +3083,8 @@ async function generate(){
     dfpt_ediff: v('dfpt_ediff')||'1E-8',
     // lobster
     lobster:       chk('t_lobster'),
+    lobster_sigma: v('lobster_sigma'),
+    lobster_isym:  v('lobster_isym'),
     // phonons
     phonons:       chk('t_phonons'),
     phonons_dim:   v('phonons_dim')||'2 2 2',
@@ -3033,8 +3207,9 @@ function stepRow(step,num,label){
       ? `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','band.conf')">🎵 band.conf</button>` +
         `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','mesh.conf')">📊 mesh.conf</button>`
     : '';
+  const stepFiles = step.includes('lobster') ? LOBSTER_STEP_FILES : STEP_FILES;
   const fileBtns  = showFiles
-    ? STEP_FILES.map(f =>
+    ? stepFiles.map(f =>
         `<button class="btn btn-ghost btn-sm" onclick="openFileModal('${step}','${f.name}')">${f.icon} ${f.name}</button>`
       ).join('') + extraFiles
     : '';
@@ -3250,7 +3425,7 @@ async function buildResults(){
   h+=`<div class="card">
     <div class="card-title">Density of States</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-      <button class="btn btn-ghost btn-sm" onclick="runSumo('dos')">▶ Run sumo-dosplot</button>
+      <button class="btn btn-ghost btn-sm" onclick="runSumo('dos')">↻ Re-plot DOS</button>
       <a href="/api/plot_pdf/${PROJECT}/dos_total" class="btn btn-ghost btn-sm" download title="Download total DOS PDF">⬇ Total PDF</a>
       <a href="/api/plot_pdf/${PROJECT}/dos_proj"  class="btn btn-ghost btn-sm" download title="Download projected DOS PDF">⬇ Proj PDF</a>
     </div>
@@ -3282,22 +3457,22 @@ async function buildResults(){
       <a href="/api/plot_pdf/${PROJECT}/cobi" class="btn btn-ghost btn-sm" download title="Download COBI PDF">⬇ COBI PDF</a>
       <a href="/api/plot_pdf/${PROJECT}/coop" class="btn btn-ghost btn-sm" download title="Download COOP PDF">⬇ COOP PDF</a>
     </div>
-    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-      <div class="plot-card" style="flex:1;min-width:200px;max-width:320px;">
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start;">
+      <div class="plot-card" style="min-width:0;">
         <h4>−COHP(E)</h4>
-        <img id="img-cohp" src="/api/plot/${PROJECT}/cohp?t=${ts}" style="max-width:100%;cursor:pointer;"
+        <img id="img-cohp" src="/api/plot/${PROJECT}/cohp?t=${ts}" style="width:100%;height:auto;cursor:pointer;"
              onclick="window.open(this.src)"
              onerror="this.parentElement.innerHTML='<h4>−COHP(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
       </div>
-      <div class="plot-card" style="flex:1;min-width:200px;max-width:320px;">
+      <div class="plot-card" style="min-width:0;">
         <h4>COBI(E)</h4>
-        <img id="img-cobi" src="/api/plot/${PROJECT}/cobi?t=${ts}" style="max-width:100%;cursor:pointer;"
+        <img id="img-cobi" src="/api/plot/${PROJECT}/cobi?t=${ts}" style="width:100%;height:auto;cursor:pointer;"
              onclick="window.open(this.src)"
              onerror="this.parentElement.innerHTML='<h4>COBI(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
       </div>
-      <div class="plot-card" style="flex:1;min-width:200px;max-width:320px;">
+      <div class="plot-card" style="min-width:0;">
         <h4>COOP(E)</h4>
-        <img id="img-coop" src="/api/plot/${PROJECT}/coop?t=${ts}" style="max-width:100%;cursor:pointer;"
+        <img id="img-coop" src="/api/plot/${PROJECT}/coop?t=${ts}" style="width:100%;height:auto;cursor:pointer;"
              onclick="window.open(this.src)"
              onerror="this.parentElement.innerHTML='<h4>COOP(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
       </div>

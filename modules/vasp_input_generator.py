@@ -448,6 +448,17 @@ class VASPInputGenerator:
         with open(f"{output_dir}/KPOINTS", 'w') as f:
             f.write(self._generate_kpoints_auto(density='high'))
 
+        # Editable lobsterin (run.sh uses it as-is if present). Energy window is
+        # Fermi-referenced (E_F = 0); edit it or COHPStartEnergy for deep states.
+        sigma = self.instructions.get('lobster_sigma') or '0.10'
+        with open(f"{output_dir}/lobsterin", 'w') as f:
+            f.write("basisSet pbeVaspFit2015\n"
+                    "cohpGenerator from 0.8 to 4\n"
+                    "cobiGenerator from 0.8 to 4\n"
+                    "COHPStartEnergy -20\n"
+                    "COHPEndEnergy 5\n"
+                    f"gaussianSmearingWidth {sigma}\n")
+
         # Pull the converged charge density from the SCF at runtime.
         rel_scf = os.path.relpath(from_scf, output_dir)
         with open(f"{output_dir}/copy_from_scf.sh", 'w') as f:
@@ -1520,12 +1531,15 @@ echo "      Data:  band.yaml  FORCE_SETS"
         ]
         if nbands:
             lines.append(f"NBANDS = {nbands}   # >= number of LOBSTER local basis functions")
+        isym = str(self.instructions.get('lobster_isym') or '0')
+        if isym not in ('0', '-1'):              # LOBSTER requires symmetry off
+            isym = '0'
         lines += [
             "",
             "# Non-self-consistent from SCF CHGCAR; symmetry OFF is REQUIRED by LOBSTER",
             "ICHARG = 11",
             "ISTART = 1",
-            "ISYM = 0",
+            f"ISYM = {isym}",
             "IBRION = -1",
             "NSW = 0",
             f"LMAXMIX = {lmax}",
@@ -1601,19 +1615,94 @@ echo "      Data:  band.yaml  FORCE_SETS"
             f"  0    0    0\n"
         )
     
+    def _spglib_kpath(self):
+        """Spglib/Setyawan-Curtarolo high-symmetry k-path for the POSCAR.
+
+        Uses spglib (via pymatgen's KPathSetyawanCurtarolo) to find the real
+        space group and standard k-path, then transforms every high-symmetry
+        point through Cartesian reciprocal space into THIS POSCAR's reciprocal
+        basis — so the path is correct for the actual cell used in the SCF
+        (which the bands NSCF must share via CHGCAR), regardless of orientation.
+
+        Returns (segments, coords, name) where `segments` is a list of label
+        lists (path discontinuities preserved) and `coords` maps label ->
+        fractional coords in the POSCAR reciprocal basis. Returns None on any
+        failure so the caller can fall back to the geometric classifier.
+        """
+        try:
+            import spglib
+            # Make spglib's dataset attribute-accessible (spglib>=2 may return a
+            # plain dict that older pymatgen expects to have .number/.international).
+            if not getattr(spglib, '_vf_ds_patched', False):
+                _orig = spglib.get_symmetry_dataset
+                class _DS(dict):
+                    __getattr__ = dict.get
+                def _patched(*a, **k):
+                    d = _orig(*a, **k)
+                    return _DS(d) if isinstance(d, dict) else d
+                spglib.get_symmetry_dataset = _patched
+                spglib._vf_ds_patched = True
+
+            import warnings
+            from pymatgen.core import Structure
+            from pymatgen.symmetry.kpath import KPathSetyawanCurtarolo
+
+            st = Structure.from_file(self.poscar)
+            with warnings.catch_warnings():
+                # pymatgen warns the cell may not be its standard primitive; we
+                # transform every k-point into THIS cell's basis below, so the
+                # path is correct regardless — silence the (expected) warning.
+                warnings.simplefilter('ignore')
+                kp = KPathSetyawanCurtarolo(st)
+            B_std = kp.prim.lattice.reciprocal_lattice.matrix   # rows = recip vecs
+            B_inv = np.linalg.inv(st.lattice.reciprocal_lattice.matrix)
+
+            def clean(lbl):
+                return (lbl.replace('\\Gamma', 'G').replace('\\', '')
+                           .replace('_', '').replace('{', '').replace('}', ''))
+
+            coords = {}
+            for lbl, fr in kp.kpath['kpoints'].items():
+                cart = np.array(fr, dtype=float) @ B_std
+                coords[clean(lbl)] = cart @ B_inv
+            segments = [[clean(l) for l in seg] for seg in kp.kpath['path']]
+            if not segments or not coords:
+                return None
+            name = getattr(kp, 'name', None) or 'spglib'
+            return segments, coords, name
+        except Exception:
+            return None
+
     def _generate_kpoints_linemode(self, kpath=None, npoints: int = 40) -> str:
         """Generate KPOINTS file for band structure.
 
-        If kpath is None, auto-detects the Bravais lattice type from POSCAR
-        and uses the standard high-symmetry path from _KPATH_LIBRARY.
+        If kpath is None, derives the high-symmetry path from spglib
+        (Setyawan-Curtarolo) for the POSCAR, falling back to a geometric
+        Bravais-lattice classifier if spglib/pymatgen are unavailable.
         If kpath is a list of labels, uses those with the generic coord table
         (backward-compatible behaviour).
         """
         npoints = self.instructions.get('nkpts_bands') or npoints
         is_2d   = self.instructions.get('is_2d', False)
 
+        # ── auto-detect via spglib (3-D only; slabs keep the in-plane path) ──
+        if kpath is None and not is_2d:
+            sk = self._spglib_kpath()
+            if sk is not None:
+                segments, kcoords, name = sk
+                out = [f"Line-mode KPOINTS  [spglib {name} — auto-detected]\n",
+                       f"{npoints}\n", "Line-mode\n", "rec\n"]
+                for seg in segments:
+                    for i in range(len(seg) - 1):
+                        for lbl in (seg[i], seg[i + 1]):
+                            c = kcoords.get(lbl, [0.0, 0.0, 0.0])
+                            out.append(f"  {c[0]:8.4f} {c[1]:8.4f} {c[2]:8.4f}  ! {lbl}\n")
+                        out.append("\n")
+                return ''.join(out)
+            # else fall through to the geometric classifier below
+
         if kpath is None:
-            # ── auto-detect ──────────────────────────────────────────────
+            # ── auto-detect (geometric fallback / 2-D) ───────────────────
             bravais = self._classify_bravais()
             entry   = _KPATH_LIBRARY.get(bravais, _KPATH_LIBRARY['oP'])
             kpath   = entry.get('path_2d', entry['path']) if is_2d else entry['path']
@@ -1735,6 +1824,7 @@ fi
         """
         launch_cmd = self._get_mpi_cmd(vasp_exec)
         lobster_bin = self._get_lobster_exec()
+        sigma = self.instructions.get('lobster_sigma') or '0.05'
         preamble = self._run_sh_preamble('vasp_lobster')
         template = r'''#!/bin/bash
 @PREAMBLE@# run.sh for lobster (symmetry-off NSCF + LOBSTER)
@@ -1758,20 +1848,23 @@ fi
 echo "Starting LOBSTER NSCF (@VEXEC@) at $(date)"
 @LAUNCH@ > vasp.out 2>&1
 
-# 2) Build lobsterin from the DOSCAR energy window (Fermi-referenced, E_F = 0)
+# 2) lobsterin: use the editable file written by vasp-agent if present; else
+#    build one from the DOSCAR energy window (Fermi-referenced, E_F = 0).
 LOBSTER_BIN="${LOBSTER_BIN:-@LOBSTER@}"
-if [ ! -f DOSCAR ]; then echo "ERROR: no DOSCAR (NSCF failed?)"; exit 1; fi
-read emax emin nedos efermi _ < <(sed -n '6p' DOSCAR)
-starteng=$(awk -v a="$emin" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
-endeng=$(awk   -v a="$emax" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
-cat > lobsterin <<LOB
+if [ ! -f lobsterin ]; then
+    if [ ! -f DOSCAR ]; then echo "ERROR: no DOSCAR (NSCF failed?)"; exit 1; fi
+    read emax emin nedos efermi _ < <(sed -n '6p' DOSCAR)
+    starteng=$(awk -v a="$emin" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
+    endeng=$(awk   -v a="$emax" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
+    cat > lobsterin <<LOB
 basisSet pbeVaspFit2015
 cohpGenerator from 0.8 to 4
 cobiGenerator from 0.8 to 4
 COHPStartEnergy $starteng
 COHPEndEnergy $endeng
-gaussianSmearingWidth 0.05
+gaussianSmearingWidth @SIGMA@
 LOB
+fi
 
 # 3) Run LOBSTER
 echo "Running LOBSTER ($LOBSTER_BIN) at $(date)"
@@ -1782,4 +1875,5 @@ echo "  Done: COHPCAR/COBICAR/COOPCAR + ICO*LIST.lobster in $HERE"
         return (template.replace('@PREAMBLE@', preamble)
                         .replace('@VEXEC@', vasp_exec)
                         .replace('@LAUNCH@', launch_cmd)
-                        .replace('@LOBSTER@', lobster_bin))
+                        .replace('@LOBSTER@', lobster_bin)
+                        .replace('@SIGMA@', str(sigma)))

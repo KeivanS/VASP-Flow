@@ -34,6 +34,12 @@ class InstructionParser:
             'dfpt':           self._extract_dfpt(content),
             'phonons':        self._extract_phonons(content),
             'dos_projections': self._extract_dos_projections(content),
+            # LOBSTER Gaussian smearing width (eV) for lobsterin; default applied later
+            'lobster_sigma':  self._extract_str_key(content,
+                              r'LOBSTER_SIGMA\s*[:,=]\s*([\d.]+)', default=None),
+            # LOBSTER NSCF symmetry (must be 0 or -1); default applied later
+            'lobster_isym':   self._extract_str_key(content,
+                              r'LOBSTER_ISYM\s*[:,=]\s*(-?\d+)', default=None),
             # MPI / parallelization (global)
             'mpi_np':         self._extract_int_key(content, r'MPI\s*[:,=]?\s*(\d+)', default=1),
             'kpar':           self._extract_int_key(content, r'(?<!_)KPAR\s*[:,=]\s*(\d+)', default=None),

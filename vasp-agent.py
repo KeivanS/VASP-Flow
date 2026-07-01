@@ -198,7 +198,7 @@ class VASPWorkflowAgent:
             self.generator.generate_lobster_input(d, scf_d)
             link_potcar(d, potcar_path)
             calc_dirs['lobster'] = d
-            print(f"  08_lobster/  INCAR  KPOINTS  POTCAR  copy_from_scf.sh  run.sh")
+            print(f"  08_lobster/  INCAR  KPOINTS  POTCAR  copy_from_scf.sh  lobsterin  run.sh")
 
         # ── convergence tests ─────────────────────────────────────────────
         conv = inst.get('convergence', {})
