@@ -106,7 +106,8 @@
 │ band structure             03_bands  line-mode KPOINTS                        │
 │ DOS                        04_dos    dense k-mesh, LORBIT=11                  │
 │ Wannier90 / wannierization 05_wannier                                         │
-│ DFPT / Born charges        06_dfpt   IBRION=8, LEPSILON=.TRUE.               │
+│ DFPT / Born charges        06_dfpt   IBRION=8+LEPSILON (LCALCEPS finite-     │
+│                                      field if SOC / HSE06 / R2SCAN)          │
 │ phonons / lattice dynamics 07_phonons phonopy finite-displacement             │
 │ lobster / COHP / COBI / COOP  08_lobster  ISYM=0 NSCF + LOBSTER               │
 │                                                                               │
@@ -180,14 +181,15 @@
 │                                                                               │
 │ Per-task overrides:                                                           │
 │   SCF_KPAR: 4        BANDS_KPAR: 1       DOS_KPAR: 8                         │
-│   RELAX_KPAR: 2      DFPT_KPAR: 1        PHONONS_KPAR: 1                     │
+│   RELAX_KPAR: 2      PHONONS_KPAR: 1                                          │
 │   SCF_NCORE: 8       BANDS_NCORE: 16     DOS_NCORE: 8                        │
-│   RELAX_NCORE: 8     DFPT_NCORE: 16      PHONONS_NCORE: 8                    │
+│   RELAX_NCORE: 8     PHONONS_NCORE: 8                                         │
 │                                                                               │
 │ Auto-defaults when not specified (N = total MPI tasks):                      │
 │   SCF / DOS / relax  →  KPAR = floor(√N),  NCORE = N / KPAR                 │
 │   bands              →  KPAR = 1,           NCORE = N                        │
-│   DFPT               →  KPAR = 1,           NCORE = N  (KPAR=1 required)    │
+│   DFPT               →  KPAR = 1, NCORE = 1  (forced: linear response/PEAD  │
+│                          supports neither; overrides are ignored)            │
 │   phonons            →  KPAR = 1,           NCORE = floor(√N)               │
 │                                                                               │
 │ Rule: KPAR × NCORE must divide N evenly. Agent enforces this automatically.  │

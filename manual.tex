@@ -119,7 +119,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v1.6 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v1.7 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -326,7 +326,8 @@ Band structure & \texttt{03\_bands} &
 DOS & \texttt{04\_dos} &
   Dense k-mesh; orbital projections via sumo. \\
 DFPT & \texttt{06\_dfpt} &
-  Born charges + dielectric (IBRION=8). \\
+  Born charges, dielectric + piezoelectric tensors;
+  Section~\ref{sec:dfpt}. \\
 Phonons & \texttt{07\_phonons} &
   Phonopy finite-displacement; DFPT needed for NAC. \\
 Wannier90 & \texttt{05\_wannier} &
@@ -570,7 +571,8 @@ Keyword & Meaning \\ \midrule
 \texttt{KPAR:} & Global k-point parallelisation. \\
 \texttt{NCORE:} & Global cores-per-orbital. \\
 \texttt{SCF\_KPAR:} \textit{etc.} &
-  Per-step KPAR: also BANDS\_, DOS\_, RELAX\_, DFPT\_, PHONONS\_. \\
+  Per-step KPAR: also BANDS\_, DOS\_, RELAX\_, PHONONS\_
+  (DFPT is forced to KPAR${}={}$NCORE${}={}$1). \\
 \texttt{SCF\_NCORE:} \textit{etc.} & Per-step NCORE; same prefixes. \\
 \texttt{NODES:} & Compute nodes (SLURM). \\
 \texttt{NTASKS\_PER\_NODE:} & MPI tasks per node (SLURM). \\
@@ -889,7 +891,7 @@ When KPAR/NCORE are not specified the agent computes from total tasks $N$:
 Step & KPAR & NCORE & Notes \\ \midrule
 SCF / DOS / relax & $\lfloor\sqrt{N}\rfloor$ & $N/\text{KPAR}$ & \\
 bands & 1 & $N$ & Required for line-mode \\
-DFPT & 1 & $N$ & Required for IBRION=8 \\
+DFPT & 1 & 1 & Forced: linear response / PEAD supports neither \\
 phonons & 1 & $\lfloor\sqrt{N}\rfloor$ & \\
 \bottomrule
 \end{tabularx}
@@ -907,7 +909,7 @@ MPI: 128        KPAR: 4        NCORE: 8
 # Per-step (take priority over globals)
 SCF_KPAR: 4     BANDS_KPAR: 1     DOS_KPAR: 8
 SCF_NCORE: 8    BANDS_NCORE: 16   DOS_NCORE: 8
-RELAX_KPAR: 2   DFPT_KPAR: 1      PHONONS_KPAR: 1
+RELAX_KPAR: 2   PHONONS_KPAR: 1   # DFPT is always KPAR=1, NCORE=1
 \end{lstlisting}
 
 % ============================================================
@@ -954,6 +956,57 @@ WANNIER_EWIN: -5.0 to 15.0
 The agent generates \texttt{05\_wannier/wannier90.win} with the NSCF
 k-mesh and projection block.  After the NSCF run, execute
 \texttt{wannier90.x} from the \texttt{05\_wannier/} directory.
+
+% ============================================================
+\section{Born Charges, Dielectric \& Piezoelectric Tensors (DFPT)}
+\label{sec:dfpt}
+% ============================================================
+
+The \texttt{DFPT} task creates \texttt{06\_dfpt}, which computes Born
+effective charges $Z^{*}$, the macroscopic dielectric tensor, and the
+piezoelectric stress tensor from the converged SCF charge density.
+
+Two routes are generated automatically depending on the method:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Method & Route \\ \midrule
+PBE, PBEsol, LDA, AM05 (no SOC) &
+  Linear response: \texttt{IBRION=8}, \texttt{LEPSILON=.TRUE.} \\
+SOC, HSE06, or R2SCAN &
+  Finite field (PEAD): \texttt{IBRION=6}, \texttt{LCALCEPS=.TRUE.}
+  --- VASP's DFPT is not implemented for noncollinear magnetism,
+  hybrids, or meta-GGAs.  Requires an insulating system. \\
+\bottomrule
+\end{tabularx}
+
+\begin{notebox}
+Both routes support neither k-point nor band parallelisation:
+\textbf{KPAR and NCORE are forced to 1} in the generated INCAR
+(overriding any global or per-step setting).  The full MPI task count
+is still used for plane-wave parallelisation.
+\end{notebox}
+
+\texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
+writes:
+
+\begin{itemize}
+  \item \texttt{BORN} --- phonopy NAC format: electronic
+        $\varepsilon_{\infty}$ + $Z^{*}$ per atom.
+  \item \texttt{born\_charges.txt} --- human-readable summary shown in
+        the GUI Results tab: electronic (ion-clamped)
+        $\varepsilon_{\infty}$, ionic contribution, total static
+        $\varepsilon_{0}=\varepsilon_{\infty}+\varepsilon_{\mathrm{ion}}$;
+        $Z^{*}$ tensors labelled by element; an acoustic-sum-rule check
+        ($\sum_{\mathrm{ions}} Z^{*}$ should vanish --- a large residual
+        indicates an under-converged k-mesh or EDIFF); and the
+        piezoelectric stress tensors $e$ (C/m$^2$, clamped-ion, ionic,
+        and relaxed-ion total; meaningful only for non-centrosymmetric
+        crystals).
+\end{itemize}
+
+\texttt{DFPT\_EDIFF} in \texttt{instructions.txt} tightens the
+electronic convergence (default \texttt{1E-8}).
 
 % ============================================================
 \section{Phonons (phonopy)}
@@ -1238,6 +1291,14 @@ Band plot empty or not shown &
     Full GPL-3.0 text in \texttt{LICENSE} (GitHub now detects the
     license correctly).
     Manual and quick-reference sheets brought up to date.
+  \item[\textcolor{mainblue}{v1.7} (2026-07-08)]
+    DFPT step overhaul: KPAR/NCORE forced to 1 (linear response and
+    PEAD support neither); automatic finite-field route
+    (\texttt{LCALCEPS}, IBRION=6) when SOC, HSE06 or R2SCAN is
+    requested; \texttt{extract\_born.py} now reports
+    $\varepsilon_{\infty}$, the ionic contribution, total static
+    $\varepsilon_{0}$, an acoustic-sum-rule check, element-labelled
+    $Z^{*}$, and clamped-/relaxed-ion piezoelectric tensors.
 \end{description}
 
 % ============================================================

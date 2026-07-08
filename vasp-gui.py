@@ -2374,7 +2374,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
           <input id="dfpt_ediff" value="1E-8" placeholder="1E-8"></div>
       </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Runs VASP DFPT (IBRION=8, LEPSILON=.TRUE.) to compute Born effective charges and the macroscopic static dielectric tensor. Results are written to OUTCAR and extracted to a <code>BORN</code> file for phonon LO-TO splitting.
+        Runs VASP linear response (IBRION=8, LEPSILON=.TRUE.) to compute Born effective charges, the dielectric tensor (electronic &epsilon;<sub>&infin;</sub>, ionic contribution, and total static &epsilon;<sub>0</sub>) and piezoelectric tensors. With SOC, HSE06 or R2SCAN — which VASP's DFPT does not support — the finite-field route (LCALCEPS=.TRUE., IBRION=6) is generated instead. KPAR/NCORE are forced to 1 (required by both routes). Results are extracted to <code>born_charges.txt</code> and a <code>BORN</code> file for phonon LO-TO splitting.
       </div>
     </div>
   </div>
