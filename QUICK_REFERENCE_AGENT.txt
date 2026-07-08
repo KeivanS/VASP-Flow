@@ -244,7 +244,8 @@
 │                                                                               │
 │ Adds 08_lobster: a symmetry-off (ISYM=0) NSCF reading 02_scf/CHGCAR, then     │
 │ runs the lobster binary. ISYM=0 is REQUIRED -- a symmetrized k-mesh gives     │
-│ unusable COHP/ICOHP (wrong sign, |Δ| > 100%). NBANDS is auto-set to >= the    │
+│ unusable COHP/ICOHP (wrong sign, |Δ| > 100%). With SOC on, ISYM=-1 is set     │
+│ instead (spin-orbit breaks time reversal). NBANDS is auto-set to >= the       │
 │ LOBSTER basis-function count; LMAXMIX from the elements (6 f / 4 d / 2 sp).   │
 │ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX).                            │
 │                                                                               │

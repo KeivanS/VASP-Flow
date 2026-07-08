@@ -989,6 +989,9 @@ binary.
   \item \textbf{ISYM=0 is required} --- a symmetrised k-mesh gives
         unusable COHP/ICOHP values (wrong sign, errors above 100\%).
         The generated INCAR sets it automatically.
+        With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
+        coupling breaks time-reversal symmetry, which ISYM=0 would still
+        assume.
   \item \texttt{NBANDS} is auto-set to at least the LOBSTER
         basis-function count; \texttt{LMAXMIX} is chosen from the
         elements (6 for $f$, 4 for $d$, 2 for $sp$).
@@ -1231,7 +1234,7 @@ Band plot empty or not shown &
     classifier kept as fallback.
     New \texttt{08\_lobster} step: LOBSTER COHP/COBI/COOP bonding
     analysis with GUI plots and the \texttt{lobster\_postprocess.py}
-    aggregator.
+    aggregator; the NSCF uses ISYM=0, or ISYM=$-$1 when SOC is on.
     Full GPL-3.0 text in \texttt{LICENSE} (GitHub now detects the
     license correctly).
     Manual and quick-reference sheets brought up to date.

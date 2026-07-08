@@ -2354,11 +2354,11 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <div class="g3">
         <div class="f"><label>Gaussian smearing (eV)</label>
           <input id="lobster_sigma" placeholder="0.10"></div>
-        <div class="f"><label>ISYM (NSCF, 0 or -1 only)</label>
+        <div class="f"><label>ISYM (NSCF, 0 or -1 only; forced to -1 with SOC)</label>
           <input id="lobster_isym" placeholder="0"></div>
       </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Adds an <code>08_lobster</code> step: a symmetry-off (ISYM=0) NSCF from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
+        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
       </div>
     </div>
   </div>

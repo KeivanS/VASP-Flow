@@ -1534,6 +1534,8 @@ echo "      Data:  band.yaml  FORCE_SETS"
         isym = str(self.instructions.get('lobster_isym') or '0')
         if isym not in ('0', '-1'):              # LOBSTER requires symmetry off
             isym = '0'
+        if self.instructions.get('soc', False):
+            isym = '-1'                          # SOC breaks time reversal: ISYM=0 is not enough
         lines += [
             "",
             "# Non-self-consistent from SCF CHGCAR; symmetry OFF is REQUIRED by LOBSTER",
