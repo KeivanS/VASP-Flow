@@ -68,7 +68,8 @@
 │ ☑ SCF                    Self-consistent charge density                       │
 │ ☑ Band structure         Electronic band dispersion — needs SCF first        │
 │ ☑ DOS                    Density of states — needs SCF first                 │
-│ ☐ DFPT                   Born charges + dielectric tensor (IBRION=8)         │
+│ ☐ DFPT                   Born charges, dielectric ε∞/ε0 + piezo tensors      │
+│                          (auto finite-field route if SOC/HSE06/R2SCAN)       │
 │ ☐ Phonons                Phonopy finite-displacement (needs DFPT for NAC)    │
 │ ☐ Wannier90              NSCF interface for Wannierization                    │
 │ ☐ LOBSTER                COHP/COBI/COOP bonding (08_lobster; needs SCF)       │
@@ -140,6 +141,10 @@
 │   ▶ Run sumo-dosplot   regenerate                                             │
 │                                                                               │
 │ OUTCAR analysis  Energy, Fermi level, magnetic moment, forces                 │
+│                                                                               │
+│ Born charges     From 06_dfpt (born_charges.txt): Z* labelled by element,    │
+│                  eps_inf / ionic / total eps_0, acoustic-sum-rule check,     │
+│                  piezoelectric tensors (clamped- and relaxed-ion)            │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ SLURM CLUSTER SETUP ──────────────────────────────────────────────────────────┐

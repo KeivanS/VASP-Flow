@@ -1008,6 +1008,25 @@ writes:
 \texttt{DFPT\_EDIFF} in \texttt{instructions.txt} tightens the
 electronic convergence (default \texttt{1E-8}).
 
+\subsection{Example}
+
+\begin{lstlisting}
+Project: GaAs
+Methods: PBE functional
+Tasks: relaxation, SCF, DFPT Born charges and dielectric
+DFPT_EDIFF: 1E-8
+MPI: 16
+\end{lstlisting}
+
+In the GUI, tick \textbf{Born Charges \& Dielectric Constant (DFPT)} on
+the Setup tab (the DFPT EDIFF field is optional); after running
+\texttt{06\_dfpt} from the Workflow tab, the full summary appears in
+the \textbf{Born charges} panel of the Results tab.  With SOC, HSE06
+or R2SCAN selected under Methods, the finite-field INCAR is generated
+automatically --- no extra input is needed.  For LO-TO splitting in
+phonon spectra, combine with the phonon task as in the GaAs worked
+example (Section~\ref{sec:example-gaas-nac}).
+
 % ============================================================
 \section{Phonons (phonopy)}
 % ============================================================
@@ -1117,6 +1136,7 @@ detects cF and uses G-X-W-K-G-L-U-W.  Band and DOS plots show both spin
 channels.
 
 \subsection{GaAs: phonons with NAC}
+\label{sec:example-gaas-nac}
 
 \begin{lstlisting}
 Project: GaAs phonons

@@ -229,6 +229,29 @@
 │ WANNIER_EWIN: -5.0 to 15.0  energy window (eV relative to E_F)              │
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ DFPT  (Born charges, dielectric & piezoelectric tensors) ────────────────────┐
+│ Tasks: DFPT Born charges and dielectric                                       │
+│                                                                               │
+│ DFPT_EDIFF: 1E-8            electronic convergence (default 1E-8)             │
+│                                                                               │
+│ Route is chosen automatically:                                                │
+│   PBE / PBEsol / LDA, no SOC → IBRION=8, LEPSILON=.TRUE.  (linear response)  │
+│   SOC / HSE06 / R2SCAN       → IBRION=6, LCALCEPS=.TRUE.  (finite field;     │
+│                                needs an insulating system, recent VASP 6)    │
+│ KPAR and NCORE are forced to 1 — required by both routes.                     │
+│                                                                               │
+│ Example instructions.txt:                                                     │
+│     Project: GaAs                                                             │
+│     Methods: PBE functional                                                   │
+│     Tasks: relaxation, SCF, DFPT Born charges and dielectric                  │
+│     MPI: 16                                                                   │
+│                                                                               │
+│ Outputs (06_dfpt):                                                            │
+│   born_charges.txt   eps_inf, ionic contrib, total eps_0; Z* per element;    │
+│                      acoustic-sum-rule check; piezoelectric e (C/m^2)        │
+│   BORN               phonopy NAC file for LO-TO splitting                     │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ PHONONS (phonopy) ────────────────────────────────────────────────────────────┐
 │ Tasks: phonons lattice dynamics                                               │
 │                                                                               │
