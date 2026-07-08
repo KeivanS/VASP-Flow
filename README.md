@@ -213,3 +213,18 @@ bash run.sh        # workstation / interactive node
 | *sumo-bandplot: command not found* | sumo not installed | `pip install sumo` |
 | GUI unreachable from laptop | No SSH tunnel | `ssh -L 5001:localhost:5001 user@cluster` |
 | Project not visible in dropdown | Folder missing POSCAR or settings.json | Check that the folder is in the working directory |
+
+---
+
+## License
+
+Copyright (C) 2024-2025 VASP Workflow GUI Contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the [LICENSE](LICENSE) file for the full text.
+
+Note: VASP itself is proprietary software licensed separately by the VASP
+Software GmbH; this project only generates inputs for and post-processes
+outputs from VASP.
