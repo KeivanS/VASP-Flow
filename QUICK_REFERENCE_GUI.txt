@@ -80,7 +80,8 @@
 │ k-path         Leave blank → auto-detected from POSCAR (recommended)         │
 │                Or enter manually, e.g.  G-M-K-G  or  G-X-W-K-G-L            │
 │                                                                               │
-│ Auto-detected defaults by crystal system:                                     │
+│ Auto-detection uses spglib (Setyawan–Curtarolo path for the real space       │
+│ group). Fallback defaults by crystal system (no spglib, or 2-D slabs):       │
 │   FCC primitive  (angles ≈ 60°)     G-X-W-K-G-L-U-W                         │
 │   BCC primitive  (angles ≈ 109.47°) G-H-N-G-P-H                             │
 │   Cubic          (a=b=c, 90°)       G-X-M-G-R-X                              │

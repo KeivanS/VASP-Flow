@@ -115,10 +115,12 @@
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ K-PATH FOR BAND STRUCTURE ────────────────────────────────────────────────────┐
-│ Omit "along …" → auto-detected from POSCAR lattice vectors:                  │
+│ Omit "along …" → auto-detected from POSCAR:                                  │
 │   Tasks: band structure                                                       │
 │                                                                               │
-│ Auto-detected defaults:                                                       │
+│ Detection uses spglib (Setyawan–Curtarolo path for the real space group,     │
+│ transformed into this POSCAR's reciprocal basis). If spglib/pymatgen is      │
+│ missing, or for 2-D slabs, a geometric classifier picks these defaults:      │
 │   cF  FCC primitive  (angles ≈ 60°)        G-X-W-K-G-L-U-W                  │
 │   cI  BCC primitive  (angles ≈ 109.47°)    G-H-N-G-P-H                      │
 │   cP  Cubic (right angles, a=b=c)          G-X-M-G-R-X                       │
