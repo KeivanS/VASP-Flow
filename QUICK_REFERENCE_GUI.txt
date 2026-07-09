@@ -140,6 +140,10 @@
 │   Spin-polarized: sumo automatically mirrors spin-down                        │
 │   ▶ Run sumo-dosplot   regenerate                                             │
 │                                                                               │
+│ ELF bonds       ELF along non-equivalent nearest-neighbour bonds, from        │
+│                 02_scf/ELFCAR (LELF=.TRUE.); formula-named PNG/PDF.           │
+│                 Absent for SOC / non-collinear (all-zero ELFCAR).             │
+│                                                                               │
 │ OUTCAR analysis  Energy, Fermi level, magnetic moment, forces                 │
 │                                                                               │
 │ Born charges     From 06_dfpt (born_charges.txt): Z* labelled by element,    │

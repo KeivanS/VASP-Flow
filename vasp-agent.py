@@ -1058,7 +1058,7 @@ class VASPWorkflowAgent:
                 f.write('if [ -f "$HERE/02_scf/ELFCAR" ]; then\n')
                 f.write('    echo "=== ELF along nearest-neighbour bonds ==="\n')
                 f.write('    ( cd "$HERE/analysis" && python3 plot_elf_bonds.py '
-                        '"$HERE/02_scf/ELFCAR" --out "$(basename $HERE)" ) 2>&1\n')
+                        '"$HERE/02_scf/ELFCAR" ) 2>&1\n')
                 f.write('    echo "  Saved: analysis/*_elf_bonds.*"\n')
                 f.write('fi\n\n')
 

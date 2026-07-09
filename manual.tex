@@ -872,10 +872,22 @@ to the other:
 It parses the \texttt{ELFCAR} grid directly (only numpy + matplotlib), groups
 bonds by element pair and length (rounded to 0.01~\AA{}) to pick the
 non-equivalent ones, and interpolates ELF along each bond with periodic
-boundary conditions.  Output is \texttt{PREFIX\_elf\_bonds.png/pdf} showing ELF
-vs.\ distance along the bond, with the ELF~$=0.5$ homogeneous-electron-gas
-reference marked.  \texttt{analyze.sh} runs it automatically when
-\texttt{02\_scf/ELFCAR} is present.
+boundary conditions.  Output is \texttt{FORMULA\_elf\_bonds.png/pdf} (the prefix
+defaults to the reduced formula, e.g.\ \texttt{MoSe2\_elf\_bonds.pdf}; override
+with \texttt{--out}) showing ELF vs.\ distance along the bond, with the
+ELF~$=0.5$ homogeneous-electron-gas reference marked.  \texttt{analyze.sh}
+runs it automatically when \texttt{02\_scf/ELFCAR} is present, and the GUI
+Results tab shows the same plot whenever the SCF wrote an \texttt{ELFCAR}.
+
+\begin{tipbox}
+Reading the profile: ELF is high (near~1) where electrons are paired and
+localized.  A covalent bond therefore shows an ELF \emph{maximum} in the
+bonding region \emph{between} the atoms (e.g.\ Si--Si $\approx 0.95$ at
+mid-bond), not at the nuclei.  Because VASP builds the \texttt{ELFCAR} from the
+pseudo (valence) density, the value \emph{at} an atom centre is a PAW artifact
+--- often low, even $\approx 0$ for heavy atoms --- so read the bonding region,
+not the endpoints.
+\end{tipbox}
 
 \begin{notebox}
 VASP does \emph{not} compute ELF for non-collinear / spin-orbit runs
@@ -1353,7 +1365,9 @@ Band plot empty or not shown &
   \item[\textcolor{mainblue}{v1.8} (2026-07-09)]
     ELF bond profiles: \texttt{elf\_bonds.py} plots the electron localization
     function along non-equivalent nearest-neighbour bonds (atom centre to atom
-    centre), wired into \texttt{analyze.sh} for both CLI agents.  Detects the
+    centre), wired into \texttt{analyze.sh} for both CLI agents and shown in the
+    GUI Results tab whenever \texttt{02\_scf/ELFCAR} exists.  Output is named
+    after the reduced formula (\texttt{MoSe2\_elf\_bonds.pdf}).  Detects the
     all-zero \texttt{ELFCAR} that VASP writes for non-collinear / spin-orbit
     runs and reports it instead of emitting a blank plot.
 \end{description}

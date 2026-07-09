@@ -160,14 +160,14 @@
 
 ┌─ ELF BOND PROFILES ───────────────────────────────────────────────────────────┐
 │ Plot ELF along non-equivalent nearest-neighbour bonds from an ELFCAR:         │
-│   ./elf_bonds.py [ELFCAR] [--out NAME] [--nn-scale 1.2] [--npoints 200]       │
+│   ./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]     │
 │                                                                               │
 │ Reads ELFCAR directly (numpy + matplotlib only); groups bonds by              │
 │ element pair + length; samples ELF centre-to-centre with PBC.                 │
-│ Output: analysis/NAME_elf_bonds.png/pdf  (ELF vs bond distance,               │
-│ 0.5 homogeneous-electron-gas reference line).                                 │
+│ Output: PREFIX_elf_bonds.png/pdf  (PREFIX defaults to reduced formula,        │
+│ e.g. MoSe2_elf_bonds.pdf).  ELF=0.5 electron-gas reference marked.            │
 │                                                                               │
-│ analyze.sh runs it automatically when 02_scf/ELFCAR exists (LELF=T).          │
+│ analyze.sh runs it when 02_scf/ELFCAR exists; GUI Results shows it too.       │
 │ Note: VASP writes an all-zero ELFCAR for SOC / non-collinear runs;            │
 │   the tool reports this instead of a blank plot — drop SOC for ELF.           │
 └───────────────────────────────────────────────────────────────────────────────┘

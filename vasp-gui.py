@@ -1123,6 +1123,29 @@ def _band_plot_opts(slug):
     return ymin, ymax, labels
 
 
+def _elf_bond_plot(pd_, ana):
+    """Run elf_bonds.py on 02_scf/ELFCAR into analysis/. Returns the output PNG
+    path (glob *_elf_bonds.png) or None — None also covers a missing or all-zero
+    ELFCAR (VASP writes zeros for SOC / non-collinear runs)."""
+    import glob
+    elfcar = os.path.join(pd_, '02_scf', 'ELFCAR')
+    if not os.path.isfile(elfcar):
+        return None
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'elf_bonds.py')
+    if not os.path.exists(script):
+        script = os.path.join(ana, 'plot_elf_bonds.py')   # copied into project
+    if not os.path.exists(script):
+        return None
+    os.makedirs(ana, exist_ok=True)
+    for f in (glob.glob(os.path.join(ana, '*_elf_bonds.png')) +
+              glob.glob(os.path.join(ana, '*_elf_bonds.pdf'))):
+        try: os.remove(f)
+        except OSError: pass
+    subprocess.run([sys.executable, script, elfcar], capture_output=True, cwd=ana)
+    hits = glob.glob(os.path.join(ana, '*_elf_bonds.png'))
+    return hits[0] if hits else None
+
+
 @app.route('/api/plot/<slug>/<ptype>')
 def api_plot(slug, ptype):
     """Serve plot image. Normalise ptype, run sumo if needed, return png."""
@@ -1133,6 +1156,14 @@ def api_plot(slug, ptype):
 
     # Normalise: bare 'dos' → prefer projected
     if ptype == 'dos': ptype = 'dos_proj'
+
+    # ── ELF along nearest-neighbour bonds (from 02_scf/ELFCAR) ───────────────
+    if ptype == 'elf':
+        out = _elf_bond_plot(pd_, ana)
+        if out and os.path.exists(out):
+            return send_file(out, mimetype='image/png')
+        return jsonify(error='ELF not available — run 02_scf with LELF=.TRUE. '
+                             '(not computed for SOC / non-collinear runs)'), 404
 
     # ── LOBSTER COHP / COBI / COOP vs energy (from 08_lobster, else 02_scf) ──
     if ptype in ('cohp', 'cobi', 'coop'):
@@ -1311,6 +1342,14 @@ def api_plot_pdf(slug, ptype):
     pd_  = _pd(slug)
     ana  = os.path.join(pd_, 'analysis')
     base = _slug_base(slug)
+    if ptype == 'elf':
+        import glob
+        _elf_bond_plot(pd_, ana)
+        hits = glob.glob(os.path.join(ana, '*_elf_bonds.pdf'))
+        if hits:
+            return send_file(hits[0], mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(hits[0]))
+        return jsonify(error='ELF not available — run 02_scf with LELF=.TRUE.'), 404
     if ptype in ('cohp', 'cobi', 'coop'):
         os.makedirs(ana, exist_ok=True)
         out = os.path.join(ana, f'{base}_{ptype}.pdf')
@@ -3445,6 +3484,19 @@ async function buildResults(){
              onclick="window.open(this.src)"
              onerror="this.parentElement.innerHTML='<h4>Projected DOS</h4><div class=no-plot>Not available yet</div>'">
       </div>
+    </div>
+  </div>`;
+
+  // ── ELF along nearest-neighbour bonds (from 02_scf/ELFCAR) ─────────────
+  h+=`<div class="card">
+    <div class="card-title">ELF Along Nearest-Neighbour Bonds</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <a href="/api/plot_pdf/${PROJECT}/elf" class="btn btn-ghost btn-sm" download title="Download ELF PDF">⬇ PDF</a>
+    </div>
+    <div class="plot-card">
+      <img id="img-elf" src="/api/plot/${PROJECT}/elf?t=${ts}" style="max-width:100%;max-height:500px;cursor:pointer;"
+           onclick="window.open(this.src)"
+           onerror="this.parentElement.innerHTML='<div class=no-plot>Not available — run 02_scf with LELF=.TRUE. (ELF is not computed for SOC / non-collinear runs)</div>'">
     </div>
   </div>`;
 

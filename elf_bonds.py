@@ -14,12 +14,26 @@ Usage:
     ./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]
 
 If ELFCAR is omitted it looks for ./ELFCAR, then ./02_scf/ELFCAR.
-Output: <PREFIX>_elf_bonds.png and .pdf   (default PREFIX = ELF)
+Output: <PREFIX>_elf_bonds.png and .pdf
+(PREFIX defaults to the reduced chemical formula, e.g. MoSe2_elf_bonds.pdf)
 """
 import os
 import sys
 import argparse
+from math import gcd
+from functools import reduce
 import numpy as np
+
+
+def reduced_formula(elements):
+    """Reduced chemical formula from a per-atom element list, e.g.
+    ['Mo','Se','Se'] -> 'MoSe2'.  Order follows first appearance (POSCAR)."""
+    order = list(dict.fromkeys(elements))
+    counts = [elements.count(e) for e in order]
+    g = reduce(gcd, counts) if counts else 1
+    g = g or 1
+    return ''.join(e + ('' if c // g == 1 else str(c // g))
+                   for e, c in zip(order, counts))
 
 
 # ── ELFCAR parsing ────────────────────────────────────────────────────────────
@@ -189,7 +203,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('elfcar', nargs='?', default=None,
                     help='ELFCAR path (default: ./ELFCAR or ./02_scf/ELFCAR)')
-    ap.add_argument('--out', default='ELF', help='output prefix (default: ELF)')
+    ap.add_argument('--out', default=None,
+                    help='output prefix (default: reduced formula, e.g. MoSe2)')
     ap.add_argument('--nn-scale', type=float, default=1.2,
                     help='neighbour cutoff = nn_scale x nearest distance (1.2)')
     ap.add_argument('--npoints', type=int, default=200,
@@ -218,6 +233,8 @@ def main():
             '       runs ("WARNING: ELF not implemented for non collinear case").\n'
             '       Re-run the SCF without LSORBIT / LNONCOLLINEAR to obtain ELF.\n')
         sys.exit(2)
+
+    prefix = args.out or reduced_formula(elements)
 
     bonds = nn_bonds(lattice, elements, frac, args.nn_scale)
     if not bonds:
@@ -248,7 +265,7 @@ def main():
     fig.tight_layout()
 
     for ext in ('png', 'pdf'):
-        out = f'{args.out}_elf_bonds.{ext}'
+        out = f'{prefix}_elf_bonds.{ext}'
         fig.savefig(out, dpi=150 if ext == 'png' else None)
         print(f'  Saved: {out}')
     plt.close(fig)
