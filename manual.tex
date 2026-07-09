@@ -119,7 +119,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v1.7 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v1.8 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -856,6 +856,37 @@ Separator is either \texttt{-} or \texttt{:}.
 Sumo generates an orbital-resolved PDF in \texttt{analysis/}.
 
 % ============================================================
+\section{ELF Bond Profiles}
+% ============================================================
+
+If an SCF calculation writes an \texttt{ELFCAR} (electron localization
+function, requested with \texttt{LELF = .TRUE.} --- the high-throughput
+driver sets this automatically), the utility \texttt{elf\_bonds.py} plots ELF
+along each non-equivalent nearest-neighbour bond, sampled from one atom centre
+to the other:
+
+\begin{lstlisting}[language=bash]
+./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]
+\end{lstlisting}
+
+It parses the \texttt{ELFCAR} grid directly (only numpy + matplotlib), groups
+bonds by element pair and length (rounded to 0.01~\AA{}) to pick the
+non-equivalent ones, and interpolates ELF along each bond with periodic
+boundary conditions.  Output is \texttt{PREFIX\_elf\_bonds.png/pdf} showing ELF
+vs.\ distance along the bond, with the ELF~$=0.5$ homogeneous-electron-gas
+reference marked.  \texttt{analyze.sh} runs it automatically when
+\texttt{02\_scf/ELFCAR} is present.
+
+\begin{notebox}
+VASP does \emph{not} compute ELF for non-collinear / spin-orbit runs
+(\texttt{LSORBIT}/\texttt{LNONCOLLINEAR}); it prints
+\texttt{"WARNING: ELF not implemented for non collinear case"} and writes an
+all-zero \texttt{ELFCAR}.  \texttt{elf\_bonds.py} detects this and reports it
+rather than producing a blank plot --- re-run the SCF \emph{without} SOC to get
+ELF.
+\end{notebox}
+
+% ============================================================
 \section{Convergence Tests}
 % ============================================================
 
@@ -1319,6 +1350,12 @@ Band plot empty or not shown &
     $\varepsilon_{\infty}$, the ionic contribution, total static
     $\varepsilon_{0}$, an acoustic-sum-rule check, element-labelled
     $Z^{*}$, and clamped-/relaxed-ion piezoelectric tensors.
+  \item[\textcolor{mainblue}{v1.8} (2026-07-09)]
+    ELF bond profiles: \texttt{elf\_bonds.py} plots the electron localization
+    function along non-equivalent nearest-neighbour bonds (atom centre to atom
+    centre), wired into \texttt{analyze.sh} for both CLI agents.  Detects the
+    all-zero \texttt{ELFCAR} that VASP writes for non-collinear / spin-orbit
+    runs and reports it instead of emitting a blank plot.
 \end{description}
 
 % ============================================================

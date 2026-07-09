@@ -1107,6 +1107,18 @@ fi'''
 
     # ── analysis (identical to workstation version) ───────────────────────
 
+    def _gen_elf_bonds_script(self, ana_dir):
+        """Copy the standalone elf_bonds.py utility into analysis/plot_elf_bonds.py.
+        Returns True if the utility was found next to this agent and copied."""
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'elf_bonds.py')
+        if not os.path.exists(src):
+            return False
+        dst = os.path.join(ana_dir, 'plot_elf_bonds.py')
+        with open(src) as fsrc, open(dst, 'w') as fdst:
+            fdst.write(fsrc.read())
+        chmod_x(dst)
+        return True
+
     def _gen_analysis(self, calc_dirs):
         """Generate analyze.sh and analysis/plot_results.py.
         These run locally after the cluster jobs complete."""
@@ -1192,6 +1204,15 @@ fi'''
                 f.write('else\n')
                 f.write('    echo "  sumo not found — copying DOSCAR"\n')
                 f.write('    cp "$HERE/04_dos/DOSCAR" "$HERE/analysis/"\n')
+                f.write('fi\n\n')
+
+            # ── ELF along nearest-neighbour bonds (only if ELFCAR present) ─
+            if has_scf and self._gen_elf_bonds_script(ana):
+                f.write('if [ -f "$HERE/02_scf/ELFCAR" ]; then\n')
+                f.write('    echo "=== ELF along nearest-neighbour bonds ==="\n')
+                f.write('    ( cd "$HERE/analysis" && python3 plot_elf_bonds.py '
+                        '"$HERE/02_scf/ELFCAR" --out "$(basename $HERE)" ) 2>&1\n')
+                f.write('    echo "  Saved: analysis/*_elf_bonds.*"\n')
                 f.write('fi\n\n')
 
             f.write('echo "Done. Results in analysis/"\n')

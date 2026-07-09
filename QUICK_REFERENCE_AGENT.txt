@@ -158,6 +158,20 @@
 │   Spin-polarized: spin-up positive, spin-down mirrored (automatic)           │
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ ELF BOND PROFILES ───────────────────────────────────────────────────────────┐
+│ Plot ELF along non-equivalent nearest-neighbour bonds from an ELFCAR:         │
+│   ./elf_bonds.py [ELFCAR] [--out NAME] [--nn-scale 1.2] [--npoints 200]       │
+│                                                                               │
+│ Reads ELFCAR directly (numpy + matplotlib only); groups bonds by              │
+│ element pair + length; samples ELF centre-to-centre with PBC.                 │
+│ Output: analysis/NAME_elf_bonds.png/pdf  (ELF vs bond distance,               │
+│ 0.5 homogeneous-electron-gas reference line).                                 │
+│                                                                               │
+│ analyze.sh runs it automatically when 02_scf/ELFCAR exists (LELF=T).          │
+│ Note: VASP writes an all-zero ELFCAR for SOC / non-collinear runs;            │
+│   the tool reports this instead of a blank plot — drop SOC for ELF.           │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ CONVERGENCE TESTS ───────────────────────────────────────────────────────────┐
 │ Range format (auto-steps):                                                    │
 │   Convergence: Test k-points from 6x6x1 to 18x18x1    2D material           │
