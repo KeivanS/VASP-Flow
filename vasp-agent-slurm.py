@@ -1126,6 +1126,10 @@ fi'''
         """Copy band_plot.py -> analysis/plot_band_eigenval.py (default band plotter)."""
         return self._copy_util(ana_dir, 'band_plot.py', 'plot_band_eigenval.py')
 
+    def _gen_dos_script(self, ana_dir):
+        """Copy dos_plot.py -> analysis/plot_dos.py (cumulative total + projected DOS)."""
+        return self._copy_util(ana_dir, 'dos_plot.py', 'plot_dos.py')
+
     def _gen_analysis(self, calc_dirs):
         """Generate analyze.sh and analysis/plot_results.py.
         These run locally after the cluster jobs complete."""
@@ -1146,6 +1150,11 @@ fi'''
             el, orb = dp.split(':') if ':' in dp else (dp, 's')
             orb_map[el].append(orb)
         sumo_orb = ', '.join(f"{el} {' '.join(orbs)}" for el, orbs in orb_map.items())
+        if orb_map:
+            import json as _json
+            proj = [{'element': el, 'orbitals': orbs} for el, orbs in orb_map.items()]
+            with open(os.path.join(pd, 'dos_proj.json'), 'w') as f:
+                f.write(_json.dumps(proj))
 
         sh = os.path.join(pd, 'analyze.sh')
         with open(sh, 'w') as f:
@@ -1153,6 +1162,7 @@ fi'''
             f.write(f"# Post-processing for: {self.project_label}\n")
             f.write("# Run this locally after all SLURM jobs complete.\n\n")
             f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+            f.write('BASE="$(basename $HERE)"\n')
             f.write('mkdir -p "$HERE/analysis"\n\n')
 
             if has_relax:
@@ -1187,23 +1197,18 @@ fi'''
                 f.write('echo "  Saved: analysis/*_band.*"\n\n')
 
             if has_dos:
+                self._gen_dos_script(ana)
                 f.write('echo "=== DOS ==="\n')
-                f.write('echo "  Cumulative DOS (by element, from DOSCAR)..."\n')
-                f.write('if [ -f "$HERE/04_dos/plot_cumulative_dos.py" ]; then '
-                        'python3 "$HERE/04_dos/plot_cumulative_dos.py"; '
-                        'else echo "  (plot_cumulative_dos.py missing — regenerate the project)"; fi\n\n')
-                f.write('if command -v sumo-dosplot &>/dev/null; then\n')
-                f.write('    cd "$HERE/04_dos"\n')
-                if sumo_orb:
-                    f.write(f'    sumo-dosplot --prefix "$(basename $HERE)_proj" --orbitals "{sumo_orb}" --xmin -6 --xmax 6 2>&1\n')
-                else:
-                    f.write('    sumo-dosplot --prefix "$(basename $HERE)_proj" --xmin -6 --xmax 6 2>&1\n')
-                f.write('    mv *_dos.* "$HERE/analysis/" 2>/dev/null || true\n')
-                f.write('    cd "$HERE"\n')
+                # Total + projected DOS: both cumulative, sharing one energy
+                # window (full eigenvalue range), from DOSCAR — no sumo needed.
+                f.write('echo "  Cumulative total + projected DOS (from DOSCAR)..."\n')
+                f.write('if [ -f "$HERE/analysis/plot_dos.py" ] && [ -f "$HERE/04_dos/DOSCAR" ]; then\n')
+                f.write('    PROJ=""; [ -f "$HERE/dos_proj.json" ] && PROJ="--proj $HERE/dos_proj.json"\n')
+                f.write('    ( cd "$HERE/analysis" && python3 plot_dos.py "$HERE/04_dos" '
+                        '--out "$BASE" $PROJ ) 2>&1\n')
                 f.write('    echo "  Saved: analysis/*_dos.*"\n')
                 f.write('else\n')
-                f.write('    echo "  sumo not found — copying DOSCAR"\n')
-                f.write('    cp "$HERE/04_dos/DOSCAR" "$HERE/analysis/"\n')
+                f.write('    echo "  (plot_dos.py or DOSCAR missing — regenerate the project)"\n')
                 f.write('fi\n\n')
 
             # ── ELF along nearest-neighbour bonds + 2D plane (if ELFCAR present) ─
@@ -1229,9 +1234,6 @@ fi'''
 
             f.write('echo "Done. Results in analysis/"\n')
         chmod_x(sh)
-
-        if has_dos:
-            self._gen_cumulative_dos_script(calc_dirs['dos'])
 
 
 # ── entry point ───────────────────────────────────────────────────────────

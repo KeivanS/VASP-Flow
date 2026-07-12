@@ -957,6 +957,10 @@ class VASPWorkflowAgent:
         """Copy band_plot.py -> analysis/plot_band_eigenval.py (default band plotter)."""
         return self._copy_util(ana_dir, 'band_plot.py', 'plot_band_eigenval.py')
 
+    def _gen_dos_script(self, ana_dir):
+        """Copy dos_plot.py -> analysis/plot_dos.py (cumulative total + projected DOS)."""
+        return self._copy_util(ana_dir, 'dos_plot.py', 'plot_dos.py')
+
     def _gen_analysis(self, calc_dirs):
         pd  = self.project_dir
         ana = os.path.join(pd, 'analysis')
@@ -980,6 +984,13 @@ class VASPWorkflowAgent:
         # sumo format: "El orb1 orb2, El2 orb1"
         sumo_orb = ', '.join(f"{el} {' '.join(orbs)}" for el, orbs in orb_map.items())
 
+        # dos_proj.json for the cumulative projected-DOS plotter (dos_plot.py)
+        if orb_map:
+            import json as _json
+            proj = [{'element': el, 'orbitals': orbs} for el, orbs in orb_map.items()]
+            with open(os.path.join(pd, 'dos_proj.json'), 'w') as f:
+                f.write(_json.dumps(proj))
+
         # ── analyze.sh ───────────────────────────────────────────────────
         sh = os.path.join(pd, 'analyze.sh')
         with open(sh, 'w') as f:
@@ -987,6 +998,7 @@ class VASPWorkflowAgent:
             f.write(f"# Analysis script for: {self.project_label}\n")
             f.write("# Uses sumo for publication-quality plots (pip install sumo)\n\n")
             f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+            f.write('BASE="$(basename $HERE)"\n')
             f.write('mkdir -p "$HERE/analysis"\n\n')
 
             # ── quick text extraction ────────────────────────────────────
@@ -1025,33 +1037,18 @@ class VASPWorkflowAgent:
 
             # ── DOS with sumo ────────────────────────────────────────────
             if has_dos:
+                self._gen_dos_script(ana)
                 f.write('echo "=== DOS ==="\n')
-                # Cumulative DOS (replaces sumo total-DOS plot)
-                f.write('echo "  Cumulative DOS (by element, from DOSCAR)..."\n')
-                f.write('if [ -f "$HERE/04_dos/plot_cumulative_dos.py" ]; then '
-                        'python3 "$HERE/04_dos/plot_cumulative_dos.py"; '
-                        'else echo "  (plot_cumulative_dos.py missing — regenerate the project)"; fi\n\n')
-                # Projected DOS with sumo
-                f.write('if command -v sumo-dosplot &>/dev/null; then\n')
-                f.write('    cd "$HERE/04_dos"\n')
-                if sumo_orb:
-                    f.write('    # Orbital-projected DOS\n')
-                    f.write(f'    sumo-dosplot \\\n')
-                    f.write(f'        --prefix "$(basename $HERE)_proj" \\\n')
-                    f.write(f'        --orbitals "{sumo_orb}" \\\n')
-                    f.write(f'        --xmin -6 --xmax 6 \\\n')
-                    f.write(f'        2>&1\n')
-                else:
-                    f.write('    sumo-dosplot \\\n')
-                    f.write('        --prefix "$(basename $HERE)_proj" \\\n')
-                    f.write('        --xmin -6 --xmax 6 \\\n')
-                    f.write('        2>&1\n')
-                f.write('    mv *_dos.* "$HERE/analysis/" 2>/dev/null || true\n')
-                f.write('    cd "$HERE"\n')
+                # Total + projected DOS: both cumulative, sharing one energy
+                # window (full eigenvalue range), from DOSCAR — no sumo needed.
+                f.write('echo "  Cumulative total + projected DOS (from DOSCAR)..."\n')
+                f.write('if [ -f "$HERE/analysis/plot_dos.py" ] && [ -f "$HERE/04_dos/DOSCAR" ]; then\n')
+                f.write('    PROJ=""; [ -f "$HERE/dos_proj.json" ] && PROJ="--proj $HERE/dos_proj.json"\n')
+                f.write('    ( cd "$HERE/analysis" && python3 plot_dos.py "$HERE/04_dos" '
+                        '--out "$BASE" $PROJ ) 2>&1\n')
                 f.write('    echo "  Saved: analysis/*_dos.*"\n')
                 f.write('else\n')
-                f.write('    echo "  sumo not found — copying DOSCAR"\n')
-                f.write('    cp "$HERE/04_dos/DOSCAR" "$HERE/analysis/"\n')
+                f.write('    echo "  (plot_dos.py or DOSCAR missing — regenerate the project)"\n')
                 f.write('fi\n\n')
 
             # ── ELF along nearest-neighbour bonds + 2D plane (if ELFCAR present) ─
@@ -1081,8 +1078,6 @@ class VASPWorkflowAgent:
             f.write('echo "  e.g.: cd 03_bands && sumo-bandplot --ymin -4 --ymax 4"\n')
         chmod_x(sh)
 
-        if has_dos:
-            self._gen_cumulative_dos_script(calc_dirs['dos'])
 
         # ── plot_results.py (matplotlib fallback) ────────────────────────
         py = os.path.join(ana, 'plot_results.py')
