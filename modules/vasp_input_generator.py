@@ -1566,9 +1566,21 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        
-        lines.extend(self._get_parallel_lines('scf'))
-        lines.extend(["# Output", "LWAVE = .TRUE.", "LCHARG = .TRUE.", "LORBIT = 11"])
+
+        # Electron localization function (ELFCAR): on by default; VASP does not
+        # compute ELF for SOC/non-collinear runs, and LELF requires KPAR=1.
+        elf = self.instructions.get('elf', True) and not self.instructions.get('soc', False)
+
+        par_lines = self._get_parallel_lines('scf')
+        if elf:
+            par_lines = [('KPAR  = 1   # forced to 1: ELF (LELF) needs KPAR=1'
+                          if l.strip().startswith('KPAR') else l) for l in par_lines]
+        lines.extend(par_lines)
+
+        out = ["# Output", "LWAVE = .TRUE.", "LCHARG = .TRUE.", "LORBIT = 11"]
+        if elf:
+            out.append("LELF = .TRUE.   # electron localization function -> ELFCAR")
+        lines.extend(out)
         lines = self._apply_incar_overrides(lines, 'scf')
         return '\n'.join(lines) + '\n'
 

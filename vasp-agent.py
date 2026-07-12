@@ -938,17 +938,24 @@ class VASPWorkflowAgent:
         chmod_x(py)
 
     # ── analysis ────────────────────────────────────────────────────────────
-    def _gen_elf_bonds_script(self, ana_dir):
-        """Copy the standalone elf_bonds.py utility into analysis/plot_elf_bonds.py.
-        Returns True if the utility was found next to this agent and copied."""
-        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'elf_bonds.py')
+    def _copy_util(self, ana_dir, src_name, dst_name):
+        """Copy a standalone utility next to this agent into analysis/. True on success."""
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), src_name)
         if not os.path.exists(src):
             return False
-        dst = os.path.join(ana_dir, 'plot_elf_bonds.py')
+        dst = os.path.join(ana_dir, dst_name)
         with open(src) as fsrc, open(dst, 'w') as fdst:
             fdst.write(fsrc.read())
         chmod_x(dst)
         return True
+
+    def _gen_elf_bonds_script(self, ana_dir):
+        """Copy elf_bonds.py -> analysis/plot_elf_bonds.py."""
+        return self._copy_util(ana_dir, 'elf_bonds.py', 'plot_elf_bonds.py')
+
+    def _gen_band_eigenval_script(self, ana_dir):
+        """Copy band_plot.py -> analysis/plot_band_eigenval.py (default band plotter)."""
+        return self._copy_util(ana_dir, 'band_plot.py', 'plot_band_eigenval.py')
 
     def _gen_analysis(self, calc_dirs):
         pd  = self.project_dir
@@ -959,6 +966,7 @@ class VASPWorkflowAgent:
         has_scf   = 'scf'   in calc_dirs
         has_bands = 'bands' in calc_dirs
         has_dos   = 'dos'   in calc_dirs
+        has_lobster = 'lobster' in calc_dirs
 
         # Orbital projections from instructions (e.g. ['C:s', 'C:p'])
         dos_proj  = self.parser.instructions.get('dos_projections', [])
@@ -994,35 +1002,26 @@ class VASPWorkflowAgent:
             # ── band structure ───────────────────────────────────────────
             if has_bands:
                 self._gen_spin_bands_script(calc_dirs.get('bands',''), ana)
+                self._gen_band_eigenval_script(ana)
                 f.write('echo "=== Band structure ==="\n')
-                f.write('if [ -f "$HERE/03_bands/INCAR" ] && grep -q "ISPIN *= *2" "$HERE/03_bands/INCAR"; then\n')
-                f.write('    echo "  Spin-polarized — generating spin-resolved band plot..."\n')
-                f.write('    python3 "$HERE/analysis/plot_spin_bands.py" 2>&1\n')
-                f.write('else\n')
-                f.write('    if command -v sumo-bandplot &>/dev/null; then\n')
-                f.write('        EFERMI=""\n')
-                f.write('        if [ -f "$HERE/04_dos/OUTCAR" ]; then\n')
-                f.write('            EFERMI=$(grep "E-fermi" "$HERE/04_dos/OUTCAR" | tail -1 | awk \'{print $3}\')\n')
-                f.write('        elif [ -f "$HERE/02_scf/OUTCAR" ]; then\n')
-                f.write('            EFERMI=$(grep "E-fermi" "$HERE/02_scf/OUTCAR" | tail -1 | awk \'{print $3}\')\n')
-                f.write('        fi\n')
-                f.write('        if [ -n "$EFERMI" ] && [ -f "$HERE/03_bands/vasprun.xml" ]; then\n')
-                f.write('            sed -i.efermi_bak \'s|<i name="efermi">.*</i>|<i name="efermi">  \'$EFERMI\'  </i>|\' "$HERE/03_bands/vasprun.xml"\n')
-                f.write('        fi\n')
-                f.write('        cd "$HERE/03_bands"\n')
-                f.write('        sumo-bandplot --prefix "$(basename $HERE)" --ymin -4 --ymax 4 2>&1\n')
-                f.write('        mv *_band.* "$HERE/analysis/" 2>/dev/null || true\n')
-                f.write('        cd "$HERE"\n')
-                f.write('        if ! ls "$HERE"/analysis/*_band.png &>/dev/null; then\n')
-                f.write('            echo "  sumo produced no plot — using built-in vasprun plotter"\n')
-                f.write('            python3 "$HERE/analysis/plot_spin_bands.py" 2>&1\n')
-                f.write('        fi\n')
-                f.write('        echo "  Saved: analysis/*_band.*"\n')
-                f.write('    else\n')
-                f.write('        echo "  sumo not found — using built-in vasprun plotter"\n')
-                f.write('        python3 "$HERE/analysis/plot_spin_bands.py" 2>&1\n')
-                f.write('    fi\n')
-                f.write('fi\n\n')
+                # Default: plot from EIGENVAL (complete even if vasprun.xml is
+                # truncated, e.g. an out-of-memory finish). sumo is a fallback.
+                f.write('BASE="$(basename $HERE)"\n')
+                f.write('if [ -f "$HERE/analysis/plot_band_eigenval.py" ] && [ -f "$HERE/03_bands/EIGENVAL" ]; then\n')
+                f.write('    ( cd "$HERE/analysis" && python3 plot_band_eigenval.py "$HERE/03_bands" '
+                        '--out "$BASE" --ymin -4 --ymax 4 ) 2>&1\n')
+                f.write('fi\n')
+                f.write('if [ ! -f "$HERE/analysis/${BASE}_band.png" ] && command -v sumo-bandplot &>/dev/null '
+                        '&& grep -q "</modeling>" "$HERE/03_bands/vasprun.xml" 2>/dev/null; then\n')
+                f.write('    echo "  EIGENVAL plot unavailable — trying sumo-bandplot"\n')
+                f.write('    ( cd "$HERE/03_bands" && sumo-bandplot --prefix "$BASE" --ymin -4 --ymax 4 2>&1 '
+                        '&& mv *_band.* "$HERE/analysis/" 2>/dev/null || true )\n')
+                f.write('fi\n')
+                f.write('if [ ! -f "$HERE/analysis/${BASE}_band.png" ]; then\n')
+                f.write('    echo "  falling back to vasprun spin plotter"\n')
+                f.write('    python3 "$HERE/analysis/plot_spin_bands.py" 2>&1 || true\n')
+                f.write('fi\n')
+                f.write('echo "  Saved: analysis/*_band.*"\n\n')
 
             # ── DOS with sumo ────────────────────────────────────────────
             if has_dos:
@@ -1059,7 +1058,19 @@ class VASPWorkflowAgent:
                 f.write('    echo "=== ELF along nearest-neighbour bonds ==="\n')
                 f.write('    ( cd "$HERE/analysis" && python3 plot_elf_bonds.py '
                         '"$HERE/02_scf/ELFCAR" ) 2>&1\n')
-                f.write('    echo "  Saved: analysis/*_elf_bonds.*"\n')
+                f.write('    echo "  Saved: analysis/*_elf_bonds.* and *_elf_plane.*"\n')
+                f.write('fi\n\n')
+
+            # ── LOBSTER bonding: aggregate ICOHP/ICOBI/ICOOP + antibonding ──
+            if has_lobster:
+                pp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'lobster_postprocess.py')
+                f.write('if [ -f "$HERE/08_lobster/COHPCAR.lobster" ]; then\n')
+                f.write('    echo "=== LOBSTER bonding (ICOHP/ICOBI/ICOOP + antibonding) ==="\n')
+                f.write(f'    python3 "{pp}" --dir "$HERE/08_lobster" '
+                        '--out "$HERE/08_lobster/lobster_summary.csv" 2>&1\n')
+                f.write('    cp "$HERE/08_lobster/lobster_summary.csv" "$HERE/analysis/" 2>/dev/null || true\n')
+                f.write('    echo "  Saved: 08_lobster/lobster_summary.csv"\n')
                 f.write('fi\n\n')
 
             f.write('echo ""\n')

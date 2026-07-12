@@ -78,6 +78,17 @@ def _slug(name):
 
 def _pd(slug):    return os.path.join(CONFIG['projects_dir'], slug)
 
+def _vasprun_complete(path):
+    """True if vasprun.xml looks finished (root </modeling> present near EOF).
+    A truncated file (interrupted VASP run) fails XML parsing, so callers can
+    give a clean message instead of surfacing a raw parser traceback."""
+    try:
+        with open(path, 'rb') as fh:
+            fh.seek(max(0, os.path.getsize(path) - 400))
+            return b'</modeling>' in fh.read()
+    except OSError:
+        return False
+
 def _bin_path_env():
     """Environment with the Python interpreter's bin/ prepended to PATH.
 
@@ -252,6 +263,9 @@ def api_generate():
     lines += [f'ISIF: {isif}', f'NSW: {nsw}', f'EDIFFG: {ediffg}', f'NKPTS: {nkpts}']
     if mpi > 1: lines.append(f'MPI: {mpi}')
     if spin_mode == 'collinear': lines.append(f'MAGMOM: {mag_moment}')
+
+    # ELF (ELFCAR) — on by default; emit explicit state so it round-trips
+    lines.append('ELF: ' + ('ON' if d.get('elf', True) else 'OFF'))
 
     # DFPT parameters
     if d.get('dfpt'):
@@ -865,17 +879,40 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
             y += data[:, 1 + s * 2 * ncol + 2 * idx]
         return sign * y
 
+    def integ(idx):                              # running integral column (LOBSTER sign)
+        y = np.zeros(len(E))
+        for s in range(nspin):
+            y += data[:, 1 + s * 2 * ncol + 2 * idx + 1]
+        return y
+
     # TOTAL over all bonds (each contact is listed both directions → /2 = per cell)
     label_re = re.compile(r"No\.\d+:([A-Za-z]+)\d+->([A-Za-z]+)\d+\(([0-9.]+)\)")
     groups = defaultdict(list)                   # "A-B" -> [(dist, idx), ...]
     total  = np.zeros(len(E))
+    itotal = np.zeros(len(E))                    # total running integral (ICOxP)
     for k in range(1, ncol):
         total += curve(k)
+        itotal += integ(k)
         mlab = label_re.match(labels[k])
         if mlab:
             a, b, dist = mlab.group(1), mlab.group(2), float(mlab.group(3))
             groups["-".join(sorted((a, b)))].append((dist, k))
     total /= 2.0
+    itotal /= 2.0
+
+    # Integrated value at E_F (ICOHP/ICOBI/ICOOP, LOBSTER sign convention)
+    icoxp = float(np.interp(0.0, E, itotal))
+    # Bonding->antibonding threshold: crossing of the total curve nearest to,
+    # and below, E_F (on the bonding-positive curve, i.e. where it goes + -> -).
+    ecross = None
+    s_arr = np.sign(total)
+    for i in np.where(np.diff(s_arr) != 0)[0]:
+        d = total[i + 1] - total[i]
+        if d == 0:
+            continue
+        e0 = E[i] - total[i] * (E[i + 1] - E[i]) / d
+        if e0 <= 0.0 and (ecross is None or e0 > ecross):
+            ecross = e0
 
     # Nearest-neighbour shell per element pair (sum of equivalent bonds, per cell)
     nn = []
@@ -905,6 +942,13 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
     ax.set_title(f'{which.upper()} — {project_label}', fontsize=10)
     ax.legend(fontsize=7, loc='lower right')
     ax.grid(True, alpha=0.2)
+
+    # Info box: integrated value at E_F + bonding→antibonding threshold energy.
+    iname = {'cohp': 'ICOHP', 'cobi': 'ICOBI', 'coop': 'ICOOP'}[which]
+    box = f"{iname}(E$_F$) = {icoxp:.3f} eV\n" + (
+          f"B→AB @ {ecross:.2f} eV" if ecross is not None else "B→AB: none < E$_F$")
+    ax.text(0.03, 0.97, box, transform=ax.transAxes, fontsize=7.5, va='top', ha='left',
+            bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     plt.tight_layout()
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
@@ -1137,12 +1181,42 @@ def _elf_bond_plot(pd_, ana):
     if not os.path.exists(script):
         return None
     os.makedirs(ana, exist_ok=True)
-    for f in (glob.glob(os.path.join(ana, '*_elf_bonds.png')) +
-              glob.glob(os.path.join(ana, '*_elf_bonds.pdf'))):
+    for f in (glob.glob(os.path.join(ana, '*_elf_bonds.*')) +
+              glob.glob(os.path.join(ana, '*_elf_plane.*'))):
         try: os.remove(f)
         except OSError: pass
+    # One run produces both *_elf_bonds.* (line plot) and *_elf_plane.* (2D map)
     subprocess.run([sys.executable, script, elfcar], capture_output=True, cwd=ana)
     hits = glob.glob(os.path.join(ana, '*_elf_bonds.png'))
+    return hits[0] if hits else None
+
+
+def _eigenval_band_plot(src, ana, base, ymin, ymax, labels, efermi):
+    """Default band plotter: run band_plot.py on EIGENVAL → ana/<base>_band.{png,pdf}.
+    EIGENVAL is complete even when vasprun.xml is truncated (e.g. OOM finish)."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'band_plot.py')
+    if not os.path.exists(script):
+        script = os.path.join(ana, 'plot_band_eigenval.py')   # copied into project
+    if not os.path.exists(script) or not os.path.isfile(os.path.join(src, 'EIGENVAL')):
+        return False
+    cmd = [sys.executable, script, os.path.abspath(src), '--out', base,
+           '--ymin', str(ymin), '--ymax', str(ymax)]
+    if efermi is not None:
+        cmd += ['--efermi', str(efermi)]
+    if labels:
+        cmd += ['--labels', labels]
+    subprocess.run(cmd, capture_output=True, cwd=ana)     # writes into cwd=ana
+    return os.path.exists(os.path.join(ana, f'{base}_band.png'))
+
+
+def _elf_plane_png(pd_, ana):
+    """Return the 2D ELF plane PNG (run elf_bonds.py once if not present)."""
+    import glob
+    hits = glob.glob(os.path.join(ana, '*_elf_plane.png'))
+    if hits:
+        return hits[0]
+    _elf_bond_plot(pd_, ana)                      # generates both plots
+    hits = glob.glob(os.path.join(ana, '*_elf_plane.png'))
     return hits[0] if hits else None
 
 
@@ -1164,6 +1238,13 @@ def api_plot(slug, ptype):
             return send_file(out, mimetype='image/png')
         return jsonify(error='ELF not available — run 02_scf with LELF=.TRUE. '
                              '(not computed for SOC / non-collinear runs)'), 404
+
+    # ── 2D ELF density on the atom + 1st/2nd-neighbour plane ─────────────────
+    if ptype == 'elf_plane':
+        out = _elf_plane_png(pd_, ana)
+        if out and os.path.exists(out):
+            return send_file(out, mimetype='image/png')
+        return jsonify(error='ELF plane not available — run 02_scf with LELF=.TRUE.'), 404
 
     # ── LOBSTER COHP / COBI / COOP vs energy (from 08_lobster, else 02_scf) ──
     if ptype in ('cohp', 'cobi', 'coop'):
@@ -1202,7 +1283,7 @@ def api_plot(slug, ptype):
     for p in candidates:
         if os.path.exists(p): return send_file(p, mimetype='image/png')
 
-    # ── run sumo (or custom spin plot) ───────────────────────────────────
+    # ── generate band plot (EIGENVAL is the default; sumo is a fallback) ─────
     if ptype == 'bands':
         src = os.path.join(pd_, '03_bands')
         if os.path.isdir(src):
@@ -1214,50 +1295,37 @@ def api_plot(slug, ptype):
                     m = re.findall(r'E-fermi\s*:\s*([-\d.]+)',
                                    Path(oc).read_text(errors='replace'))
                     if m:
-                        efermi = float(m[-1])
-                        # Patch vasprun.xml so sumo also picks up the correct EF
-                        vr = os.path.join(src, 'vasprun.xml')
-                        if os.path.exists(vr):
-                            txt = Path(vr).read_text(errors='replace')
-                            txt = re.sub(r'<i name="efermi">.*?</i>',
-                                         f'<i name="efermi">  {m[-1]}  </i>', txt)
-                            Path(vr).write_text(txt)
-                        break
+                        efermi = float(m[-1]); break
 
             ymin, ymax, labels = _band_plot_opts(slug)
-
-            # Detect ISPIN=2 from INCAR → use custom spin-resolved plot
-            is_spin_pol = False
-            incar_p = os.path.join(src, 'INCAR')
-            if os.path.exists(incar_p):
-                is_spin_pol = bool(re.search(r'ISPIN\s*=\s*2',
-                                             Path(incar_p).read_text(errors='replace')))
-
             band_png = os.path.join(ana, f'{base}_band.png')
-            plot_ok  = False
 
-            # Spin-polarized → custom vasprun plotter (sumo mishandles spin)
-            if is_spin_pol and efermi is not None:
-                try:
-                    plot_ok = bool(_spin_band_plot(src, efermi, ymin, ymax, ana, base))
-                except Exception:
-                    plot_ok = False
+            # DEFAULT: plot directly from EIGENVAL (survives a truncated vasprun.xml)
+            try:
+                _eigenval_band_plot(src, ana, base, ymin, ymax, labels, efermi)
+            except Exception:
+                pass
 
-            # Non-spin → sumo first (nicer gap/labels); fall back below if it crashes
-            if not plot_ok and not is_spin_pol:
-                label_args = ['--labels', labels] if labels else []
-                for fmt in ('png', 'pdf'):
-                    subprocess.run(
-                        ['sumo-bandplot','--prefix',base,
-                         '--ymin', ymin, '--ymax', ymax,
-                         '--format', fmt] + label_args,
-                        capture_output=True, cwd=src, env=_bin_path_env())
-                for f in os.listdir(src):
-                    if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
-                plot_ok = os.path.exists(band_png)
+            # Fallback 1: sumo-bandplot (needs a complete vasprun.xml)
+            if not os.path.exists(band_png):
+                vr = os.path.join(src, 'vasprun.xml')
+                if os.path.exists(vr) and _vasprun_complete(vr):
+                    if efermi is not None:            # patch EF so sumo uses it
+                        txt = Path(vr).read_text(errors='replace')
+                        txt = re.sub(r'<i name="efermi">.*?</i>',
+                                     f'<i name="efermi">  {efermi:.4f}  </i>', txt)
+                        Path(vr).write_text(txt)
+                    label_args = ['--labels', labels] if labels else []
+                    for fmt in ('png', 'pdf'):
+                        subprocess.run(['sumo-bandplot','--prefix',base,
+                                        '--ymin', ymin, '--ymax', ymax,
+                                        '--format', fmt] + label_args,
+                                       capture_output=True, cwd=src, env=_bin_path_env())
+                    for f in os.listdir(src):
+                        if '_band.' in f: shutil.move(os.path.join(src,f), os.path.join(ana,f))
 
-            # Final fallback: sumo crashed/unavailable → plot straight from vasprun
-            if not plot_ok and efermi is not None:
+            # Fallback 2: vasprun spin plotter (if EIGENVAL missing + vasprun ok)
+            if not os.path.exists(band_png) and efermi is not None:
                 try:
                     _spin_band_plot(src, efermi, ymin, ymax, ana, base)
                 except Exception:
@@ -1342,10 +1410,11 @@ def api_plot_pdf(slug, ptype):
     pd_  = _pd(slug)
     ana  = os.path.join(pd_, 'analysis')
     base = _slug_base(slug)
-    if ptype == 'elf':
+    if ptype in ('elf', 'elf_plane'):
         import glob
         _elf_bond_plot(pd_, ana)
-        hits = glob.glob(os.path.join(ana, '*_elf_bonds.pdf'))
+        pat = '*_elf_plane.pdf' if ptype == 'elf_plane' else '*_elf_bonds.pdf'
+        hits = glob.glob(os.path.join(ana, pat))
         if hits:
             return send_file(hits[0], mimetype='application/pdf', as_attachment=True,
                              download_name=os.path.basename(hits[0]))
@@ -1731,6 +1800,13 @@ def api_run_sumo(slug, stype):
     os.makedirs(ana, exist_ok=True)
     base = _slug_base(slug)
 
+    # Refuse to run sumo-bandplot on a truncated vasprun.xml (unfinished run).
+    if stype == 'bands':
+        vr0 = os.path.join(pd_, '03_bands', 'vasprun.xml')
+        if os.path.exists(vr0) and not _vasprun_complete(vr0):
+            return jsonify(error='03_bands/vasprun.xml is incomplete — the band '
+                                 'run did not finish. Re-run 03_bands, then re-plot.'), 400
+
     # Remove stale plots for this type
     if os.path.isdir(ana):
         for f in os.listdir(ana):
@@ -1815,7 +1891,8 @@ def api_summary(slug):
 # Files shown in the modal. Editable inputs vs read-only outputs/logs.
 INPUT_FILES    = ['INCAR', 'KPOINTS', 'POSCAR']
 LOBSTER_INPUTS = ['INCAR', 'lobsterin']   # INCAR = the ISYM=0 NSCF for LOBSTER
-LOBSTER_OUTPUTS = ['lobsterout', 'lobster.out']
+LOBSTER_OUTPUTS = ['lobster_summary.csv', 'ICOHPLIST.lobster', 'ICOBILIST.lobster',
+                   'ICOOPLIST.lobster', 'lobsterout', 'lobster.out']
 READONLY_FILES = {'OUTCAR', 'OSZICAR', 'vasp.out', 'lobsterout', 'lobster.out'}
 
 def _step_dir(slug, step):
@@ -1867,7 +1944,8 @@ def api_file(slug, step, filename):
     if not os.path.isfile(path):
         return jsonify(error='File not found'), 404
 
-    is_readonly = filename in READONLY_FILES
+    is_readonly = (filename in READONLY_FILES
+                   or filename.endswith('.lobster') or filename.endswith('.csv'))
 
     if request.method == 'GET':
         txt   = Path(path).read_text(errors='replace')
@@ -2345,6 +2423,12 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div class="task-header">
       <label class="ck"><input type="checkbox" id="t_scf" checked> Self-consistent field (SCF)</label>
     </div>
+    <div class="task-body" style="display:block">
+      <label class="ck"><input type="checkbox" id="t_elf" checked> Compute ELF → ELFCAR (electron localization function)</label>
+      <div style="font-size:11px;color:var(--sub);margin-top:4px;">
+        Adds <code>LELF=.TRUE.</code> to the SCF (forces <code>KPAR=1</code>; small cost). Enables the ELF-along-bonds plot on the Results page. Not available for SOC / non-collinear runs.
+      </div>
+    </div>
   </div>
 
   <!-- Band structure -->
@@ -2506,11 +2590,14 @@ const STEP_FILES = [
 ];
 // 08_lobster shows only the lobster-relevant files (INCAR = the ISYM=0 NSCF).
 const LOBSTER_STEP_FILES = [
-  { name: 'INCAR',      icon: '✏'  },
-  { name: 'lobsterin',  icon: '✏'  },
-  { name: 'lobsterout', icon: '📋' },
-  { name: 'lobster.out',icon: '📄' },
-  { name: 'run.sh',     icon: '⚙'  },
+  { name: 'INCAR',                icon: '✏'  },
+  { name: 'lobsterin',            icon: '✏'  },
+  { name: 'lobster_summary.csv',  icon: '📊' },   // ICOHP/ICOBI/ICOOP + B/AB + fAB
+  { name: 'ICOHPLIST.lobster',    icon: '📈' },
+  { name: 'ICOBILIST.lobster',    icon: '📈' },
+  { name: 'ICOOPLIST.lobster',    icon: '📈' },
+  { name: 'lobster.out',          icon: '📄' },
+  { name: 'run.sh',               icon: '⚙'  },
 ];
 
 // ── state ──────────────────────────────────────────────────────────────────
@@ -2767,6 +2854,8 @@ async function loadProjectSettings(){
         if(body) body.style.display=on?'block':'none';
       }
     });
+    // ELF defaults ON — only uncheck if the project explicitly disabled it.
+    c('t_elf', settings.elf !== false);
 
     // Relaxation params
     s('relax_type', settings.relax_type);
@@ -3032,7 +3121,7 @@ async function saveProjectSettings(){
     manual_encut:   v('manual_encut'),
     manual_kmesh_scf:v('manual_kmesh_scf'),
     manual_kmesh_dos:v('manual_kmesh_dos'),
-    relax:  chk('t_relax'), scf:  chk('t_scf'),
+    relax:  chk('t_relax'), scf:  chk('t_scf'), elf: chk('t_elf'),
     bands:  chk('t_bands'), dos:  chk('t_dos'),
     dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
     wannier:chk('t_wannier'), lobster:chk('t_lobster'),
@@ -3105,6 +3194,7 @@ async function generate(){
     // tasks
     relax:        chk('t_relax'),
     scf:          chk('t_scf'),
+    elf:          chk('t_elf'),
     bands:        chk('t_bands'),
     dos:          chk('t_dos'),
     // relaxation
@@ -3487,16 +3577,26 @@ async function buildResults(){
     </div>
   </div>`;
 
-  // ── ELF along nearest-neighbour bonds (from 02_scf/ELFCAR) ─────────────
+  // ── ELF: line-along-bonds + 2D density on the 1st/2nd-neighbour plane ───
   h+=`<div class="card">
-    <div class="card-title">ELF Along Nearest-Neighbour Bonds</div>
+    <div class="card-title">Electron Localization Function (ELF)</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-      <a href="/api/plot_pdf/${PROJECT}/elf" class="btn btn-ghost btn-sm" download title="Download ELF PDF">⬇ PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/elf" class="btn btn-ghost btn-sm" download title="Download ELF-along-bonds PDF">⬇ Bonds PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/elf_plane" class="btn btn-ghost btn-sm" download title="Download ELF plane PDF">⬇ Plane PDF</a>
     </div>
-    <div class="plot-card">
-      <img id="img-elf" src="/api/plot/${PROJECT}/elf?t=${ts}" style="max-width:100%;max-height:500px;cursor:pointer;"
-           onclick="window.open(this.src)"
-           onerror="this.parentElement.innerHTML='<div class=no-plot>Not available — run 02_scf with LELF=.TRUE. (ELF is not computed for SOC / non-collinear runs)</div>'">
+    <div class="plot-grid">
+      <div class="plot-card">
+        <h4>ELF along nearest-neighbour bonds</h4>
+        <img id="img-elf" src="/api/plot/${PROJECT}/elf?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>ELF along nearest-neighbour bonds</h4><div class=no-plot>Not available — run 02_scf with LELF=.TRUE. (not computed for SOC / non-collinear)</div>'">
+      </div>
+      <div class="plot-card">
+        <h4>ELF plane (atom + 1st &amp; 2nd neighbours)</h4>
+        <img id="img-elf-plane" src="/api/plot/${PROJECT}/elf_plane?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>ELF plane (atom + 1st &amp; 2nd neighbours)</h4><div class=no-plot>Not available — run 02_scf with LELF=.TRUE.</div>'">
+      </div>
     </div>
   </div>`;
 

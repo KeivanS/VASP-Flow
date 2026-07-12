@@ -197,6 +197,131 @@ def sample_bond(grid, lattice, rA_cart, rB_cart, npoints=200):
     return dist, elf
 
 
+# ── ELF on the plane through an atom + its 1st and 2nd neighbours ──────────────
+def _neighbour_images(lattice, elements, frac, iA, nmax=3.5):
+    """All periodic images of every atom within nmax*(nearest dist) of atom iA.
+    Returns a list of (dist, elem, cart) sorted by distance (self excluded)."""
+    cart = frac @ lattice
+    shifts = np.array([[i, j, k] for i in range(-2, 3) for j in range(-2, 3)
+                       for k in range(-2, 3)], dtype=float) @ lattice
+    out = []
+    for j in range(len(frac)):
+        for sc in shifts:
+            r = cart[j] + sc
+            d = float(np.linalg.norm(r - cart[iA]))
+            if d > 1e-3:
+                out.append((d, elements[j], r))
+    out.sort(key=lambda t: t[0])
+    dmin = out[0][0]
+    return [o for o in out if o[0] <= dmin * nmax], cart[iA]
+
+
+def plane_basis(A, B, C):
+    """Orthonormal in-plane basis (u,v) and normal n for the plane through A,B,C."""
+    u = B - A
+    u /= np.linalg.norm(u)
+    w = C - A
+    v = w - np.dot(w, u) * u
+    v /= np.linalg.norm(v)
+    n = np.cross(u, v)
+    return u, v, n
+
+
+def sample_plane(grid, lattice, A, u, v, umin, umax, vmin, vmax, ngrid=220):
+    """Sample ELF on a rectangular patch of the (u,v) plane centred on A.
+    Returns (U, V, ELF) meshgrids for contourf."""
+    us = np.linspace(umin, umax, ngrid)
+    vs = np.linspace(vmin, vmax, ngrid)
+    U, V = np.meshgrid(us, vs)
+    pts = A[None, :] + U.ravel()[:, None] * u[None, :] + V.ravel()[:, None] * v[None, :]
+    frac = pts @ np.linalg.inv(lattice)
+    elf = _trilerp(grid, frac).reshape(U.shape)
+    return U, V, elf
+
+
+def plot_elf_plane(grid, lattice, elements, frac, prefix, iA=0, ngrid=220):
+    """Filled ELF contour on the plane through atom iA and its 1st+2nd neighbours.
+
+    Atoms whose (imaged) position lies in that plane and inside the patch are
+    marked. Saves <prefix>_elf_plane.{png,pdf}. Returns the plane description.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    neigh, A = _neighbour_images(lattice, elements, frac, iA)
+    if not neigh:
+        return None
+    elemA = elements[iA]
+    d1 = neigh[0][0]                                  # 1st-shell distance
+    B = neigh[0][2]                                   # 1st neighbour
+    uAB = (B - A) / np.linalg.norm(B - A)
+    # 2nd point: a genuine 2nd-SHELL neighbour (distance > 1st shell) that is
+    # non-collinear with A->B, so the plane spans the 1st and 2nd neighbours.
+    C = None
+    for d, el, r in neigh[1:]:
+        perp = (r - A) - np.dot(r - A, uAB) * uAB
+        if d > d1 * 1.05 and np.linalg.norm(perp) > 0.3:
+            C = r; elemC = el; distC = d
+            break
+    if C is None:                                     # fall back to any non-collinear
+        for d, el, r in neigh[1:]:
+            perp = (r - A) - np.dot(r - A, uAB) * uAB
+            if np.linalg.norm(perp) > 0.3:
+                C = r; elemC = el; distC = d
+                break
+    if C is None:
+        return None
+    u, v, n = plane_basis(A, B, C)
+
+    def uv(r):
+        wv = r - A
+        return np.dot(wv, u), np.dot(wv, v)
+
+    # Box sized from just the 3 defining atoms (central + 1st + 2nd NN) + pad,
+    # so the plot zooms on the local bonding region rather than the whole cell.
+    key_uv = [uv(A), uv(B), uv(C)]
+    pad = 1.8
+    umin = min(p[0] for p in key_uv) - pad; umax = max(p[0] for p in key_uv) + pad
+    vmin = min(p[1] for p in key_uv) - pad; vmax = max(p[1] for p in key_uv) + pad
+
+    # Mark every atom image that lies in the plane AND inside the box.
+    marks = []
+    for d, el, r in [(0.0, elemA, A)] + neigh:
+        if abs(np.dot(r - A, n)) < 0.35:             # lies (nearly) in the plane
+            x, y = uv(r)
+            if umin <= x <= umax and vmin <= y <= vmax:
+                marks.append((x, y, el))
+
+    U, V, ELF = sample_plane(grid, lattice, A, u, v, umin, umax, vmin, vmax, ngrid)
+
+    fig, ax = plt.subplots(figsize=(6.4, 5.6))
+    cf = ax.contourf(U, V, ELF, levels=np.linspace(0, 1, 21), cmap='jet', vmin=0, vmax=1)
+    ax.contour(U, V, ELF, levels=[0.5], colors='k', linewidths=0.6, alpha=0.5)
+    cbar = fig.colorbar(cf, ax=ax, ticks=np.linspace(0, 1, 11))
+    cbar.set_label('ELF')
+    # element -> marker colour
+    els = list(dict.fromkeys([m[2] for m in marks]))
+    cmap = {e: c for e, c in zip(els, plt.rcParams['axes.prop_cycle'].by_key()['color'])}
+    for x, y, el in marks:
+        ax.scatter([x], [y], s=90, facecolor=cmap[el], edgecolor='white',
+                   linewidth=1.2, zorder=5)
+        ax.annotate(el, (x, y), color='white', fontsize=8, ha='center', va='center',
+                    zorder=6, fontweight='bold')
+    ax.set_aspect('equal')
+    ax.set_xlabel('in-plane x (Å)', fontsize=11)
+    ax.set_ylabel('in-plane y (Å)', fontsize=11)
+    ax.set_title(f'ELF plane through {elemA} + 1st ({elemA}–{neigh[0][1]}) '
+                 f'& 2nd ({elemA}–{elemC}) neighbours', fontsize=9)
+    fig.tight_layout()
+    for ext in ('png', 'pdf'):
+        out = f'{prefix}_elf_plane.{ext}'
+        fig.savefig(out, dpi=150 if ext == 'png' else None)
+        print(f'  Saved: {out}')
+    plt.close(fig)
+    return dict(central=elemA, first=neigh[0][1], second=elemC)
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -209,6 +334,10 @@ def main():
                     help='neighbour cutoff = nn_scale x nearest distance (1.2)')
     ap.add_argument('--npoints', type=int, default=200,
                     help='samples per bond (default: 200)')
+    ap.add_argument('--plane-atom', type=int, default=0,
+                    help='central atom index for the 2D ELF plane plot (default 0)')
+    ap.add_argument('--no-plane', action='store_true',
+                    help='skip the 2D ELF plane plot')
     args = ap.parse_args()
 
     path = args.elfcar
@@ -269,6 +398,14 @@ def main():
         fig.savefig(out, dpi=150 if ext == 'png' else None)
         print(f'  Saved: {out}')
     plt.close(fig)
+
+    # 2D ELF density on the plane through an atom + its 1st & 2nd neighbours
+    if not args.no_plane:
+        try:
+            plot_elf_plane(grid, lattice, elements, frac, prefix,
+                           iA=args.plane_atom)
+        except Exception as e:
+            sys.stderr.write(f'  note: ELF plane plot skipped ({e})\n')
 
 
 if __name__ == '__main__':

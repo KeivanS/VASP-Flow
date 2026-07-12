@@ -70,6 +70,8 @@ class InstructionParser:
                                     r'(?:WALLTIME|WALL_TIME|TIME)\s*[:,=]\s*(\S+)', default=None),
             'slurm_account':        self._extract_str_key(content,
                                     r'ACCOUNT\s*[:,=]\s*(\S+)', default=None),
+            # ELF (ELFCAR): on by default; disable with "ELF: off" / "no ELF"
+            'elf':            self._extract_elf(content),
             # Geometry hints
             'is_2d':          self._extract_bool_key(content, r'\b2[Dd]\b|\bmonolayer\b|\bslab\b'),
             'is_hex':         self._extract_bool_key(content, r'\bhex\w*\b|\btrigonal\b|\bhexagonal\b'),
@@ -111,6 +113,16 @@ class InstructionParser:
     def _extract_bool_key(self, content: str, pattern: str) -> bool:
         """Return True if pattern is found anywhere in content."""
         return bool(re.search(pattern, content, re.IGNORECASE))
+
+    def _extract_elf(self, content: str) -> bool:
+        """ELFCAR computation flag. Default ON; disabled by an explicit
+        'ELF: off/false/no' key or a 'no ELF' / 'disable ELF' phrase."""
+        m = re.search(r'ELF\s*[:=]\s*(on|off|true|false|yes|no)', content, re.IGNORECASE)
+        if m:
+            return m.group(1).lower() in ('on', 'true', 'yes')
+        if re.search(r'\b(no|disable|without)\s+elf\b', content, re.IGNORECASE):
+            return False
+        return True
 
     def _extract_project_name(self, content: str) -> str:
         """Extract project name — tolerates stray leading characters before 'Project:'"""

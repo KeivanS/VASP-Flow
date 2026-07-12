@@ -184,6 +184,56 @@ def measure_groups(path, anti_sign):
     return out
 
 
+# Per descriptor: I=total integrated, B=bonding, A=antibonding (all algebraic),
+# fAB=antibonding fraction |A|/(|B|+|A|), Esign=sign-change energies.
+FIELDS = ["Material_ID", "Bond", "Distance_Ang", "N_contacts",
+          "ICOHP", "BCOHP", "ACOHP", "fAB_COHP", "Esign_COHP",
+          "ICOBI", "BCOBI", "ACOBI", "fAB_COBI", "Esign_COBI",
+          "ICOOP", "BCOOP", "ACOOP", "fAB_COOP", "Esign_COOP"]
+
+
+def rows_for_dir(lob_dir, material_id, suffix=""):
+    """Build per-inequivalent-bond rows for one LOBSTER output directory."""
+    per_measure = {}
+    for name, (fname, anti_sign) in MEASURES.items():
+        path = os.path.join(lob_dir, fname + suffix)
+        if os.path.exists(path):
+            per_measure[name] = measure_groups(path, anti_sign)
+        else:
+            per_measure[name] = {}
+            print(f"[warn] {path} missing", file=sys.stderr)
+    keys = sorted(set().union(*[m.keys() for m in per_measure.values()]),
+                  key=lambda k: (k[0], k[1]))
+    rows = []
+    for pair, dist in keys:
+        row = {"Material_ID": material_id, "Bond": pair, "Distance_Ang": dist,
+               "N_contacts": ""}
+        for name in MEASURES:
+            g = per_measure[name].get((pair, dist))
+            if g:
+                row[f"I{name}"]     = f"{g['I']:.6f}"
+                row[f"B{name}"]     = f"{g['B']:.6f}"
+                row[f"A{name}"]     = f"{g['A']:.6f}"
+                row[f"fAB_{name}"]  = f"{g['fAB']:.4f}"
+                row[f"Esign_{name}"] = g["Esign"]
+                row["N_contacts"]   = g["n"]
+            else:
+                row[f"I{name}"] = row[f"B{name}"] = row[f"A{name}"] = ""
+                row[f"fAB_{name}"] = row[f"Esign_{name}"] = ""
+        rows.append(row)
+        print(f"{material_id}  {pair} @ {dist} A  "
+              f"COHP[I={row['ICOHP']} B={row['BCOHP']} AB={row['ACOHP']} fAB={row['fAB_COHP']}]  "
+              f"COBI[fAB={row['fAB_COBI']}]")
+    return rows
+
+
+def write_csv(rows, out_csv):
+    with open(out_csv, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description=__doc__,
@@ -192,73 +242,48 @@ def main():
                     help="process the *.lobster.symmetric backup files (the "
                          "ISYM-on run kept by run_scf_for_lobster.sh) and write "
                          "to a separate CSV, for comparison with the ISYM=0 run.")
+    ap.add_argument("--dir", metavar="LOBSTER_DIR",
+                    help="process a single LOBSTER output directory (e.g. a "
+                         "project's 08_lobster/) instead of the highthrouput_list.")
+    ap.add_argument("--out", metavar="CSV", help="output CSV path (single-dir mode).")
     args = ap.parse_args()
     suffix = ".symmetric" if args.symmetric else ""
-    out_csv = (OUT_CSV[:-4] + "_symmetric.csv") if args.symmetric else OUT_CSV
 
+    # ── single-directory mode (per-project analyze.sh) ──────────────────────
+    if args.dir:
+        lob_dir = os.path.abspath(args.dir)
+        # material id = the project folder name (parent of 08_lobster)
+        material_id = os.path.basename(os.path.dirname(lob_dir)) or os.path.basename(lob_dir)
+        rows = rows_for_dir(lob_dir, material_id, suffix)
+        out_csv = args.out or os.path.join(lob_dir, "lobster_summary.csv")
+        write_csv(rows, out_csv)
+        print(f"\nWrote {out_csv} ({len(rows)} bond rows)")
+        return
+
+    # ── high-throughput list mode ───────────────────────────────────────────
+    out_csv = (OUT_CSV[:-4] + "_symmetric.csv") if args.symmetric else OUT_CSV
     if not os.path.exists(LIST_FILE):
         sys.exit(f"List file not found: {LIST_FILE}")
     with open(LIST_FILE) as fh:
         mats = [ln.strip() for ln in fh if ln.strip()]
 
-    # Per descriptor: I=total integrated, B=bonding, A=antibonding (all algebraic),
-    # fAB=antibonding fraction |A|/(|B|+|A|), Esign=sign-change energies.
-    fields = ["Material_ID", "Bond", "Distance_Ang", "N_contacts",
-              "ICOHP", "BCOHP", "ACOHP", "fAB_COHP", "Esign_COHP",
-              "ICOBI", "BCOBI", "ACOBI", "fAB_COBI", "Esign_COBI",
-              "ICOOP", "BCOOP", "ACOOP", "fAB_COOP", "Esign_COOP"]
     rows = []
-
     for mat in mats:
         # LOBSTER output lives in 08_lobster/ (current workflow); fall back to
         # 02_scf/ for materials prepared the old way. For --symmetric backups,
         # only 02_scf/ is relevant.
         if suffix:
-            scf = os.path.join(mat, "02_scf")
+            lob = os.path.join(mat, "02_scf")
         elif os.path.exists(os.path.join(mat, "08_lobster", "COHPCAR.lobster")):
-            scf = os.path.join(mat, "08_lobster")
+            lob = os.path.join(mat, "08_lobster")
         else:
-            scf = os.path.join(mat, SCF_SUBDIR)
-        per_measure = {}
-        for name, (fname, anti_sign) in MEASURES.items():
-            path = os.path.join(scf, fname + suffix)
-            if os.path.exists(path):
-                per_measure[name] = measure_groups(path, anti_sign)
-            else:
-                per_measure[name] = {}
-                print(f"[warn] {path} missing", file=sys.stderr)
-
-        # union of all bond groups seen across the three measures
-        keys = sorted(set().union(*[m.keys() for m in per_measure.values()]),
-                      key=lambda k: (k[0], k[1]))
-        if not keys:
+            lob = os.path.join(mat, SCF_SUBDIR)
+        mrows = rows_for_dir(lob, mat, suffix)
+        if not mrows:
             print(f"[warn] {mat}: no LOBSTER bond data found", file=sys.stderr)
-            continue
+        rows.extend(mrows)
 
-        for pair, dist in keys:
-            row = {"Material_ID": mat, "Bond": pair, "Distance_Ang": dist,
-                   "N_contacts": ""}
-            for name in MEASURES:
-                g = per_measure[name].get((pair, dist))
-                if g:
-                    row[f"I{name}"]     = f"{g['I']:.6f}"
-                    row[f"B{name}"]     = f"{g['B']:.6f}"
-                    row[f"A{name}"]     = f"{g['A']:.6f}"
-                    row[f"fAB_{name}"]  = f"{g['fAB']:.4f}"
-                    row[f"Esign_{name}"] = g["Esign"]
-                    row["N_contacts"]   = g["n"]
-                else:
-                    row[f"I{name}"] = row[f"B{name}"] = row[f"A{name}"] = ""
-                    row[f"fAB_{name}"] = row[f"Esign_{name}"] = ""
-            rows.append(row)
-            print(f"{mat}  {pair} @ {dist} A  "
-                  f"COHP[I={row['ICOHP']} B={row['BCOHP']} AB={row['ACOHP']} fAB={row['fAB_COHP']}]  "
-                  f"COBI[fAB={row['fAB_COBI']}]")
-
-    with open(out_csv, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader()
-        w.writerows(rows)
+    write_csv(rows, out_csv)
     label = " (symmetric backup)" if args.symmetric else ""
     print(f"\nWrote {out_csv} ({len(rows)} bond rows){label}")
 
