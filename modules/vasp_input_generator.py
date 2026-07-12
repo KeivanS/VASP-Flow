@@ -743,10 +743,30 @@ fi
             f.write("#!/bin/bash\n")
             f.write(f'HERE="$(cd "$(dirname "$0")" && pwd)"\n')
             f.write(f'SCF_DIR="$HERE/{rel_scf}"\n')
-            for fname in ('WAVECAR', 'CHGCAR'):
-                f.write(f'cp "$SCF_DIR/{fname}" "$HERE/" 2>/dev/null '
-                        f'&& echo "  {fname} copied from 02_scf" '
-                        f'|| echo "  WARNING: {fname} not found in 02_scf"\n')
+            f.write(
+'''# Guard: 02_scf may have been converted in place for LOBSTER (ISYM=0/-1).
+# Its CHGCAR is still the symmetric converged density (the conversion is a
+# fixed-charge NSCF with LCHARG=.FALSE.), but its WAVECAR is a full-mesh
+# symmetry-off one that this ISYM=2 step cannot use — skip it and let VASP
+# regenerate the orbitals from CHGCAR.
+ISYM_SCF=$(sed 's/[!#].*//' "$SCF_DIR/INCAR" 2>/dev/null \\
+           | awk -F= 'toupper($1) ~ /^[ \\t]*ISYM[ \\t]*$/ {gsub(/[ \\t]/,"",$2); print $2}' \\
+           | tail -1)
+if [ "$ISYM_SCF" = "0" ] || [ "$ISYM_SCF" = "-1" ]; then
+    echo "  NOTE: 02_scf/INCAR has ISYM=$ISYM_SCF (converted for LOBSTER) — skipping its"
+    echo "        WAVECAR; DFPT (ISYM=2) will start from CHGCAR instead."
+    if ! sed 's/[!#].*//' "$SCF_DIR/INCAR" | grep -qiE 'ICHARG[ \\t]*=[ \\t]*11|LCHARG[ \\t]*=[ \\t]*\\.FALSE\\.'; then
+        echo "  WARNING: 02_scf is symmetry-off and NOT a fixed-charge NSCF — its CHGCAR"
+        echo "           may have been generated with symmetry off. Consider re-running"
+        echo "           a symmetric (ISYM=2) SCF before DFPT."
+    fi
+else
+    cp "$SCF_DIR/WAVECAR" "$HERE/" 2>/dev/null && echo "  WAVECAR copied from 02_scf" \\
+        || echo "  WARNING: WAVECAR not found in 02_scf"
+fi
+cp "$SCF_DIR/CHGCAR" "$HERE/" 2>/dev/null && echo "  CHGCAR copied from 02_scf" \\
+    || echo "  WARNING: CHGCAR not found in 02_scf"
+''')
             self._write_copy_if_newer(f, '$SCF_DIR', 'POSCAR', 'POSCAR', '02_scf')
         os.chmod(f"{output_dir}/copy_from_scf.sh", 0o755)
 
@@ -812,6 +832,8 @@ fi
         lines += [
             "",
             "ICHARG = 1           ! read converged CHGCAR from SCF",
+            "ISYM   = 2           ! symmetry imposed — perturbation theory needs it;",
+            "                     ! never inherit ISYM=0/-1 from NSCF/LOBSTER steps",
             "",
             "ISMEAR = 0",
             "SIGMA  = 0.01",
@@ -832,6 +854,14 @@ fi
             ]
         lines.extend(["LWAVE  = .FALSE.", "LCHARG = .FALSE."])
         lines = self._apply_incar_overrides(lines, 'dfpt')
+        # ISYM = 2 is mandatory here: a symmetry-off tag (ISYM=0/-1, e.g. from
+        # a global INCAR override block meant for NSCF/LOBSTER) must not leak
+        # into the perturbation-theory step.
+        lines = ["ISYM   = 2           ! enforced — symmetry must stay on for DFPT/PEAD"
+                 if (self._incar_tag_name(ln) == 'ISYM'
+                     and ln.split('=', 1)[1].split('!')[0].split('#')[0].strip() != '2')
+                 else ln
+                 for ln in lines]
         return '\n'.join(lines) + '\n'
 
     def _extract_born_script(self) -> str:

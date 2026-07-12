@@ -1028,7 +1028,25 @@ Both routes support neither k-point nor band parallelisation:
 \textbf{KPAR and NCORE are forced to 1} in the generated INCAR
 (overriding any global or per-step setting).  The full MPI task count
 is still used for plane-wave parallelisation.
+Likewise \textbf{ISYM=2 is enforced} (symmetry imposed): perturbation
+theory relies on the symmetry-reduced perturbation set, so a
+symmetry-off \texttt{ISYM=0}/\texttt{$-$1} --- e.g.\ from a global
+\texttt{INCAR:} override block intended for the LOBSTER/NSCF steps ---
+is never inherited by \texttt{06\_dfpt}.
 \end{notebox}
+
+\texttt{copy\_from\_scf.sh} (invoked by \texttt{run.sh}) pulls
+\texttt{WAVECAR} and \texttt{CHGCAR} from \texttt{02\_scf} at run time.
+If \texttt{02\_scf} has been converted in place for LOBSTER
+(\texttt{ISYM=0}/\texttt{$-$1} in its INCAR, as done by the
+high-throughput \texttt{run\_scf\_for\_lobster.sh}), the
+\texttt{WAVECAR} copy is skipped --- it holds the full, unsymmetrised
+k-mesh, which the ISYM=2 run cannot restart from --- and VASP
+regenerates the orbitals from the \texttt{CHGCAR}, which the LOBSTER
+conversion (a fixed-charge NSCF with \texttt{LCHARG=.FALSE.}) leaves
+untouched.  If the symmetry-off INCAR is \emph{not} a fixed-charge
+NSCF, a warning is printed that the \texttt{CHGCAR} itself may stem
+from a symmetry-off SCF and a symmetric SCF should be re-run first.
 
 \texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
 writes:

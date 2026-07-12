@@ -253,6 +253,12 @@
 │   SOC / HSE06 / R2SCAN       → IBRION=6, LCALCEPS=.TRUE.  (finite field;     │
 │                                needs an insulating system, recent VASP 6)    │
 │ KPAR and NCORE are forced to 1 — required by both routes.                     │
+│ ISYM = 2 is enforced (symmetry imposed): a symmetry-off ISYM=0/-1 — e.g.      │
+│ from a global INCAR override block meant for LOBSTER/NSCF — never leaks in.   │
+│ Inputs come from 02_scf at run time (copy_from_scf.sh). If 02_scf was         │
+│ converted in place for LOBSTER (ISYM=0/-1), its WAVECAR is skipped (k-mesh    │
+│ mismatch) and DFPT starts from the still-symmetric CHGCAR; a warning is       │
+│ printed if the CHGCAR itself may be from a symmetry-off SCF.                  │
 │                                                                               │
 │ Example instructions.txt:                                                     │
 │     Project: GaAs                                                             │
