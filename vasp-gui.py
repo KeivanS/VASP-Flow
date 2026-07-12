@@ -597,6 +597,18 @@ def _plot_locked(fn):
             return fn(*a, **k)
     return _wrap
 
+def _dos_window(energies, dos_total):
+    """DOS energy window spanning smallest→largest eigenvalue: the range where
+    the total DOS is non-zero (+0.5 eV margin), trimming the empty EMIN/EMAX
+    padding. Total and projected DOS both call this, so they share one window."""
+    import numpy as np
+    d = np.abs(np.asarray(dos_total))
+    nz = np.where(d > 1e-3 * d.max())[0] if d.max() > 0 else []
+    if len(nz) == 0:
+        return float(np.min(energies)), float(np.max(energies))
+    return float(energies[nz[0]]) - 0.5, float(energies[nz[-1]]) + 0.5
+
+
 @_plot_locked
 def _cumulative_dos_plot(dos_dir, out_png, project_label):
     """Read DOSCAR + POSCAR and save a cumulative DOS PNG. No pymatgen needed.
@@ -651,8 +663,8 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
         else:
             el_dos_up[el] += d[:, 1:].sum(axis=1)
 
-    xmin = float(CONFIG.get('dos_xmin', -6))
-    xmax = float(CONFIG.get('dos_xmax',  6))
+    dos_tot = tot[:, 1] + (tot[:, 2] if spin_pol else 0.0)
+    xmin, xmax = _dos_window(energies, dos_tot)
     mask = (energies >= xmin) & (energies <= xmax)
     en   = energies[mask]
 
@@ -790,8 +802,7 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list):
     if not keys:
         return False
 
-    xmin = float(CONFIG.get('dos_xmin', -6))
-    xmax = float(CONFIG.get('dos_xmax', 6))
+    xmin, xmax = _dos_window(energies, tot[:, 1] + (tot[:, 2] if spin_pol else 0.0))
     mask = (energies >= xmin) & (energies <= xmax)
     en = energies[mask]
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -1280,8 +1291,12 @@ def api_plot(slug, ptype):
             os.path.join(ana,          'dos.png'),
         ]
 
-    for p in candidates:
-        if os.path.exists(p): return send_file(p, mimetype='image/png')
+    # DOS plots are always regenerated (fast, from DOSCAR) so total and
+    # projected share the current full-range window and never serve a stale
+    # sumo PNG with a different energy axis.
+    if ptype not in ('dos_total', 'dos_proj'):
+        for p in candidates:
+            if os.path.exists(p): return send_file(p, mimetype='image/png')
 
     # ── generate band plot (EIGENVAL is the default; sumo is a fallback) ─────
     if ptype == 'bands':
@@ -2497,7 +2512,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
           <input id="dfpt_ediff" value="1E-8" placeholder="1E-8"></div>
       </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Runs VASP linear response (IBRION=8, LEPSILON=.TRUE.) to compute Born effective charges, the dielectric tensor (electronic &epsilon;<sub>&infin;</sub>, ionic contribution, and total static &epsilon;<sub>0</sub>) and piezoelectric tensors. With SOC, HSE06 or R2SCAN — which VASP's DFPT does not support — the finite-field route (LCALCEPS=.TRUE., IBRION=6) is generated instead. KPAR/NCORE are forced to 1 (required by both routes). Results are extracted to <code>born_charges.txt</code> and a <code>BORN</code> file for phonon LO-TO splitting.
+        Runs VASP linear response (IBRION=8, LEPSILON=.TRUE.) to compute Born effective charges, the dielectric tensor (electronic &epsilon;<sub>&infin;</sub>, ionic contribution, and total static &epsilon;<sub>0</sub>) and piezoelectric tensors. With SOC, HSE06 or R2SCAN — which VASP's DFPT does not support — the finite-field route (LCALCEPS=.TRUE., IBRION=6) is generated instead. KPAR/NCORE are forced to 1 (required by both routes), and ISYM=2 is enforced — symmetry stays imposed, so a symmetry-off ISYM=0/&minus;1 (e.g. from a global INCAR override meant for the LOBSTER NSCF) never leaks into this step. Results are extracted to <code>born_charges.txt</code> and a <code>BORN</code> file for phonon LO-TO splitting.
       </div>
     </div>
   </div>
