@@ -1189,7 +1189,9 @@ fi'''
             if has_dos:
                 f.write('echo "=== DOS ==="\n')
                 f.write('echo "  Cumulative DOS (by element, from DOSCAR)..."\n')
-                f.write('python3 "$HERE/04_dos/plot_cumulative_dos.py"\n\n')
+                f.write('if [ -f "$HERE/04_dos/plot_cumulative_dos.py" ]; then '
+                        'python3 "$HERE/04_dos/plot_cumulative_dos.py"; '
+                        'else echo "  (plot_cumulative_dos.py missing — regenerate the project)"; fi\n\n')
                 f.write('if command -v sumo-dosplot &>/dev/null; then\n')
                 f.write('    cd "$HERE/04_dos"\n')
                 if sumo_orb:
@@ -1204,10 +1206,10 @@ fi'''
                 f.write('    cp "$HERE/04_dos/DOSCAR" "$HERE/analysis/"\n')
                 f.write('fi\n\n')
 
-            # ── ELF along nearest-neighbour bonds (only if ELFCAR present) ─
+            # ── ELF along nearest-neighbour bonds + 2D plane (if ELFCAR present) ─
             if has_scf and self._gen_elf_bonds_script(ana):
-                f.write('if [ -f "$HERE/02_scf/ELFCAR" ]; then\n')
-                f.write('    echo "=== ELF along nearest-neighbour bonds ==="\n')
+                f.write('if [ -f "$HERE/02_scf/ELFCAR" ] && [ -f "$HERE/analysis/plot_elf_bonds.py" ]; then\n')
+                f.write('    echo "=== ELF (bonds + 2D plane) ==="\n')
                 f.write('    ( cd "$HERE/analysis" && python3 plot_elf_bonds.py '
                         '"$HERE/02_scf/ELFCAR" ) 2>&1\n')
                 f.write('    echo "  Saved: analysis/*_elf_bonds.* and *_elf_plane.*"\n')
