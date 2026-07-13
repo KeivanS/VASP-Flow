@@ -441,7 +441,15 @@ def api_run_phase2():
     slug = d['project']
     encut, kmesh, kmesh_dos = d.get('encut',''), d.get('kmesh',''), d.get('kmesh_dos','') or d.get('kmesh','')
     pd = _pd(slug)
-    if not encut or not kmesh: return jsonify(error='ENCUT and k-mesh are required'), 400
+    if not encut or not kmesh:
+        # Fall back to the auto-selected values from the convergence tests
+        auto  = _converged_params(slug)
+        encut = encut or auto.get('encut', '')
+        kmesh = kmesh or auto.get('kmesh', '')
+        kmesh_dos = kmesh_dos or kmesh
+    if not encut or not kmesh:
+        return jsonify(error='ENCUT and k-mesh are required — none entered and '
+                             'no auto-selection available (run convergence first)'), 400
 
     for step in _steps(slug):
         incar = os.path.join(pd, step, 'INCAR')
@@ -547,6 +555,29 @@ def api_status(slug):
                 if s in out or s in ('convergence','phase2','all'): out[s] = info['status']
     return jsonify(out)
 
+def _converged_params(slug):
+    """Parse 00_convergence/converged_params.txt — the ENCUT/k-mesh selected
+    by choose_params.py (force < 5 meV/Å on the shifted atom 1, pressure
+    < 0.5 kbar between successive values). Runs the chooser if the file is
+    missing but choose_params.py exists. Returns {} when nothing available."""
+    conv     = os.path.join(_pd(slug), '00_convergence')
+    txt_path = os.path.join(conv, 'converged_params.txt')
+    chooser  = os.path.join(conv, 'choose_params.py')
+    if not os.path.isfile(txt_path) and os.path.isfile(chooser):
+        subprocess.run([sys.executable, chooser], capture_output=True, cwd=conv)
+    out = {}
+    if os.path.isfile(txt_path):
+        for line in Path(txt_path).read_text().splitlines():
+            m = re.match(r'^(\w+)\s*=\s*(.+)$', line.strip())
+            if m:
+                out[m.group(1).lower()] = m.group(2).strip()
+    return out
+
+@app.route('/api/converged_params/<slug>')
+def api_converged_params(slug):
+    """Auto-selected convergence parameters for prefilling the Phase-2 form."""
+    return jsonify(_converged_params(slug))
+
 @app.route('/api/convergence_data/<slug>/<dtype>')
 def api_conv_data(slug, dtype):
     fname = 'encut_convergence.dat' if dtype=='encut' else 'kpoint_convergence.dat'
@@ -610,7 +641,7 @@ def _dos_window(energies, dos_total):
 
 
 @_plot_locked
-def _cumulative_dos_plot(dos_dir, out_png, project_label):
+def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
     """Read DOSCAR + POSCAR and save a cumulative DOS PNG. No pymatgen needed.
     Spin-polarized: spin-up plotted positive, spin-down mirrored negative."""
     import matplotlib
@@ -721,6 +752,8 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
     sc.set_scientific(False)
     ax.yaxis.set_major_formatter(sc)
     ax.axvline(0, color='k', ls='--', lw=0.8)
+    if emin is not None: xmin = float(emin)     # user zoom window override
+    if emax is not None: xmax = float(emax)
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
     ax.set_title(f'Cumulative DOS — {project_label}')
@@ -732,7 +765,8 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label):
 
 
 @_plot_locked
-def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list):
+def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
+                              emin=None, emax=None):
     """Cumulative (stacked) orbital-projected DOS from DOSCAR (LORBIT=11).
 
     proj_list = [{element, orbitals:[s,p,d,f]}]. Each (element, orbital) series
@@ -838,6 +872,8 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list):
     sc = ScalarFormatter(useOffset=False, useMathText=False); sc.set_scientific(False)
     ax.yaxis.set_major_formatter(sc)
     ax.axvline(0, color='gray', ls='--', lw=0.8)
+    if emin is not None: xmin = float(emin)     # user zoom window override
+    if emax is not None: xmax = float(emax)
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
     ax.set_title(f'Projected DOS (cumulative) — {project_label}')
@@ -850,7 +886,8 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list):
 
 
 @_plot_locked
-def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
+def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
+                    emin=None, emax=None):
     """Plot COHP, COBI or COOP vs energy from *CAR.lobster (portrait).
 
     Thick black = TOTAL over all bonds (sum, per cell). Thin overlaid lines =
@@ -913,27 +950,43 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
 
     # Integrated value at E_F (ICOHP/ICOBI/ICOOP, LOBSTER sign convention)
     icoxp = float(np.interp(0.0, E, itotal))
-    # Bonding->antibonding threshold: crossing of the total curve nearest to,
-    # and below, E_F (on the bonding-positive curve, i.e. where it goes + -> -).
+    # Antibonding integral up to E_F (algebraic, LOBSTER sign convention:
+    # COHP antibonding > 0; COBI/COOP antibonding < 0) and the antibonding
+    # fraction fAB = |A| / (|B| + |A|), with B + A = ICOxP(E_F).
+    below = E <= 0.0
+    a_int = sign * float(np.trapz(np.minimum(total, 0.0)[below], E[below]))
+    b_int = icoxp - a_int
+    fab   = abs(a_int) / (abs(a_int) + abs(b_int)) if abs(a_int) + abs(b_int) > 0 else 0.0
+    # Bonding->antibonding threshold: the + -> - crossing of the total
+    # (bonding-positive) curve nearest to E_F. It can sit ABOVE E_F — that is
+    # optimized bonding (all antibonding states empty), not an error.
     ecross = None
     s_arr = np.sign(total)
     for i in np.where(np.diff(s_arr) != 0)[0]:
         d = total[i + 1] - total[i]
-        if d == 0:
+        if d >= 0:                                   # keep only + -> - crossings
             continue
         e0 = E[i] - total[i] * (E[i + 1] - E[i]) / d
-        if e0 <= 0.0 and (ecross is None or e0 > ecross):
+        if ecross is None or abs(e0) < abs(ecross):
             ecross = e0
 
-    # Nearest-neighbour shell per element pair (sum of equivalent bonds, per cell)
+    # Bond-shell overlays per element pair: 1st shell (solid) + 2nd shell
+    # (dashed), each the sum of its equivalent bonds, per cell.
     nn = []
     for pair, items in sorted(groups.items()):
         dmin = min(d for d, _ in items)
-        cols = [k for d, k in items if abs(d - dmin) < 0.05]
-        nn.append((f"{pair} ({dmin:.2f} Å)", sum(curve(k) for k in cols) / 2.0))
+        shell1 = [k for d, k in items if d <= dmin * 1.05]
+        rest   = [(d, k) for d, k in items if d > dmin * 1.05]
+        nn.append((f"{pair} ({dmin:.2f} Å)",
+                   sum(curve(k) for k in shell1) / 2.0, '-'))
+        if rest:
+            d2 = min(d for d, _ in rest)
+            shell2 = [k for d, k in rest if d <= d2 * 1.05]
+            nn.append((f"{pair} ({d2:.2f} Å, 2nd)",
+                       sum(curve(k) for k in shell2) / 2.0, '--'))
 
-    emin = float(CONFIG.get('dos_xmin', -10))
-    emax = float(CONFIG.get('dos_xmax', 5))
+    emin = float(CONFIG.get('dos_xmin', -10)) if emin is None else float(emin)
+    emax = float(CONFIG.get('dos_xmax', 5))   if emax is None else float(emax)
     m  = (E >= emin) & (E <= emax)
     Em = E[m]
     xlabel = {'cohp': '−COHP', 'cobi': 'COBI', 'coop': 'COOP'}[which] + ' (bonding +)'
@@ -943,8 +996,8 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
     ax.fill_betweenx(Em, 0, t, where=(t >= 0), color='#2a9d4a', alpha=0.30)
     ax.fill_betweenx(Em, 0, t, where=(t < 0),  color='#c0392b', alpha=0.30)
     ax.plot(t, Em, color='k', lw=1.8, label='total (all bonds)')
-    for lbl, yy in nn:                            # nearest-neighbour overlays (thin)
-        ax.plot(yy[m], Em, lw=0.9, alpha=0.9, label=lbl)
+    for lbl, yy, ls in nn:                        # bond-shell overlays (thin)
+        ax.plot(yy[m], Em, lw=0.9, alpha=0.9, ls=ls, label=lbl)
     ax.axvline(0, color='k', lw=0.7)              # bonding / antibonding boundary
     ax.axhline(0, color='gray', lw=0.9, ls='--')  # Fermi level
     ax.set_ylim(emin, emax)
@@ -954,10 +1007,14 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp'):
     ax.legend(fontsize=7, loc='lower right')
     ax.grid(True, alpha=0.2)
 
-    # Info box: integrated value at E_F + bonding→antibonding threshold energy.
+    # Info box: total + antibonding integrals at E_F, antibonding fraction,
+    # and the bonding→antibonding threshold energy (nearest E_F, either side).
     iname = {'cohp': 'ICOHP', 'cobi': 'ICOBI', 'coop': 'ICOOP'}[which]
-    box = f"{iname}(E$_F$) = {icoxp:.3f} eV\n" + (
-          f"B→AB @ {ecross:.2f} eV" if ecross is not None else "B→AB: none < E$_F$")
+    unit  = ' eV' if which == 'cohp' else ''
+    box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}\n"
+           f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}  (antibonding)\n"
+           f"f$_{{AB}}$ = {100*fab:.1f}%\n"
+           + (f"B→AB @ {ecross:+.2f} eV" if ecross is not None else "B→AB: no crossing"))
     ax.text(0.03, 0.97, box, transform=ax.transAxes, fontsize=7.5, va='top', ha='left',
             bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     plt.tight_layout()
@@ -1231,13 +1288,27 @@ def _elf_plane_png(pd_, ana):
     return hits[0] if hits else None
 
 
+def _ewin_args():
+    """Optional ?emin=&emax= energy-window (zoom) override from the request."""
+    out = []
+    for key in ('emin', 'emax'):
+        v = request.args.get(key, '').strip()
+        try:
+            out.append(float(v) if v else None)
+        except ValueError:
+            out.append(None)
+    return tuple(out)
+
 @app.route('/api/plot/<slug>/<ptype>')
 def api_plot(slug, ptype):
-    """Serve plot image. Normalise ptype, run sumo if needed, return png."""
+    """Serve plot image. Normalise ptype, run sumo if needed, return png.
+    ?emin=&emax= zoom the energy axis (LOBSTER, DOS, bands)."""
     pd_  = _pd(slug)
     ana  = os.path.join(pd_, 'analysis')
     os.makedirs(ana, exist_ok=True)
     base = _slug_base(slug)
+    zmin, zmax = _ewin_args()
+    zoomed = zmin is not None or zmax is not None
 
     # Normalise: bare 'dos' → prefer projected
     if ptype == 'dos': ptype = 'dos_proj'
@@ -1266,7 +1337,8 @@ def api_plot(slug, ptype):
         # current code/data rather than a stale cached PNG.
         for ld in (os.path.join(pd_, '08_lobster'), os.path.join(pd_, '02_scf')):
             if os.path.isfile(os.path.join(ld, fname)):
-                if _cohp_cobi_plot(ld, out, slug, ptype) and os.path.exists(out):
+                if (_cohp_cobi_plot(ld, out, slug, ptype, emin=zmin, emax=zmax)
+                        and os.path.exists(out)):
                     return send_file(out, mimetype='image/png')
                 break
         if os.path.exists(out):                  # fall back to a cached copy
@@ -1293,8 +1365,9 @@ def api_plot(slug, ptype):
 
     # DOS plots are always regenerated (fast, from DOSCAR) so total and
     # projected share the current full-range window and never serve a stale
-    # sumo PNG with a different energy axis.
-    if ptype not in ('dos_total', 'dos_proj'):
+    # sumo PNG with a different energy axis. A zoom request also skips the
+    # cache — it renders a fresh plot with the requested window.
+    if ptype not in ('dos_total', 'dos_proj') and not zoomed:
         for p in candidates:
             if os.path.exists(p): return send_file(p, mimetype='image/png')
 
@@ -1313,6 +1386,12 @@ def api_plot(slug, ptype):
                         efermi = float(m[-1]); break
 
             ymin, ymax, labels = _band_plot_opts(slug)
+            if zoomed:
+                # zoom renders under its own name so the cached normal-range
+                # plot is not clobbered
+                if zmin is not None: ymin = zmin
+                if zmax is not None: ymax = zmax
+                base = f'{base}_zoom'
             band_png = os.path.join(ana, f'{base}_band.png')
 
             # DEFAULT: plot directly from EIGENVAL (survives a truncated vasprun.xml)
@@ -1345,6 +1424,8 @@ def api_plot(slug, ptype):
                     _spin_band_plot(src, efermi, ymin, ymax, ana, base)
                 except Exception:
                     pass
+            if zoomed and os.path.exists(band_png):
+                return send_file(band_png, mimetype='image/png')
     else:
         src = os.path.join(pd_, '04_dos')
         if os.path.isdir(src):
@@ -1356,10 +1437,11 @@ def api_plot(slug, ptype):
             # Both DOS plots are our own cumulative (stacked) plotters:
             #   total  = total black + element-stacked
             #   proj   = (element, orbital)-stacked
-            _cumulative_dos_plot(src, os.path.join(ana, f'{base}_cumulative_dos.png'), slug)
+            _cumulative_dos_plot(src, os.path.join(ana, f'{base}_cumulative_dos.png'),
+                                 slug, emin=zmin, emax=zmax)
             if proj_list:
                 _cumulative_proj_dos_plot(src, os.path.join(ana, f'{base}_proj_dos.png'),
-                                          slug, proj_list)
+                                          slug, proj_list, emin=zmin, emax=zmax)
 
     for p in candidates:
         if os.path.exists(p): return send_file(p, mimetype='image/png')
@@ -1421,10 +1503,12 @@ def api_clear_plots(slug):
 
 @app.route('/api/plot_pdf/<slug>/<ptype>')
 def api_plot_pdf(slug, ptype):
-    """Serve a sumo plot PDF for download."""
+    """Serve a plot PDF for download. ?emin=&emax= zoom the energy axis."""
     pd_  = _pd(slug)
     ana  = os.path.join(pd_, 'analysis')
     base = _slug_base(slug)
+    zmin, zmax = _ewin_args()
+    zoomed = zmin is not None or zmax is not None
     if ptype in ('elf', 'elf_plane'):
         import glob
         _elf_bond_plot(pd_, ana)
@@ -1441,15 +1525,35 @@ def api_plot_pdf(slug, ptype):
                  'coop': 'COOPCAR.lobster'}[ptype]
         for ld in (os.path.join(pd_, '08_lobster'), os.path.join(pd_, '02_scf')):
             if os.path.isfile(os.path.join(ld, fname)):
-                _cohp_cobi_plot(ld, out, slug, ptype)
+                _cohp_cobi_plot(ld, out, slug, ptype, emin=zmin, emax=zmax)
                 break
         if os.path.exists(out):
             return send_file(out, mimetype='application/pdf', as_attachment=True,
                              download_name=os.path.basename(out))
         return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
     if ptype == 'bands':
-        candidates = [os.path.join(ana, f'{base}_band.pdf'),
-                      os.path.join(pd_, '03_bands', f'{base}_band.pdf')]
+        if zoomed:
+            # regenerate at the requested window under a _zoom name
+            src = os.path.join(pd_, '03_bands')
+            efermi = None
+            for oc in [os.path.join(pd_, '04_dos', 'OUTCAR'),
+                       os.path.join(pd_, '02_scf', 'OUTCAR')]:
+                if os.path.exists(oc):
+                    m = re.findall(r'E-fermi\s*:\s*([-\d.]+)',
+                                   Path(oc).read_text(errors='replace'))
+                    if m:
+                        efermi = float(m[-1]); break
+            ymin, ymax, labels = _band_plot_opts(slug)
+            if zmin is not None: ymin = zmin
+            if zmax is not None: ymax = zmax
+            try:
+                _eigenval_band_plot(src, ana, f'{base}_zoom', ymin, ymax, labels, efermi)
+            except Exception:
+                pass
+            candidates = [os.path.join(ana, f'{base}_zoom_band.pdf')]
+        else:
+            candidates = [os.path.join(ana, f'{base}_band.pdf'),
+                          os.path.join(pd_, '03_bands', f'{base}_band.pdf')]
     elif ptype == 'dos_proj':  # cumulative projected DOS as PDF on demand
         os.makedirs(ana, exist_ok=True)
         out = os.path.join(ana, f'{base}_proj_dos.pdf')
@@ -1459,7 +1563,8 @@ def api_plot_pdf(slug, ptype):
             try: proj_list = json.loads(Path(proj_json).read_text())
             except Exception: pass
         if proj_list:
-            _cumulative_proj_dos_plot(os.path.join(pd_, '04_dos'), out, slug, proj_list)
+            _cumulative_proj_dos_plot(os.path.join(pd_, '04_dos'), out, slug, proj_list,
+                                      emin=zmin, emax=zmax)
         if os.path.exists(out):
             return send_file(out, mimetype='application/pdf', as_attachment=True,
                              download_name=os.path.basename(out))
@@ -1467,7 +1572,8 @@ def api_plot_pdf(slug, ptype):
     else:  # dos_total → generate the cumulative total as PDF on demand
         os.makedirs(ana, exist_ok=True)
         out = os.path.join(ana, f'{base}_cumulative_dos.pdf')
-        _cumulative_dos_plot(os.path.join(pd_, '04_dos'), out, slug)
+        _cumulative_dos_plot(os.path.join(pd_, '04_dos'), out, slug,
+                             emin=zmin, emax=zmax)
         if os.path.exists(out):
             return send_file(out, mimetype='application/pdf', as_attachment=True,
                              download_name=os.path.basename(out))
@@ -3317,6 +3423,7 @@ function buildWorkflow(steps,hasConv){
         <div class="f"><label>K-mesh for relax / SCF</label><input id="kmesh_p2" placeholder="e.g. 12x12x6"></div>
         <div class="f"><label>K-mesh for DOS (denser)</label><input id="kmesh_dos_p2" placeholder="e.g. 24x24x12"></div>
       </div>
+      <div id="conv-auto-note" style="font-size:11px;color:var(--sub);margin-top:6px;"></div>
     </div>
     <div class="phase"><div class="phase-title">Phase 2 — Production Calculations</div>`;
   }
@@ -3338,6 +3445,63 @@ function buildWorkflow(steps,hasConv){
   h+=`<div id="log-phase2" class="term hidden" style="margin-top:10px;"></div>`;
   h+=`<div id="log-all"    class="term hidden" style="margin-top:10px;"></div>`;
   document.getElementById('wf').innerHTML=h;
+  if(hasConv) prefillConvParams();
+}
+
+// ── energy-window zoom: re-render plots server-side with ?emin=&emax= ──────
+const EWIN_GROUPS={bands:['bands'],dos:['dos_total','dos_proj'],
+                   lobster:['cohp','cobi','coop']};
+function ewinBar(group){
+  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--sub);margin-bottom:8px;">
+    <span>Energy window (eV):</span>
+    <input id="ewin-min-${group}" type="number" step="0.5" placeholder="min" style="width:70px;">
+    <span>to</span>
+    <input id="ewin-max-${group}" type="number" step="0.5" placeholder="max" style="width:70px;">
+    <button class="btn btn-ghost btn-sm" onclick="applyEwin('${group}')">🔍 Zoom</button>
+    <button class="btn btn-ghost btn-sm" onclick="resetEwin('${group}')">Reset</button>
+  </div>`;
+}
+function _ewinQS(group){
+  const mn=document.getElementById(`ewin-min-${group}`)?.value??'';
+  const mx=document.getElementById(`ewin-max-${group}`)?.value??'';
+  let q='';
+  if(mn!=='')q+=`&emin=${mn}`;
+  if(mx!=='')q+=`&emax=${mx}`;
+  return q;
+}
+function applyEwin(group){
+  const q=_ewinQS(group);
+  (EWIN_GROUPS[group]||[]).forEach(pt=>{
+    const img=document.getElementById('img-'+pt)||document.querySelector(`img[data-ptype="${pt}"]`);
+    if(img)img.src=`/api/plot/${PROJECT}/${pt}?t=${Date.now()}${q}`;
+    const pdf=document.getElementById('pdf-'+pt);
+    if(pdf)pdf.href=`/api/plot_pdf/${PROJECT}/${pt}${q?('?'+q.slice(1)):''}`;
+  });
+}
+function resetEwin(group){
+  ['min','max'].forEach(k=>{const e=document.getElementById(`ewin-${k}-${group}`);if(e)e.value='';});
+  applyEwin(group);
+}
+
+// ── prefill Phase-2 inputs from choose_params.py auto-selection ────────────
+async function prefillConvParams(){
+  try{
+    const r=await fetch(`/api/converged_params/${PROJECT}`); if(!r.ok)return;
+    const d=await r.json();
+    const note=[];
+    if(d.encut && !v('encut_p2')){
+      document.getElementById('encut_p2').value=d.encut;
+      note.push(`ENCUT ${d.encut}${d.encut_converged==='no'?' <b style="color:var(--red,#ef4444)">(NOT converged — extend the range)</b>':''}`);
+    }
+    if(d.kmesh && !v('kmesh_p2')){
+      document.getElementById('kmesh_p2').value=d.kmesh;
+      note.push(`k-mesh ${d.kmesh}${d.kmesh_converged==='no'?' <b style="color:var(--red,#ef4444)">(NOT converged — extend the range)</b>':''}`);
+    }
+    if(note.length){
+      const n=document.getElementById('conv-auto-note');
+      if(n) n.innerHTML='Auto-selected (force change &lt;5 meV/Å on shifted atom 1, pressure change &lt;0.5 kbar): '+note.join(' · ');
+    }
+  }catch(e){}
 }
 
 function stepRow(step,num,label){
@@ -3555,8 +3719,9 @@ async function buildResults(){
     <div class="card-title">Band Structure</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="runSumo('bands')">▶ Run sumo-bandplot</button>
-      <a href="/api/plot_pdf/${PROJECT}/bands" class="btn btn-ghost btn-sm" download title="Download PDF">⬇ PDF</a>
+      <a id="pdf-bands" href="/api/plot_pdf/${PROJECT}/bands" class="btn btn-ghost btn-sm" download title="Download PDF">⬇ PDF</a>
     </div>
+    ${ewinBar('bands')}
     <div id="log-sumo-bands" class="term hidden sumo-log"></div>
     <div style="text-align:center;">
       <img id="img-bands" src="/api/plot/${PROJECT}/bands?t=${ts}" style="max-width:100%;max-height:500px;cursor:pointer;"
@@ -3570,9 +3735,10 @@ async function buildResults(){
     <div class="card-title">Density of States</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="runSumo('dos')">↻ Re-plot DOS</button>
-      <a href="/api/plot_pdf/${PROJECT}/dos_total" class="btn btn-ghost btn-sm" download title="Download total DOS PDF">⬇ Total PDF</a>
-      <a href="/api/plot_pdf/${PROJECT}/dos_proj"  class="btn btn-ghost btn-sm" download title="Download projected DOS PDF">⬇ Proj PDF</a>
+      <a id="pdf-dos_total" href="/api/plot_pdf/${PROJECT}/dos_total" class="btn btn-ghost btn-sm" download title="Download total DOS PDF">⬇ Total PDF</a>
+      <a id="pdf-dos_proj" href="/api/plot_pdf/${PROJECT}/dos_proj"  class="btn btn-ghost btn-sm" download title="Download projected DOS PDF">⬇ Proj PDF</a>
     </div>
+    ${ewinBar('dos')}
     <div id="log-sumo-dos" class="term hidden sumo-log"></div>
     <div class="plot-grid">
       <div class="plot-card">
@@ -3620,10 +3786,11 @@ async function buildResults(){
     <div class="card-title">LOBSTER Bonding (COHP / COBI / COOP)</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="replotLobster()">↻ Re-plot</button>
-      <a href="/api/plot_pdf/${PROJECT}/cohp" class="btn btn-ghost btn-sm" download title="Download COHP PDF">⬇ COHP PDF</a>
-      <a href="/api/plot_pdf/${PROJECT}/cobi" class="btn btn-ghost btn-sm" download title="Download COBI PDF">⬇ COBI PDF</a>
-      <a href="/api/plot_pdf/${PROJECT}/coop" class="btn btn-ghost btn-sm" download title="Download COOP PDF">⬇ COOP PDF</a>
+      <a id="pdf-cohp" href="/api/plot_pdf/${PROJECT}/cohp" class="btn btn-ghost btn-sm" download title="Download COHP PDF">⬇ COHP PDF</a>
+      <a id="pdf-cobi" href="/api/plot_pdf/${PROJECT}/cobi" class="btn btn-ghost btn-sm" download title="Download COBI PDF">⬇ COBI PDF</a>
+      <a id="pdf-coop" href="/api/plot_pdf/${PROJECT}/coop" class="btn btn-ghost btn-sm" download title="Download COOP PDF">⬇ COOP PDF</a>
     </div>
+    ${ewinBar('lobster')}
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start;">
       <div class="plot-card" style="min-width:0;">
         <h4>−COHP(E)</h4>

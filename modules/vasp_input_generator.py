@@ -19,6 +19,58 @@ _MPI_NP      = int(os.environ.get('MPI_NP',  '1'))
 _WANNIER90_X = os.environ.get('WANNIER90_X', 'wannier90.x')
 _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster-5.1.0-OSX')
 
+
+def write_shifted_poscar(src, dst, shift_cart=(0.01, 0.02, 0.03)):
+    """Copy POSCAR src → dst with atom 1 displaced by shift_cart (Å, CARTESIAN).
+
+    Used for the convergence-test POSCAR only: the displacement breaks the
+    site symmetry so the force on atom 1 is non-zero and its convergence can
+    be tracked. Production steps keep the unshifted POSCAR.
+
+    Handles Direct and Cartesian coordinate modes (the Cartesian shift is
+    converted through the lattice for Direct mode), an optional Selective
+    dynamics block, VASP4/5 headers, and a negative scale factor (target
+    volume). Everything after the shifted line is copied through verbatim.
+    """
+    with open(src) as f:
+        lines = f.readlines()
+
+    scale_raw = float(lines[1].split()[0])
+    latt = np.array([[float(x) for x in lines[2 + i].split()[:3]]
+                     for i in range(3)])
+    if scale_raw < 0:                      # negative scale = target cell volume
+        vol   = abs(np.linalg.det(latt))
+        scale = (-scale_raw / vol) ** (1.0 / 3.0)
+    else:
+        scale = scale_raw
+    A = latt * scale                       # rows = lattice vectors in Å
+
+    # Header: line 5 is element symbols (VASP5) or counts (VASP4)
+    idx = 5
+    if not lines[5].split()[0].lstrip('+-').isdigit():
+        idx = 6                            # skip the symbols line
+    idx += 1                               # past the counts line
+    if lines[idx].strip()[:1].upper() == 'S':
+        idx += 1                           # past "Selective dynamics"
+    mode_cartesian = lines[idx].strip()[:1].upper() in ('C', 'K')
+    first_atom = idx + 1
+
+    parts = lines[first_atom].split()
+    pos = np.array([float(x) for x in parts[:3]])
+    shift = np.asarray(shift_cart, dtype=float)
+    if mode_cartesian:
+        pos += shift / scale               # stored Cartesian coords are × scale
+    else:
+        pos += shift @ np.linalg.inv(A)    # Δfrac = Δcart · A⁻¹  (cart = frac·A)
+    tail = parts[3:]                       # selective-dynamics flags etc.
+    lines[first_atom] = ('  ' + '  '.join(f'{x:.16f}' for x in pos)
+                         + ('   ' + ' '.join(tail) if tail else '') + '\n')
+    lines[0] = (lines[0].rstrip('\n')
+                + '  [atom 1 shifted by ({} {} {}) Ang for force convergence]\n'.format(*shift))
+
+    with open(dst, 'w') as f:
+        f.writelines(lines)
+
 # ── Default k-paths per Bravais lattice type (Setyawan & Curtarolo 2010) ─────
 # All coordinates are fractional reciprocal (VASP "rec" format) in the
 # PRIMITIVE cell reciprocal basis for cF/cI/hP/tP/oP/rP/mP, or the
@@ -161,9 +213,56 @@ class VASPInputGenerator:
             return self._profile_get('vasp_gam', _VASP_GAM)
         return self._profile_get('vasp_std', _VASP_STD)
 
+    def _second_shell_cutoff(self, default=4.0) -> float:
+        """Bond-detection range (Å) for the lobsterin cohp/cobiGenerator:
+        large enough to include every atom's 2nd-neighbour shell (+10%), so
+        1st AND 2nd shell bonds appear in the COHP/COBI/COOP output. Floor at
+        4.0 Å (the old fixed value), cap at 6.0 Å to keep the pair list sane.
+        """
+        try:
+            lines = open(self.poscar).readlines()
+            scale_raw = float(lines[1].split()[0])
+            latt = np.array([[float(x) for x in lines[2 + i].split()[:3]]
+                             for i in range(3)])
+            if scale_raw < 0:
+                scale = (-scale_raw / abs(np.linalg.det(latt))) ** (1.0 / 3.0)
+            else:
+                scale = scale_raw
+            A = latt * scale
+            idx = 5
+            if not lines[5].split()[0].lstrip('+-').isdigit():
+                idx = 6
+            counts = [int(t) for t in lines[idx].split()]
+            idx += 1
+            if lines[idx].strip()[:1].upper() == 'S':
+                idx += 1
+            cartesian = lines[idx].strip()[:1].upper() in ('C', 'K')
+            n = sum(counts)
+            coords = np.array([[float(x) for x in lines[idx + 1 + i].split()[:3]]
+                               for i in range(n)])
+            cart = coords * scale if cartesian else coords @ A
+            shifts = np.array([[i, j, k] for i in (-1, 0, 1)
+                               for j in (-1, 0, 1) for k in (-1, 0, 1)],
+                              dtype=float) @ A
+            cut = 0.0
+            for i in range(n):
+                d = np.linalg.norm(cart[None, :, :] + shifts[:, None, :]
+                                   - cart[i], axis=2).ravel()
+                d = d[d > 1e-3]
+                dmin = d.min()
+                beyond = d[d > dmin * 1.2]
+                cut = max(cut, beyond.min() if beyond.size else dmin)
+            return round(min(max(cut * 1.10, default), 6.0), 2)
+        except Exception:
+            return default
+
     def _get_lobster_exec(self) -> str:
-        """LOBSTER binary (profile 'lobster_x' overrides site.env LOBSTER_X)."""
-        return self._profile_get('lobster_x', _LOBSTER_X)
+        """LOBSTER binary (profile 'lobster_x' overrides site.env LOBSTER_X).
+
+        ~ is expanded here: the generated run.sh uses the path inside a quoted
+        variable, where the shell would NOT expand a literal tilde.
+        """
+        return os.path.expanduser(self._profile_get('lobster_x', _LOBSTER_X))
 
     def _get_mpi_cmd(self, vasp_exec: str) -> str:
         """Build the MPI launch line. Profile mpi_cmd overrides site.env MPI_LAUNCH.
@@ -450,11 +549,14 @@ class VASPInputGenerator:
 
         # Editable lobsterin (run.sh uses it as-is if present). Energy window is
         # Fermi-referenced (E_F = 0); edit it or COHPStartEnergy for deep states.
+        # The bond-generator range reaches the 2nd-neighbour shell so 2nd-shell
+        # bonds (e.g. metal-metal in rocksalt) appear in COHP/COBI/COOP.
         sigma = self.instructions.get('lobster_sigma') or '0.10'
+        bondmax = self._second_shell_cutoff()
         with open(f"{output_dir}/lobsterin", 'w') as f:
             f.write("basisSet pbeVaspFit2015\n"
-                    "cohpGenerator from 0.8 to 4\n"
-                    "cobiGenerator from 0.8 to 4\n"
+                    f"cohpGenerator from 0.8 to {bondmax}\n"
+                    f"cobiGenerator from 0.8 to {bondmax}\n"
                     "COHPStartEnergy -20\n"
                     "COHPEndEnergy 5\n"
                     f"gaussianSmearingWidth {sigma}\n")
@@ -2026,6 +2128,7 @@ echo "Starting LOBSTER NSCF (@VEXEC@) at $(date)"
 # 2) lobsterin: use the editable file written by vasp-agent if present; else
 #    build one from the DOSCAR energy window (Fermi-referenced, E_F = 0).
 LOBSTER_BIN="${LOBSTER_BIN:-@LOBSTER@}"
+LOBSTER_BIN="${LOBSTER_BIN/#\~/$HOME}"   # a quoted ~ never expands in bash
 if [ ! -f lobsterin ]; then
     if [ ! -f DOSCAR ]; then echo "ERROR: no DOSCAR (NSCF failed?)"; exit 1; fi
     read emax emin nedos efermi _ < <(sed -n '6p' DOSCAR)
@@ -2033,8 +2136,8 @@ if [ ! -f lobsterin ]; then
     endeng=$(awk   -v a="$emax" -v f="$efermi" 'BEGIN{printf "%.4f", a-f}')
     cat > lobsterin <<LOB
 basisSet pbeVaspFit2015
-cohpGenerator from 0.8 to 4
-cobiGenerator from 0.8 to 4
+cohpGenerator from 0.8 to @BONDMAX@
+cobiGenerator from 0.8 to @BONDMAX@
 COHPStartEnergy $starteng
 COHPEndEnergy $endeng
 gaussianSmearingWidth @SIGMA@
@@ -2051,4 +2154,5 @@ echo "  Done: COHPCAR/COBICAR/COOPCAR + ICO*LIST.lobster in $HERE"
                         .replace('@VEXEC@', vasp_exec)
                         .replace('@LAUNCH@', launch_cmd)
                         .replace('@LOBSTER@', lobster_bin)
-                        .replace('@SIGMA@', str(sigma)))
+                        .replace('@SIGMA@', str(sigma))
+                        .replace('@BONDMAX@', str(self._second_shell_cutoff())))

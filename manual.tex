@@ -921,6 +921,38 @@ Results in \texttt{00\_convergence/kpoints/} and
 ./analyze_convergence.sh      # plots: energy / pressure / forces
 \end{lstlisting}
 
+\subsection{Shifted test structure}
+
+The POSCAR used in \texttt{00\_convergence} has \textbf{atom 1 displaced
+by $(0.01,\,0.02,\,0.03)$\,\AA{} (Cartesian)} so that the force on it is
+non-zero and its convergence can be tracked --- at the equilibrium
+(high-symmetry) positions the forces would vanish identically and the
+force panel would be meaningless.  The displacement is converted through
+the lattice for Direct-mode POSCARs.  All production steps
+(\texttt{01\_relax}, \texttt{02\_scf}, \dots) use the \emph{original,
+unshifted} positions.
+
+\subsection{Automatic parameter selection}
+
+After the runs, \texttt{00\_convergence/choose\_params.py} (invoked by
+\texttt{run\_convergence.sh}, \texttt{analyze\_convergence.sh}, and the
+phase-2 scripts) selects the smallest ENCUT and k-mesh from which every
+subsequent change stays below
+\[
+  \max_i \bigl|\Delta F_i^{\text{atom 1}}\bigr| < 5~\text{meV/\AA}
+  \quad\text{and}\quad
+  \max_i \bigl|\Delta \sigma_{ii}\bigr| < 0.5~\text{kbar},
+\]
+and writes the result to \texttt{00\_convergence/converged\_params.txt}.
+Phase 2 (\texttt{run\_calculations.sh}, \texttt{submit\_calculations.sh},
+and the GUI form) offers these values as defaults; when run
+\emph{non-interactively} --- e.g.\ a convergence test automatically
+followed by the SCF in a chained/nohup run --- they are applied without
+prompting.  If the criteria are not met within the tested range, the
+largest tested value is used and a \texttt{NOT CONVERGED} warning is
+issued.  Thresholds can be overridden:
+\texttt{choose\_params.py --ftol 3 --ptol 0.2}.
+
 % ============================================================
 \section{Parallelization}
 % ============================================================

@@ -13,6 +13,12 @@ A browser-based interface for setting up and running VASP density-functional-the
 | **Python ≥ 3.8** | Comes with most Linux/Mac systems. A conda environment is recommended. |
 | **MPI** | `mpirun`, `mpiexec`, or `srun` (SLURM). |
 | **sumo** | For band structure and DOS plots. |
+| **LOBSTER** | Optional — only for the COHP/COBI/COOP bonding-analysis task. Free for academic use from [cohp.de](http://www.cohp.de). Set the binary path as `LOBSTER_X` in `site.env` (or `$LOBSTER_BIN` at runtime). |
+
+> **Detailed references:** every Setup option and instructions-file keyword is documented in
+> [`QUICK_REFERENCE_GUI.txt`](QUICK_REFERENCE_GUI.txt) (browser GUI) and
+> [`QUICK_REFERENCE_AGENT.txt`](QUICK_REFERENCE_AGENT.txt) (command-line agent);
+> the full manual is [`manual.pdf`](manual.pdf). This README is the quick tour.
 
 ---
 
@@ -96,12 +102,13 @@ In the **Setup** tab:
 | Task | When to use |
 |---|---|
 | ☑ Structure relaxation | Almost always — optimises atomic positions first |
-| ☑ SCF | Self-consistent charge density — needed before bands or DOS |
+| ☑ SCF | Self-consistent charge density — needed before bands, DOS, or LOBSTER. The ELF checkbox inside it (on by default) also writes an ELFCAR for electron-localization plots |
 | ☑ Band structure | Electronic band dispersion along a k-path |
 | ☑ DOS | Density of states, optionally projected on orbitals |
 | ☐ DFPT | Born effective charges and dielectric tensor |
 | ☐ Phonons | Lattice dynamics via phonopy |
 | ☐ Wannier90 | Maximally-localised Wannier functions |
+| ☐ LOBSTER | COHP / COBI / COOP chemical-bonding analysis (`08_lobster`): a symmetry-off (ISYM=0, or −1 with SOC) NSCF from the SCF charge density, then the LOBSTER run. The bond range automatically covers 1st **and** 2nd neighbour shells. Needs the LOBSTER binary |
 
 **POTCAR** — the directory is pre-filled from System Setup. If your element has multiple PAW variants (e.g. `Ga` vs `Ga_d`), the GUI will let you choose.
 
@@ -124,7 +131,10 @@ Switch to the **Workflow** tab.
 Switch to the **Results** tab:
 - Band structure and DOS plots appear automatically after the respective steps.
 - Click **Run sumo-bandplot** or **Run sumo-dosplot** to regenerate a plot after editing settings.
+- **ELF plots** (from the SCF's ELFCAR): 1D profiles along the non-equivalent 1st- and 2nd-shell bonds, plus a 2D ELF map on the plane through an atom and its 1st/2nd neighbours.
+- **LOBSTER plots**: −COHP, COBI and COOP vs energy — total over all bonds plus per-pair 1st/2nd-shell overlays, annotated with the integral to E_F (ICOHP/ICOBI/ICOOP), the antibonding integral, the antibonding fraction f_AB, and the bonding→antibonding crossing energy.
 - Born effective charges and phonon spectra appear if you ran DFPT / phonons.
+- Bands, DOS and LOBSTER cards have an **Energy window** bar — enter min/max (eV) and click Zoom to re-render the plot (and its PDF download) on that window.
 
 ---
 
@@ -147,7 +157,9 @@ Use the **Select project** dropdown at the top of the page:
 
 ## Convergence testing
 
-Check **Convergence tests** in Setup to run a sweep of ENCUT and/or k-point mesh values before the main calculation. The GUI will plot the total energy vs. each parameter so you can choose well-converged values before committing to the full workflow.
+Check **Convergence tests** in Setup to run a sweep of ENCUT and/or k-point mesh values before the main calculation. The test structure has atom 1 shifted by (0.01, 0.02, 0.03) Å so the force on it is non-zero, and the GUI plots total energy, pressure, **and forces** vs. each parameter (production steps keep the original positions).
+
+The converged values are also **selected automatically** — the smallest ENCUT / k-mesh whose successive force change stays below 5 meV/Å and pressure change below 0.5 kbar — and pre-filled into the Phase-2 form; edit them to override before running the production steps.
 
 ---
 
@@ -183,13 +195,17 @@ After generating a workflow for a project named `GaAs_PBEsol`:
 
 ```
 GaAs_PBEsol/
+├── 00_convergence/  (if convergence tests enabled) encut/ kpoints/ choose_params.py
 ├── 01_relax/     INCAR  KPOINTS  POSCAR  POTCAR  run.sh
 ├── 02_scf/       INCAR  KPOINTS  POSCAR  POTCAR  run.sh
 ├── 03_bands/     INCAR  KPOINTS         POTCAR  run.sh
 ├── 04_dos/       INCAR  KPOINTS         POTCAR  run.sh
+├── 05_wannier/   06_dfpt/   07_phonons/          (if those tasks are enabled)
+├── 08_lobster/   INCAR  KPOINTS  lobsterin  POTCAR  run.sh   (LOBSTER task)
+├── analysis/     plots collected by analyze.sh and the Results tab
 ├── POTCAR        (shared PAW file, symlinked into each step)
 ├── instructions.txt
-└── settings.json
+└── project.json  (saved GUI state for “Edit & Regenerate”)
 ```
 
 Each `run.sh` can also be submitted manually:
@@ -213,6 +229,7 @@ bash run.sh        # workstation / interactive node
 | *sumo-bandplot: command not found* | sumo not installed | `pip install sumo` |
 | GUI unreachable from laptop | No SSH tunnel | `ssh -L 5001:localhost:5001 user@cluster` |
 | Project not visible in dropdown | Folder missing POSCAR or settings.json | Check that the folder is in the working directory |
+| LOBSTER plots empty / "run 08_lobster first" | The lobster binary did not run — check `08_lobster/lobster.out` | Install LOBSTER and set `LOBSTER_X` in `site.env` (full path; `~` is expanded) |
 
 ---
 

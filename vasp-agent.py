@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
-from vasp_input_generator import VASPInputGenerator
+from vasp_input_generator import VASPInputGenerator, write_shifted_poscar
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -316,9 +316,16 @@ class VASPWorkflowAgent:
                 f.write('echo "  ENCUT results : 00_convergence/encut/encut_convergence.dat"\n')
             if has_kpoints:
                 f.write('echo "  k-point results: 00_convergence/kpoints/kpoint_convergence.dat"\n')
+            f.write('\n# Auto-select converged ENCUT / k-mesh (force < 5 meV/A on the\n')
+            f.write('# shifted atom 1, pressure < 0.5 kbar between successive values).\n')
+            f.write('# run_calculations.sh offers these as defaults (and uses them\n')
+            f.write('# automatically when run non-interactively).\n')
+            f.write('if [ -f "$HERE/00_convergence/choose_params.py" ]; then\n')
+            f.write('    python3 "$HERE/00_convergence/choose_params.py" || true\n')
+            f.write('fi\n')
             f.write('echo ""\n')
-            f.write('echo "Review the results, update INCAR/KPOINTS in each calculation"\n')
-            f.write('echo "directory, then run:  ./run_calculations.sh"\n')
+            f.write('echo "Review the results, then run:  ./run_calculations.sh"\n')
+            f.write('echo "(it defaults to the auto-selected ENCUT/k-mesh above)"\n')
         chmod_x(path)
 
     def _gen_run_calculations(self, calc_dirs):
@@ -337,53 +344,81 @@ class VASPWorkflowAgent:
             f.write("set -e\n")
             f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n\n')
 
-            # ── prompt ───────────────────────────────────────────────────
-            f.write('echo ""\n')
-            f.write('echo "=== Convergence parameters ==="\n')
-            f.write('echo "Check your convergence results:"\n')
-            f.write('echo "  cat 00_convergence/encut/encut_convergence.dat"\n')
-            f.write('echo "  cat 00_convergence/kpoints/kpoint_convergence.dat"\n')
-            f.write('echo ""\n')
-            f.write('read -p "Enter converged ENCUT (eV) [e.g. 520]: " ENCUT\n')
-            f.write('if [ -z "$ENCUT" ]; then echo "ERROR: ENCUT cannot be empty."; exit 1; fi\n\n')
-            f.write('read -p "Enter converged k-mesh for relax/SCF (e.g. 12x12x6): " KMESH\n')
-            f.write('if [ -z "$KMESH" ]; then echo "ERROR: k-mesh cannot be empty."; exit 1; fi\n\n')
-            f.write('read -p "Enter denser k-mesh for DOS (e.g. 24x24x12, or same as SCF): " KMESH_DOS\n')
-            f.write('if [ -z "$KMESH_DOS" ]; then KMESH_DOS=$KMESH; fi\n\n')
+            # ── auto-selected defaults from the convergence tests ─────────
+            f.write('# Defaults come from 00_convergence/converged_params.txt, written by\n')
+            f.write('# choose_params.py: smallest ENCUT / k-mesh whose successive force\n')
+            f.write('# change (atom 1, shifted) < 5 meV/A AND pressure change < 0.5 kbar.\n')
+            f.write('CONV_FILE="$HERE/00_convergence/converged_params.txt"\n')
+            f.write('if [ ! -f "$CONV_FILE" ] && [ -f "$HERE/00_convergence/choose_params.py" ]; then\n')
+            f.write('    python3 "$HERE/00_convergence/choose_params.py" || true\n')
+            f.write('fi\n')
+            f.write('DEF_ENCUT=""; DEF_KMESH=""\n')
+            f.write('if [ -f "$CONV_FILE" ]; then\n')
+            f.write('    DEF_ENCUT=$(sed -n "s/^ENCUT *= *//p" "$CONV_FILE")\n')
+            f.write('    DEF_KMESH=$(sed -n "s/^KMESH *= *//p" "$CONV_FILE")\n')
+            f.write('    grep -q "_CONVERGED = no" "$CONV_FILE" && \\\n')
+            f.write('        echo "WARNING: convergence NOT reached in the tested range (see choose_params.py output)"\n')
+            f.write('fi\n\n')
+
+            # ── prompt (defaults auto-accepted when non-interactive) ─────
+            f.write('if [ -t 0 ]; then\n')
+            f.write('    echo ""\n')
+            f.write('    echo "=== Convergence parameters ==="\n')
+            f.write('    echo "Check your convergence results:"\n')
+            f.write('    echo "  cat 00_convergence/converged_params.txt   (auto-selection)"\n')
+            f.write('    echo "  cat 00_convergence/encut/encut_convergence.dat"\n')
+            f.write('    echo "  cat 00_convergence/kpoints/kpoint_convergence.dat"\n')
+            f.write('    echo ""\n')
+            f.write('    read -p "Enter converged ENCUT (eV)${DEF_ENCUT:+ [auto: $DEF_ENCUT]}: " ENCUT\n')
+            f.write('    ENCUT=${ENCUT:-$DEF_ENCUT}\n')
+            f.write('    read -p "Enter converged k-mesh for relax/SCF${DEF_KMESH:+ [auto: $DEF_KMESH]}: " KMESH\n')
+            f.write('    KMESH=${KMESH:-$DEF_KMESH}\n')
+            f.write('    read -p "Enter denser k-mesh for DOS [default: same as SCF]: " KMESH_DOS\n')
+            f.write('    if [ -z "$KMESH_DOS" ]; then KMESH_DOS=$KMESH; fi\n')
+            f.write('else\n')
+            f.write('    ENCUT=$DEF_ENCUT; KMESH=$DEF_KMESH; KMESH_DOS=$KMESH\n')
+            f.write('    echo "Non-interactive run: using auto-selected ENCUT=$ENCUT, k-mesh=$KMESH"\n')
+            f.write('fi\n')
+            f.write('[ -z "$ENCUT" ] && echo "NOTE: no converged ENCUT available — keeping the generated ENCUT."\n')
+            f.write('[ -z "$KMESH" ] && echo "NOTE: no converged k-mesh available — keeping the generated KPOINTS."\n\n')
 
             # parse both meshes
+            f.write('if [ -n "$KMESH" ]; then\n')
             for var, mesh_var in [('NX', 'KMESH'), ('NX_DOS', 'KMESH_DOS')]:
                 prefix = '' if mesh_var == 'KMESH' else '_DOS'
-                f.write(f'NX{prefix}=$(echo "${mesh_var}" | cut -dx -f1)\n')
-                f.write(f'NY{prefix}=$(echo "${mesh_var}" | cut -dx -f2)\n')
-                f.write(f'NZ{prefix}=$(echo "${mesh_var}" | cut -dx -f3)\n')
-                f.write(f'if [ -z "$NZ{prefix}" ]; then NZ{prefix}=$NY{prefix}; fi\n')
-            f.write('\n')
+                f.write(f'    NX{prefix}=$(echo "${mesh_var}" | cut -dx -f1)\n')
+                f.write(f'    NY{prefix}=$(echo "${mesh_var}" | cut -dx -f2)\n')
+                f.write(f'    NZ{prefix}=$(echo "${mesh_var}" | cut -dx -f3)\n')
+                f.write(f'    if [ -z "$NZ{prefix}" ]; then NZ{prefix}=$NY{prefix}; fi\n')
+            f.write('fi\n\n')
 
             # ── patch ENCUT in all INCAR files ───────────────────────────
             f.write('echo ""\n')
             f.write('echo "Updating input files:"\n')
+            f.write('if [ -n "$ENCUT" ]; then\n')
             for key in ordered_keys:
                 dirname = os.path.basename(calc_dirs[key])
-                f.write(f'sed -i.bak "s/^ENCUT.*/ENCUT = $ENCUT/" "$HERE/{dirname}/INCAR"\n')
-                f.write(f'echo "  {dirname}/INCAR  →  ENCUT = $ENCUT"\n')
-            f.write('\n')
+                f.write(f'    sed -i.bak "s/^ENCUT.*/ENCUT = $ENCUT/" "$HERE/{dirname}/INCAR"\n')
+                f.write(f'    echo "  {dirname}/INCAR  →  ENCUT = $ENCUT"\n')
+            f.write('fi\n\n')
 
             # ── patch KPOINTS: relax and scf use KMESH ───────────────────
+            f.write('if [ -n "$KMESH" ]; then\n')
             for key in ordered_keys:
                 if key in ('bands', 'dos'):
                     continue
                 dirname = os.path.basename(calc_dirs[key])
-                f.write(f'printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
-                f.write(f'    $NX $NY $NZ > "$HERE/{dirname}/KPOINTS"\n')
-                f.write(f'echo "  {dirname}/KPOINTS  →  $KMESH"\n')
+                f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
+                f.write(f'        $NX $NY $NZ > "$HERE/{dirname}/KPOINTS"\n')
+                f.write(f'    echo "  {dirname}/KPOINTS  →  $KMESH"\n')
 
             # ── patch KPOINTS: dos uses KMESH_DOS ────────────────────────
             if 'dos' in calc_dirs:
                 dirname = os.path.basename(calc_dirs['dos'])
-                f.write(f'printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
-                f.write(f'    $NX_DOS $NY_DOS $NZ_DOS > "$HERE/{dirname}/KPOINTS"\n')
-                f.write(f'echo "  {dirname}/KPOINTS  →  $KMESH_DOS  (denser for DOS)"\n')
+                f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
+                f.write(f'        $NX_DOS $NY_DOS $NZ_DOS > "$HERE/{dirname}/KPOINTS"\n')
+                f.write(f'    echo "  {dirname}/KPOINTS  →  $KMESH_DOS  (denser for DOS)"\n')
+            f.write('fi\n')
 
             f.write('\necho ""\n')
 
@@ -406,7 +441,10 @@ class VASPWorkflowAgent:
             d = os.path.join(pd, '00_convergence', 'kpoints')
             os.makedirs(d, exist_ok=True)
             link_potcar(d, potcar_path)
-            shutil.copy(self.poscar_file, os.path.join(d, 'POSCAR'))
+            # Atom 1 shifted 0.01/0.02/0.03 Å (Cartesian) so the force on it
+            # is non-zero and its convergence can be tracked. Convergence
+            # tests ONLY — production steps use the unshifted POSCAR.
+            write_shifted_poscar(self.poscar_file, os.path.join(d, 'POSCAR'))
             incar_text = self.generator._generate_incar_scf()
             # ISIF=2 ensures stress tensor is written to OUTCAR (needed for pressure plots)
             if 'ISIF' not in incar_text:
@@ -476,7 +514,8 @@ class VASPWorkflowAgent:
             d = os.path.join(pd, '00_convergence', 'encut')
             os.makedirs(d, exist_ok=True)
             link_potcar(d, potcar_path)
-            shutil.copy(self.poscar_file, os.path.join(d, 'POSCAR'))
+            # Same shifted POSCAR as the kpoints test (see comment above).
+            write_shifted_poscar(self.poscar_file, os.path.join(d, 'POSCAR'))
             with open(os.path.join(d, 'KPOINTS'), 'w') as f:
                 f.write(self.generator._generate_kpoints_auto('medium'))
             incar_text = self.generator._generate_incar_scf()
@@ -511,6 +550,14 @@ class VASPWorkflowAgent:
         pd       = self.project_dir
         conv_dir = os.path.join(pd, '00_convergence')
         modules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules')
+
+        # ── choose_params.py (auto-select converged ENCUT / k-mesh) ─────
+        chooser_src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   'conv_choose.py')
+        if os.path.isfile(chooser_src):
+            chooser = os.path.join(conv_dir, 'choose_params.py')
+            shutil.copy(chooser_src, chooser)
+            chmod_x(chooser)
 
         # ── plot_convergence.py ──────────────────────────────────────────
         py = os.path.join(conv_dir, 'plot_convergence.py')
@@ -639,7 +686,12 @@ class VASPWorkflowAgent:
             f.write('if ! python3 -c "import matplotlib" 2>/dev/null; then\n')
             f.write('    echo "ERROR: matplotlib not installed.  Run: pip install matplotlib"; exit 1\n')
             f.write('fi\n\n')
-            f.write(f'python3 "$HERE/{conv_dir_rel}/plot_convergence.py" "$@"\n')
+            f.write(f'python3 "$HERE/{conv_dir_rel}/plot_convergence.py" "$@"\n\n')
+            f.write('# Auto-select converged ENCUT / k-mesh (force < 5 meV/A on the\n')
+            f.write('# shifted atom 1, pressure < 0.5 kbar between successive values)\n')
+            f.write(f'if [ -f "$HERE/{conv_dir_rel}/choose_params.py" ]; then\n')
+            f.write(f'    python3 "$HERE/{conv_dir_rel}/choose_params.py" || true\n')
+            f.write('fi\n')
         chmod_x(sh)
 
     # ── cumulative DOS script ────────────────────────────────────────────────

@@ -122,12 +122,14 @@ def read_elfcar(path):
 
 
 # ── nearest-neighbour bonds ───────────────────────────────────────────────────
-def nn_bonds(lattice, elements, frac, nn_scale=1.2):
-    """Return non-equivalent nearest-neighbour bonds.
+def nn_bonds(lattice, elements, frac, nn_scale=1.2, shells=2):
+    """Return non-equivalent 1st- (and optionally 2nd-) shell bonds.
 
-    For every atom, gather neighbours within nn_scale x (its own nearest
-    distance), then keep one representative per (element pair, rounded length).
-    Each bond is a dict: iA, elemA, rA_cart, elemB, rB_cart, dist.
+    For every atom, the 1st shell is everything within nn_scale x (its own
+    nearest distance); the 2nd shell is the next distinct distance group
+    (within 8% of the shortest post-1st-shell distance). One representative
+    is kept per (element pair, rounded length). Each bond is a dict:
+    iA, elemA, rA_cart, elemB, rB_cart, dist, shell (1 or 2).
     """
     cart = frac @ lattice
     natoms = len(frac)
@@ -146,20 +148,29 @@ def nn_bonds(lattice, elements, frac, nn_scale=1.2):
         dist = np.linalg.norm(diff, axis=2)
         dist[dist < 1e-3] = np.inf                           # drop self
         dmin = dist.min()
-        cutoff = dmin * nn_scale
+        cutoff1 = dmin * nn_scale
+        # 2nd shell: next distinct distance beyond the 1st-shell cutoff
+        beyond = dist[dist > cutoff1]
+        cutoff2 = beyond.min() * 1.08 if (shells >= 2 and beyond.size
+                                          and np.isfinite(beyond.min())) else -1.0
         for j in range(natoms):
             for s in range(len(shifts)):
                 d = dist[j, s]
-                if d <= cutoff:
-                    key = (frozenset((elements[i], elements[j])), round(d, 2))
-                    if key in seen:
-                        continue
-                    seen[key] = True
-                    bonds.append(dict(
-                        iA=i, elemA=elements[i], rA_cart=cart[i].copy(),
-                        elemB=elements[j], rB_cart=images[j, s].copy(),
-                        dist=float(d)))
-    bonds.sort(key=lambda b: (b['elemA'], b['elemB'], b['dist']))
+                if d <= cutoff1:
+                    shell = 1
+                elif 0 < d <= cutoff2:
+                    shell = 2
+                else:
+                    continue
+                key = (frozenset((elements[i], elements[j])), round(d, 2))
+                if key in seen:
+                    continue
+                seen[key] = True
+                bonds.append(dict(
+                    iA=i, elemA=elements[i], rA_cart=cart[i].copy(),
+                    elemB=elements[j], rB_cart=images[j, s].copy(),
+                    dist=float(d), shell=shell))
+    bonds.sort(key=lambda b: (b['shell'], b['elemA'], b['elemB'], b['dist']))
     return bonds
 
 
@@ -332,6 +343,8 @@ def main():
                     help='output prefix (default: reduced formula, e.g. MoSe2)')
     ap.add_argument('--nn-scale', type=float, default=1.2,
                     help='neighbour cutoff = nn_scale x nearest distance (1.2)')
+    ap.add_argument('--shells', type=int, default=2, choices=(1, 2),
+                    help='neighbour shells to profile (default 2: 1st + 2nd)')
     ap.add_argument('--npoints', type=int, default=200,
                     help='samples per bond (default: 200)')
     ap.add_argument('--plane-atom', type=int, default=0,
@@ -365,7 +378,7 @@ def main():
 
     prefix = args.out or reduced_formula(elements)
 
-    bonds = nn_bonds(lattice, elements, frac, args.nn_scale)
+    bonds = nn_bonds(lattice, elements, frac, args.nn_scale, shells=args.shells)
     if not bonds:
         sys.stderr.write('ERROR: no nearest-neighbour bonds found\n')
         sys.exit(1)
@@ -376,13 +389,16 @@ def main():
 
     fig, ax = plt.subplots(figsize=(7, 5))
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    print(f'{"bond":<12}{"length (A)":>12}{"ELF max":>10}{"ELF min":>10}')
+    print(f'{"bond":<12}{"shell":>6}{"length (A)":>12}{"ELF max":>10}{"ELF min":>10}')
     for k, b in enumerate(bonds):
         dist, elf = sample_bond(grid, lattice, b['rA_cart'], b['rB_cart'],
                                 args.npoints)
-        label = f"{b['elemA']}–{b['elemB']}  {b['dist']:.2f} Å"
-        ax.plot(dist, elf, color=colors[k % len(colors)], lw=1.6, label=label)
-        print(f"{b['elemA']+'-'+b['elemB']:<12}{b['dist']:>12.3f}"
+        shell = b.get('shell', 1)
+        label = (f"{b['elemA']}–{b['elemB']}  {b['dist']:.2f} Å"
+                 + ('  (2nd)' if shell == 2 else ''))
+        ax.plot(dist, elf, color=colors[k % len(colors)], lw=1.6,
+                ls='--' if shell == 2 else '-', label=label)
+        print(f"{b['elemA']+'-'+b['elemB']:<12}{shell:>6d}{b['dist']:>12.3f}"
               f"{elf.max():>10.3f}{elf.min():>10.3f}")
 
     ax.set_xlabel('Distance along bond (Å)', fontsize=12)

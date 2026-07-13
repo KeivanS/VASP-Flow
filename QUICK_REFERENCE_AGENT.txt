@@ -164,6 +164,8 @@
 │                                                                               │
 │ Reads ELFCAR directly (numpy + matplotlib only); groups bonds by              │
 │ element pair + length; samples ELF centre-to-centre with PBC.                 │
+│ Profiles BOTH the 1st and 2nd neighbour shells (dashed = 2nd; --shells 1     │
+│ for 1st only).                                                                │
 │ Output: PREFIX_elf_bonds.png/pdf  (PREFIX defaults to reduced formula,        │
 │ e.g. MoSe2_elf_bonds.pdf).  ELF=0.5 electron-gas reference marked.            │
 │                                                                               │
@@ -185,6 +187,18 @@
 │ Run:  ./run_convergence.sh   (workstation)                                    │
 │       ./submit_convergence.sh (SLURM)                                        │
 │ Plot: ./analyze_convergence.sh                                                │
+│                                                                               │
+│ The convergence POSCAR has atom 1 shifted by (0.01 0.02 0.03) Ang CARTESIAN  │
+│ so the force on it is non-zero and its convergence is meaningful; all         │
+│ production steps (01_relax, 02_scf, ...) keep the ORIGINAL positions.         │
+│                                                                               │
+│ Auto-selection (00_convergence/choose_params.py, run automatically):          │
+│   smallest ENCUT / k-mesh whose successive force change on atom 1 stays      │
+│   < 5 meV/Ang AND stress-diagonal change stays < 0.5 kbar; written to        │
+│   00_convergence/converged_params.txt. Phase 2 (run_calculations.sh /        │
+│   submit_calculations.sh / GUI) offers these as defaults; run non-           │
+│   interactively (e.g. nohup, chained SCF) it uses them automatically.        │
+│   Override thresholds:  choose_params.py --ftol 3 --ptol 0.2                 │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ MPI / PARALLELIZATION ────────────────────────────────────────────────────────┐
@@ -292,7 +306,10 @@
 │ unusable COHP/ICOHP (wrong sign, |Δ| > 100%). With SOC on, ISYM=-1 is set     │
 │ instead (spin-orbit breaks time reversal). NBANDS is auto-set to >= the       │
 │ LOBSTER basis-function count; LMAXMIX from the elements (6 f / 4 d / 2 sp).   │
-│ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX).                            │
+│ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX; ~ in site.env is expanded). │
+│ lobsterin cohp/cobiGenerator range is structure-aware: it reaches every       │
+│ atom's 2nd-neighbour shell (+10%, floor 4 Å, cap 6 Å), so 1st AND 2nd shell  │
+│ bonds (e.g. metal-metal in rocksalt) are computed and plotted (dashed = 2nd). │
 │                                                                               │
 │ Example instructions.txt:                                                     │
 │     Project: NaCl                                                             │

@@ -112,6 +112,13 @@
 │ ENCUT range        e.g.  400-600 eV                                           │
 │                                                                               │
 │ After convergence calculations finish, click the chart icon to view plots.   │
+│                                                                               │
+│ The convergence POSCAR has atom 1 shifted 0.01/0.02/0.03 Ang (Cartesian) so  │
+│ the force on it is non-zero; production steps keep the original positions.    │
+│ The Phase-2 ENCUT / k-mesh fields are pre-filled automatically with the      │
+│ smallest values whose successive force change < 5 meV/Ang (atom 1) AND       │
+│ pressure change < 0.5 kbar (from 00_convergence/converged_params.txt);       │
+│ edit them to override. "NOT converged" is flagged if the range was too short.│
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ WORKFLOW TAB ─────────────────────────────────────────────────────────────────┐
@@ -140,9 +147,16 @@
 │   Spin-polarized: sumo automatically mirrors spin-down                        │
 │   ▶ Run sumo-dosplot   regenerate                                             │
 │                                                                               │
-│ ELF bonds       ELF along non-equivalent nearest-neighbour bonds, from        │
-│                 02_scf/ELFCAR (LELF=.TRUE.); formula-named PNG/PDF.           │
+│ ELF bonds       ELF along non-equivalent 1st- AND 2nd-shell bonds (dashed =   │
+│                 2nd), from 02_scf/ELFCAR (LELF=.TRUE.); formula-named PNG/PDF.│
 │                 Absent for SOC / non-collinear (all-zero ELFCAR).             │
+│ LOBSTER plots   annotated with ICOxP(EF), antibonding integral ACOxP(EF),    │
+│                 antibonding fraction fAB, and the B→AB crossing nearest EF.  │
+│                 Overlays show the 1st AND 2nd bond shell per element pair    │
+│                 (dashed = 2nd); lobsterin bond range auto-reaches 2nd shell. │
+│ Energy zoom     Bands / DOS / LOBSTER cards have an "Energy window" bar:     │
+│                 enter min/max eV + Zoom to re-render PNG and PDF with that   │
+│                 window (Reset = full range).                                  │
 │                                                                               │
 │ OUTCAR analysis  Energy, Fermi level, magnetic moment, forces                 │
 │                                                                               │
