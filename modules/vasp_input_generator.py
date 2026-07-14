@@ -1759,6 +1759,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "",
             "# Non-self-consistent from CHGCAR",
             "ICHARG = 11",
+            "ISTART = 1      ! read WAVECAR when present (VASP falls back to 0 if absent)",
             "IBRION = -1",
             "NSW = 0",
             "",
@@ -1773,7 +1774,8 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines += self._soc_lines()
         lines += self._u_lines()
         lines.extend(self._get_parallel_lines('bands'))
-        lines.extend(["# Output", "LWAVE = .FALSE.", "LCHARG = .FALSE.", "LORBIT = 11"])
+        lines.extend(["# Output", "LWAVE = .FALSE.", "LCHARG = .FALSE.",
+                      "LORBIT = 11     ! orbital projections -> PROCAR (fat bands)"])
         lines = self._apply_incar_overrides(lines, 'bands')
         return '\n'.join(lines) + '\n'
 

@@ -1393,7 +1393,9 @@ def api_plot(slug, ptype):
             return send_file(out, mimetype='image/png')
         return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
 
-    if ptype == 'bands':
+    if ptype == 'fatbands':
+        candidates = [os.path.join(ana, f'{base}_fatbands.png')]
+    elif ptype == 'bands':
         candidates = [
             os.path.join(ana,             f'{base}_band.png'),
             os.path.join(pd_,'03_bands',  f'{base}_band.png'),
@@ -1420,7 +1422,9 @@ def api_plot(slug, ptype):
             if os.path.exists(p): return send_file(p, mimetype='image/png')
 
     # ── generate band plot (EIGENVAL is the default; sumo is a fallback) ─────
-    if ptype == 'bands':
+    # band_plot.py also writes <base>_fatbands.* when 03_bands/PROCAR exists,
+    # so 'fatbands' shares this generation branch.
+    if ptype in ('bands', 'fatbands'):
         src = os.path.join(pd_, '03_bands')
         if os.path.isdir(src):
             # Resolve Fermi energy (dense DOS k-mesh preferred over SCF)
@@ -1472,8 +1476,12 @@ def api_plot(slug, ptype):
                     _spin_band_plot(src, efermi, ymin, ymax, ana, base)
                 except Exception:
                     pass
-            if zoomed and os.path.exists(band_png):
-                return send_file(band_png, mimetype='image/png')
+            if zoomed:
+                target = os.path.join(
+                    ana, f'{base}_fatbands.png' if ptype == 'fatbands'
+                         else f'{base}_band.png')
+                if os.path.exists(target):
+                    return send_file(target, mimetype='image/png')
     else:
         src = os.path.join(pd_, '04_dos')
         if os.path.isdir(src):
@@ -1581,9 +1589,13 @@ def api_plot_pdf(slug, ptype):
             return send_file(out, mimetype='application/pdf', as_attachment=True,
                              download_name=os.path.basename(out))
         return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
-    if ptype == 'bands':
-        if zoomed:
-            # regenerate at the requested window under a _zoom name
+    if ptype in ('bands', 'fatbands'):
+        stem = 'fatbands' if ptype == 'fatbands' else 'band'
+        gen_base = f'{base}_zoom' if zoomed else base
+        target = os.path.join(ana, f'{gen_base}_{stem}.pdf')
+        if zoomed or not os.path.exists(target):
+            # (re)generate at the requested window; band_plot.py writes the
+            # plain PDF and — when 03_bands/PROCAR exists — the fatbands PDF
             src = os.path.join(pd_, '03_bands')
             efermi = None
             for oc in [os.path.join(pd_, '04_dos', 'OUTCAR'),
@@ -1597,13 +1609,12 @@ def api_plot_pdf(slug, ptype):
             if zmin is not None: ymin = zmin
             if zmax is not None: ymax = zmax
             try:
-                _eigenval_band_plot(src, ana, f'{base}_zoom', ymin, ymax, labels, efermi)
+                _eigenval_band_plot(src, ana, gen_base, ymin, ymax, labels, efermi)
             except Exception:
                 pass
-            candidates = [os.path.join(ana, f'{base}_zoom_band.pdf')]
-        else:
-            candidates = [os.path.join(ana, f'{base}_band.pdf'),
-                          os.path.join(pd_, '03_bands', f'{base}_band.pdf')]
+        candidates = [target]
+        if not zoomed and ptype == 'bands':
+            candidates.append(os.path.join(pd_, '03_bands', f'{base}_band.pdf'))
     elif ptype == 'dos_proj':  # cumulative projected DOS as PDF on demand
         os.makedirs(ana, exist_ok=True)
         out = os.path.join(ana, f'{base}_proj_dos.pdf')
@@ -3501,7 +3512,7 @@ function buildWorkflow(steps,hasConv){
 }
 
 // ── energy-window zoom: re-render plots server-side with ?emin=&emax= ──────
-const EWIN_GROUPS={bands:['bands'],dos:['dos_total','dos_proj'],
+const EWIN_GROUPS={bands:['bands','fatbands'],dos:['dos_total','dos_proj'],
                    lobster:['cohp','cobi','coop']};
 function ewinBar(group){
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--sub);margin-bottom:8px;">
@@ -3766,19 +3777,29 @@ async function buildResults(){
     </table>
   </div>`;
 
-  // ── band structure ─────────────────────────────────────────────────────
+  // ── band structure (raw + orbital-weighted fat bands) ──────────────────
   h+=`<div class="card">
     <div class="card-title">Band Structure</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" onclick="runSumo('bands')">▶ Run sumo-bandplot</button>
       <a id="pdf-bands" href="/api/plot_pdf/${PROJECT}/bands" class="btn btn-ghost btn-sm" download title="Download PDF">⬇ PDF</a>
+      <a id="pdf-fatbands" href="/api/plot_pdf/${PROJECT}/fatbands" class="btn btn-ghost btn-sm" download title="Download fat-bands PDF">⬇ Fat bands PDF</a>
     </div>
     ${ewinBar('bands')}
     <div id="log-sumo-bands" class="term hidden sumo-log"></div>
-    <div style="text-align:center;">
-      <img id="img-bands" src="/api/plot/${PROJECT}/bands?t=${ts}" style="max-width:100%;max-height:500px;cursor:pointer;"
-           onclick="window.open(this.src)"
-           onerror="this.parentElement.innerHTML='<div class=no-plot>Not available — run 03_bands then click Run sumo-bandplot</div>'">
+    <div class="plot-grid">
+      <div class="plot-card">
+        <h4>Bands</h4>
+        <img id="img-bands" src="/api/plot/${PROJECT}/bands?t=${ts}" style="max-width:100%;max-height:500px;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Bands</h4><div class=no-plot>Not available — run 03_bands then click Run sumo-bandplot</div>'">
+      </div>
+      <div class="plot-card">
+        <h4>Fat bands (orbital-weighted)</h4>
+        <img id="img-fatbands" src="/api/plot/${PROJECT}/fatbands?t=${ts}" style="max-width:100%;max-height:500px;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Fat bands (orbital-weighted)</h4><div class=no-plot>Not available — needs 03_bands/PROCAR (LORBIT=11)</div>'">
+      </div>
     </div>
   </div>`;
 

@@ -130,6 +130,7 @@ Switch to the **Workflow** tab.
 
 Switch to the **Results** tab:
 - Band structure and DOS plots appear automatically after the respective steps.
+- **Fat bands** (orbital-weighted band structure) render next to the raw bands from `03_bands/PROCAR` (LORBIT=11 is always set): colored markers per element and orbital channel, marker size ∝ projection weight.
 - Click **Run sumo-bandplot** or **Run sumo-dosplot** to regenerate a plot after editing settings.
 - **ELF plots** (from the SCF's ELFCAR): 1D profiles along the non-equivalent 1st- and 2nd-shell bonds, plus a 2D ELF map on the plane through an atom and its 1st/2nd neighbours.
 - **LOBSTER plots**: −COHP, COBI and COOP vs energy — total over all bonds plus per-pair 1st/2nd-shell overlays, annotated with the integral to E_F (ICOHP/ICOBI/ICOOP), the antibonding integral, the antibonding fraction f_AB, and the bonding→antibonding crossing energy.
