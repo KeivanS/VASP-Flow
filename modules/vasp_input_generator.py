@@ -20,6 +20,34 @@ _WANNIER90_X = os.environ.get('WANNIER90_X', 'wannier90.x')
 _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster-5.1.0-OSX')
 
 
+_INCAR_STEPS = ('all', 'relax', 'scf', 'bands', 'dos', 'wannier',
+                'dfpt', 'phonons', 'lobster')
+
+
+def merge_cli_incar(instructions, specs):
+    """Merge --incar command-line overrides into instructions['incar_raw'].
+
+    Each spec is  [STEP:]TAG=VAL[; TAG=VAL ...]  with STEP one of
+    relax/scf/bands/dos/wannier/dfpt/phonons/lobster ('all' or no prefix =
+    every step). Tags are appended AFTER any INCAR block from the
+    instructions file, so the command line wins on conflicts. ';' separates
+    tags (not ',' — values like MAGMOM may contain commas).
+    """
+    if not specs:
+        return
+    raw = instructions.setdefault('incar_raw', {})
+    for spec in specs:
+        step, sep, body = spec.partition(':')
+        if sep and step.strip().lower() in _INCAR_STEPS:
+            step = step.strip().lower()
+        else:
+            step, body = 'all', spec
+        for tag in body.split(';'):
+            tag = tag.strip()
+            if '=' in tag:
+                raw.setdefault(step, []).append(tag)
+
+
 def write_shifted_poscar(src, dst, shift_cart=(0.01, 0.02, 0.03)):
     """Copy POSCAR src → dst with atom 1 displaced by shift_cart (Å, CARTESIAN).
 

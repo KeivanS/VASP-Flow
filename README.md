@@ -138,9 +138,39 @@ Switch to the **Results** tab:
 
 ---
 
+## Setting any VASP keyword explicitly
+
+Nothing is hard-wired: **every VASP INCAR tag can be specified explicitly**, three ways (in increasing precedence):
+
+**1. Instructions file** — add an `INCAR: … END_INCAR` block, global or per-step:
+
+```
+INCAR:                  # applies to every step
+   LREAL   = .FALSE.
+   ADDGRID = .TRUE.
+END_INCAR
+
+INCAR scf:              # this step only (relax/scf/bands/dos/wannier/dfpt/phonons/lobster)
+   NBANDS = 64
+END_INCAR
+```
+
+**2. Agent command line** — the repeatable `--incar` option (both `vasp-agent.py` and `vasp-agent-slurm.py`):
+
+```bash
+./vasp-agent.py -i instructions.txt -s POSCAR \
+    --incar "ALGO=Fast; NELMIN=6" --incar "scf:NBANDS=64"
+```
+
+**3. GUI** — every generated INCAR is editable per step (see below).
+
+Tags you set replace the generated defaults in place; unknown tags are appended under a `# User INCAR overrides` comment. The only exceptions are physics-critical guards that are re-imposed (ISYM=2 and KPAR=NCORE=1 in `06_dfpt`; symmetry-off ISYM in `08_lobster`). See `examples/` for complete working files.
+
+---
+
 ## Editing input files
 
-Every step has an **✏ Edit files** button. Click it to open INCAR, KPOINTS, or POSCAR in the browser, make changes, and save — then re-run that step.
+Every step has an **✏ Edit files** button. Click it to open INCAR, KPOINTS, or POSCAR in the browser, make changes, and save — then re-run that step. Any VASP keyword can be added or changed this way.
 
 A `.bak` backup is created automatically the first time you edit a file.
 

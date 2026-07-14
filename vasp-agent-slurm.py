@@ -37,7 +37,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
-from vasp_input_generator import VASPInputGenerator, write_shifted_poscar
+from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar,
+                                  merge_cli_incar)
 
 
 # ── helpers (identical to vasp-agent.py) ─────────────────────────────────
@@ -92,7 +93,8 @@ def load_profile(profile_name: str) -> dict:
 # ── SLURM agent ───────────────────────────────────────────────────────────
 class SLURMVASPAgent:
 
-    def __init__(self, instructions_file, poscar_file, profile: dict = None):
+    def __init__(self, instructions_file, poscar_file, profile: dict = None,
+                 incar_cli=None):
         self.cwd = os.getcwd()
 
         print("\n" + "="*60)
@@ -102,6 +104,9 @@ class SLURMVASPAgent:
 
         self.parser    = InstructionParser(instructions_file)
         inst           = self.parser.instructions
+        merge_cli_incar(inst, incar_cli)
+        if incar_cli:
+            print(f"  INCAR overrides (--incar): {'; '.join(incar_cli)}")
         self.profile   = profile or {}
 
         # ── SLURM settings: instructions override profile, profile overrides defaults ──
@@ -1299,6 +1304,12 @@ SLURM settings are read from profiles/slurm.json.
     ap.add_argument('-s', '--poscar',       default='POSCAR')
     ap.add_argument('-p', '--profile',      default='slurm',
                     help='Profile name (default: slurm → loads profiles/slurm.json)')
+    ap.add_argument('--incar', action='append', default=[],
+                    metavar='[STEP:]TAG=VAL[;TAG=VAL...]',
+                    help='Explicit INCAR tag(s), any VASP keyword. Repeatable. '
+                         'Optional STEP prefix targets one step; no prefix = '
+                         'all steps. Overrides generated tags and instructions-'
+                         'file INCAR blocks.')
     args = ap.parse_args()
 
     for fpath, label in [(args.instructions, 'instructions'), (args.poscar, 'POSCAR')]:
@@ -1312,7 +1323,8 @@ SLURM settings are read from profiles/slurm.json.
         print("         Edit profiles/slurm.json to set partition, nodes, time, etc.\n")
 
     try:
-        SLURMVASPAgent(args.instructions, args.poscar, profile=profile).run()
+        SLURMVASPAgent(args.instructions, args.poscar, profile=profile,
+                       incar_cli=args.incar).run()
     except SystemExit:
         raise
     except Exception:

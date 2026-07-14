@@ -7,6 +7,8 @@
 │ Workstation:                                                                  │
 │   ./vasp-agent.py                        uses instructions.txt + POSCAR      │
 │   ./vasp-agent.py -i my_inst.txt -s struct.vasp                              │
+│   ./vasp-agent.py ... --incar "ALGO=Fast; NELMIN=6" --incar "scf:NBANDS=64"  │
+│                       explicit INCAR tags from the command line (see below)  │
 │                                                                               │
 │ SLURM cluster (generates sbatch scripts + submit_all.sh):                    │
 │   ./vasp-agent-slurm.py                  uses profiles/slurm.json            │
@@ -44,20 +46,33 @@
 │ PRESSURE: 10 GPa     constant-P relax: ISIF=3, IBRION=2, PSTRESS (kbar/GPa)  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
-┌─ RAW INCAR PASSTHROUGH ────────────────────────────────────────────────────────┐
-│ Drop literal INCAR lines into the instructions file; they are merged into     │
-│ the generated INCAR(s). A tag that already exists is overwritten in place;    │
-│ new tags are appended under "User INCAR overrides".                            │
+┌─ EXPLICIT VASP KEYWORDS (any INCAR tag) ───────────────────────────────────────┐
+│ Every VASP keyword can be specified explicitly — nothing is hard-wired.       │
+│ A tag that already exists is overwritten in place; new tags are appended      │
+│ under "User INCAR overrides". Precedence: --incar > per-step block > global   │
+│ block > generated defaults.                                                    │
 │                                                                               │
+│ 1) Instructions file:                                                         │
 │   INCAR:                 ← global block, applies to every step                │
 │      LREAL = Auto                                                              │
 │      ALGO  = Fast                                                              │
 │      NELMIN = 6                                                                │
 │   END_INCAR                                                                    │
 │                                                                               │
-│   INCAR scf:             ← per-step block (relax/scf/bands/dos/wannier/...)   │
-│      EDIFF = 1E-8                                                              │
+│   INCAR scf:             ← per-step block (relax/scf/bands/dos/wannier/       │
+│      EDIFF = 1E-8           dfpt/phonons/lobster)                              │
 │   END_INCAR                                                                    │
+│                                                                               │
+│ 2) Command line (both agents; repeatable; ';' separates tags):                │
+│   --incar "TAG=VAL; TAG2=VAL"          all steps                              │
+│   --incar "scf:NBANDS=64"              one step only                          │
+│                                                                               │
+│ 3) GUI: every generated INCAR is editable per step (Workflow → Edit files).  │
+│                                                                               │
+│ Exceptions (re-imposed guards): ISYM=2 + KPAR=NCORE=1 in 06_dfpt;             │
+│ symmetry-off ISYM in 08_lobster.                                              │
+│ Note: full-line # comments in instructions files are ignored by the parser   │
+│ (a task keyword inside a comment does not enable that task).                  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ FUNCTIONALS ─────────────────────────────────────────────────────────────────┐

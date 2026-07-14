@@ -18,7 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
-from vasp_input_generator import VASPInputGenerator, write_shifted_poscar
+from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar,
+                                  merge_cli_incar)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -80,7 +81,8 @@ def load_profile(profile_name: str) -> dict:
 
 class VASPWorkflowAgent:
 
-    def __init__(self, instructions_file, poscar_file, profile: dict = None):
+    def __init__(self, instructions_file, poscar_file, profile: dict = None,
+                 incar_cli=None):
         self.cwd = os.getcwd()
 
         print("\n" + "="*58)
@@ -90,6 +92,9 @@ class VASPWorkflowAgent:
 
         self.parser = InstructionParser(instructions_file)
         inst = self.parser.instructions
+        merge_cli_incar(inst, incar_cli)
+        if incar_cli:
+            print(f"  INCAR overrides (--incar): {'; '.join(incar_cli)}")
 
         self.project_label = inst.get('project_name', 'VASP_Calculation')
         self.project_dir   = os.path.join(self.cwd, slugify(self.project_label))
@@ -1232,6 +1237,14 @@ POTCAR is built once from $VASP_POTCAR_DIR (set in ~/.bash_profile).
     ap.add_argument('-p','--profile',      default='',
                     help='Execution profile name (e.g. slurm, workstation). '
                          'Loads profiles/<name>.json next to this script.')
+    ap.add_argument('--incar', action='append', default=[],
+                    metavar='[STEP:]TAG=VAL[;TAG=VAL...]',
+                    help='Explicit INCAR tag(s), any VASP keyword. Repeatable. '
+                         'Optional STEP prefix (relax/scf/bands/dos/wannier/'
+                         'dfpt/phonons/lobster) targets one step; no prefix = '
+                         'all steps. Overrides generated tags and instructions-'
+                         'file INCAR blocks. Example: '
+                         '--incar "ALGO=Fast; NELMIN=6" --incar "scf:NBANDS=64"')
     args = ap.parse_args()
 
     for fpath, label in [(args.instructions,'instructions'), (args.poscar,'POSCAR')]:
@@ -1241,7 +1254,8 @@ POTCAR is built once from $VASP_POTCAR_DIR (set in ~/.bash_profile).
 
     profile = load_profile(args.profile)
     try:
-        VASPWorkflowAgent(args.instructions, args.poscar, profile=profile).run()
+        VASPWorkflowAgent(args.instructions, args.poscar, profile=profile,
+                          incar_cli=args.incar).run()
     except SystemExit:
         raise
     except Exception as e:

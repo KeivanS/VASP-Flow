@@ -18,8 +18,14 @@ class InstructionParser:
     def parse(self):
         """Parse the instruction file"""
         with open(self.instruction_file, 'r') as f:
-            content = f.read()
-        
+            raw = f.read()
+        # Drop full-line comments BEFORE the regex scan: a task keyword inside
+        # a comment (e.g. "# steps: relax, wannier, phonons") must not enable
+        # that task. INCAR blocks are unaffected (their comment lines carry no
+        # tag and are skipped by the override merge anyway).
+        content = '\n'.join(l for l in raw.splitlines()
+                            if not l.lstrip().startswith('#'))
+
         self.instructions = {
             'project_name':   self._extract_project_name(content),
             'functional':     self._extract_functional(content),

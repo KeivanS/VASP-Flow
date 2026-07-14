@@ -1,0 +1,61 @@
+# ============================================================
+# Example: full workflow — convergence, SCF+ELF, bands, projected
+# DOS, DFPT (Born charges + dielectric), LOBSTER bonding analysis
+# ------------------------------------------------------------
+# Rocksalt LaP. Demonstrates most of what the agent can do,
+# including explicit VASP keywords via the INCAR passthrough.
+#
+# Run with:
+#   ./vasp-agent.py -i examples/instructions_LaP_full.txt -s examples/POSCAR_LaP
+#
+# Any VASP keyword can ALSO be injected from the command line:
+#   ./vasp-agent.py -i ... -s ... --incar "ALGO=Fast; NELMIN=6" \
+#                                 --incar "scf:NBANDS=64"
+# The command line wins over the INCAR blocks below, which win
+# over the generated defaults. In the GUI, every INCAR is also
+# editable per step (Workflow tab -> Edit files).
+# ============================================================
+
+Project: LaP
+
+Methods: PBEsol functional
+
+Tasks: convergence study
+       SCF calculation
+       band structure
+       DOS (projected on La-s La-p La-d La-f and P-s P-p)
+       DFPT Born charges and dielectric
+       LOBSTER COHP/COBI bonding analysis
+
+# Convergence tests: atom 1 is auto-shifted (0.01,0.02,0.03) Ang so
+# forces are non-zero; the converged ENCUT/k-mesh are auto-selected
+# (force change < 5 meV/Ang AND pressure change < 0.5 kbar) and used
+# as phase-2 defaults.
+Convergence: Test k-points 4x4x4 6x6x6 8x8x8 10x10x10 12x12x12
+             Test ENCUT 400-700
+
+# ELF (ELFCAR) is on by default for the SCF; disable with:  ELF: OFF
+ELF: ON
+
+# DFPT electronic convergence (ISYM=2 is enforced in 06_dfpt)
+DFPT_EDIFF: 1E-8
+
+# LOBSTER smearing in lobsterin (bond range auto-covers the 2nd shell)
+LOBSTER_SIGMA: 0.10
+
+NKPTS: 30
+MPI: 16
+
+# --- Explicit VASP keywords (raw INCAR passthrough) -----------------
+# Global block: applies to every step. Existing tags are overwritten
+# in place; new tags are appended under "User INCAR overrides".
+INCAR:
+   LREAL   = .FALSE.
+   ADDGRID = .TRUE.
+END_INCAR
+
+# Per-step block: beats the global block for that step only.
+# Steps: relax, scf, bands, dos, wannier, dfpt, phonons, lobster
+INCAR scf:
+   NELMIN = 6
+END_INCAR

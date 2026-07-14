@@ -128,7 +128,10 @@
 │ ▶ Run All Steps submits them sequentially with automatic chaining.            │
 │                                                                               │
 │ ✏ Edit files → opens INCAR / KPOINTS / POSCAR in the browser                 │
-│   A .bak backup is created on first edit.                                    │
+│   ANY VASP keyword can be added/changed there — INCARs are fully editable;   │
+│   save, then re-run the step. A .bak backup is created on first edit.        │
+│   (Explicit tags can also be pre-set at generation time via an               │
+│   INCAR: ... END_INCAR block in the instructions, or --incar on the CLI.)    │
 │                                                                               │
 │ On SLURM: "Run" launches sbatch. The live terminal streams slurm output.     │
 │   You can also cd into the step directory and run sbatch run.sh manually.    │

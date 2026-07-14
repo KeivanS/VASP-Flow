@@ -674,9 +674,16 @@ Combine freely with \texttt{collinear magnetization}.
 \label{sec:incar}
 % ============================================================
 
-Two mechanisms let you go beyond the built-in keywords without editing
-each generated INCAR by hand: \textbf{raw INCAR passthrough} (inject any
-VASP tag directly) and \textbf{constant-pressure relaxation}.
+\textbf{Any VASP keyword can be specified explicitly} --- nothing is
+hard-wired.  Three routes, in increasing precedence:
+(1)~an \texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in the
+instructions file (global or per-step);
+(2)~the agents' \texttt{--incar} command-line option;
+(3)~direct editing --- in the GUI every generated INCAR is editable per
+step (Workflow tab $\to$ \emph{Edit files}, with an automatic
+\texttt{.bak} backup), and of course the files on disk can be edited
+before running.  This section covers the first two plus
+\textbf{constant-pressure relaxation}.
 
 \subsection{Raw INCAR passthrough}
 \label{sec:incar-raw}
@@ -701,7 +708,7 @@ silently lost.
 
 To target a single step, name it on the header line.  Recognised steps
 are \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
-\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}:
+\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}:
 
 \begin{lstlisting}
 INCAR scf:              # applies only to 02_scf
@@ -715,6 +722,35 @@ Precedence: a \emph{per-step} block beats the \emph{global} block, and
 both beat the agent's generated defaults.  This is the recommended way to
 set tags the parser has no dedicated keyword for (e.g.\ \texttt{LMAXMIX},
 \texttt{ADDGRID}, \texttt{LVTOT}, \texttt{IVDW}, \texttt{AMIX}).
+Full-line \texttt{\#} comments in the instructions file are ignored by
+the parser, so a task keyword inside a comment does not enable that task.
+\end{notebox}
+
+\subsection{Command-line INCAR overrides (\texttt{--incar})}
+\label{sec:incar-cli}
+
+Both \texttt{vasp-agent.py} and \texttt{vasp-agent-slurm.py} accept a
+repeatable \texttt{--incar} option that injects explicit VASP tags at
+invocation time, without touching the instructions file:
+
+\begin{lstlisting}[language=bash]
+./vasp-agent.py -i instructions.txt -s POSCAR \
+    --incar "ALGO=Fast; NELMIN=6" \      # every step
+    --incar "scf:NBANDS=64"              # 02_scf only
+\end{lstlisting}
+
+Multiple tags in one option are separated by \texttt{;} (not commas ---
+values such as \texttt{MAGMOM} may contain commas).  An optional step
+prefix (\texttt{relax}/\texttt{scf}/\texttt{bands}/\texttt{dos}/%
+\texttt{wannier}/\texttt{dfpt}/\texttt{phonons}/\texttt{lobster})
+targets a single step.  Command-line tags are applied \emph{after} the
+instructions-file blocks, so they win on conflicts.
+
+\begin{notebox}
+Exceptions: physics-critical guards are re-imposed regardless of
+overrides --- \texttt{ISYM=2} and \texttt{KPAR=NCORE=1} in
+\texttt{06\_dfpt}, and the symmetry-off \texttt{ISYM} in
+\texttt{08\_lobster}.
 \end{notebox}
 
 \subsection{Constant-pressure relaxation}
