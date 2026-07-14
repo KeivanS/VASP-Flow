@@ -121,6 +121,43 @@ def read_elfcar(path):
     return lattice, elements, frac, grid
 
 
+# ── PAW augmentation radii ────────────────────────────────────────────────────
+AU_TO_ANG = 0.529177
+
+def read_rcore(potcar_path):
+    """{element: augmentation radius (Å)} from the POTCAR RCORE lines.
+
+    Inside these spheres VASP's ELFCAR holds the PSEUDO-ELF (no PAW
+    reconstruction) — the values there are not physical. Returns {} if the
+    POTCAR is missing/unreadable.
+    """
+    radii = {}
+    try:
+        el = None
+        with open(potcar_path, errors='replace') as fh:
+            for ln in fh:
+                if 'TITEL' in ln:
+                    # e.g. "TITEL  = PAW_PBE Ga_d 06Sep2000" -> Ga
+                    parts = ln.split()
+                    for tok in parts:
+                        if tok[:1].isupper() and tok not in ('TITEL', 'PAW',
+                                                             'PAW_PBE', 'PAW_GGA'):
+                            el = tok.split('_')[0]
+                            break
+                elif 'RCORE' in ln and el:
+                    try:
+                        radii[el] = float(ln.split('=')[1].split()[0]) * AU_TO_ANG
+                    except (IndexError, ValueError):
+                        pass
+                    el = None
+    except OSError:
+        pass
+    return radii
+
+
+DEFAULT_RAUG = 1.1        # Å — conservative fallback when no POTCAR is found
+
+
 # ── nearest-neighbour bonds ───────────────────────────────────────────────────
 def nn_bonds(lattice, elements, frac, nn_scale=1.2, shells=2):
     """Return non-equivalent 1st- (and optionally 2nd-) shell bonds.
@@ -250,7 +287,8 @@ def sample_plane(grid, lattice, A, u, v, umin, umax, vmin, vmax, ngrid=220):
     return U, V, elf
 
 
-def plot_elf_plane(grid, lattice, elements, frac, prefix, iA=0, ngrid=220):
+def plot_elf_plane(grid, lattice, elements, frac, prefix, iA=0, ngrid=220,
+                   radii=None):
     """Filled ELF contour on the plane through atom iA and its 1st+2nd neighbours.
 
     Atoms whose (imaged) position lies in that plane and inside the patch are
@@ -314,11 +352,23 @@ def plot_elf_plane(grid, lattice, elements, frac, prefix, iA=0, ngrid=220):
     # element -> marker colour
     els = list(dict.fromkeys([m[2] for m in marks]))
     cmap = {e: c for e, c in zip(els, plt.rcParams['axes.prop_cycle'].by_key()['color'])}
+    # PAW augmentation spheres: semi-transparent gray discs — the ELF shown
+    # underneath them is the pseudo-ELF and not physical.
+    radii = radii or {}
+    for x, y, el in marks:
+        r = radii.get(el, DEFAULT_RAUG)
+        ax.add_patch(plt.Circle((x, y), r, facecolor='0.55', edgecolor='0.25',
+                                linewidth=0.6, linestyle='--', alpha=0.45,
+                                zorder=4))
     for x, y, el in marks:
         ax.scatter([x], [y], s=90, facecolor=cmap[el], edgecolor='white',
                    linewidth=1.2, zorder=5)
         ax.annotate(el, (x, y), color='white', fontsize=8, ha='center', va='center',
                     zorder=6, fontweight='bold')
+    ax.text(0.02, 0.02, 'gray discs = PAW augmentation spheres (pseudo-ELF)',
+            transform=ax.transAxes, fontsize=7, color='0.15',
+            bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.8),
+            zorder=7)
     ax.set_aspect('equal')
     ax.set_xlabel('in-plane x (Å)', fontsize=11)
     ax.set_ylabel('in-plane y (Å)', fontsize=11)
@@ -387,18 +437,47 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    # PAW augmentation radii: ELF inside these spheres is the pseudo-ELF and
+    # not physical — drawn DOTTED there; stats use only the region outside.
+    radii = read_rcore(os.path.join(os.path.dirname(os.path.abspath(path)),
+                                    'POTCAR'))
+    if radii:
+        print('  PAW augmentation radii (Å): '
+              + '  '.join(f'{e}={r:.2f}' for e, r in radii.items()))
+    else:
+        print(f'  note: no POTCAR next to ELFCAR — using {DEFAULT_RAUG} Å '
+              'augmentation radius for all elements')
+
     fig, ax = plt.subplots(figsize=(7, 5))
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    stats = []
     print(f'{"bond":<12}{"shell":>6}{"length (A)":>12}{"ELF max":>10}{"ELF min":>10}')
     for k, b in enumerate(bonds):
         dist, elf = sample_bond(grid, lattice, b['rA_cart'], b['rB_cart'],
                                 args.npoints)
         shell = b.get('shell', 1)
-        label = (f"{b['elemA']}–{b['elemB']}  {b['dist']:.2f} Å"
+        c     = colors[k % len(colors)]
+        L     = b['dist']
+        rA = radii.get(b['elemA'], DEFAULT_RAUG)
+        rB = radii.get(b['elemB'], DEFAULT_RAUG)
+        inside = (dist < rA) | (L - dist < rB)
+        label = (f"{b['elemA']}–{b['elemB']}  {L:.2f} Å"
                  + ('  (2nd)' if shell == 2 else ''))
-        ax.plot(dist, elf, color=colors[k % len(colors)], lw=1.6,
+        # dotted inside the augmentation spheres (pseudo-ELF), solid outside
+        ax.plot(dist, np.where(inside, elf, np.nan), color=c, lw=1.1, ls=':',
+                alpha=0.65)
+        ax.plot(dist, np.where(inside, np.nan, elf), color=c, lw=1.8,
                 ls='--' if shell == 2 else '-', label=label)
-        print(f"{b['elemA']+'-'+b['elemB']:<12}{shell:>6d}{b['dist']:>12.3f}"
+        # outside-only stats: <ELF>, <|dELF/dx|>, <d2ELF/dx2>
+        if (~inside).sum() >= 5:
+            d1 = np.gradient(elf, dist)
+            d2 = np.gradient(d1, dist)
+            o  = ~inside
+            stats.append((label,
+                          float(elf[o].mean()),
+                          float(np.abs(d1[o]).mean()),
+                          float(d2[o].mean())))
+        print(f"{b['elemA']+'-'+b['elemB']:<12}{shell:>6d}{L:>12.3f}"
               f"{elf.max():>10.3f}{elf.min():>10.3f}")
 
     ax.set_xlabel('Distance along bond (Å)', fontsize=12)
@@ -406,7 +485,15 @@ def main():
     ax.set_ylim(0, 1)
     ax.axhline(0.5, color='gray', lw=0.7, ls=':')   # uniform-electron-gas ref
     ax.grid(True, alpha=0.15)
-    ax.legend(fontsize=9, title='atom → atom')
+    ax.legend(fontsize=8, title='atom → atom  (dotted = inside PAW sphere)',
+              title_fontsize=8, loc='upper right')
+    if stats:
+        box = 'outside augmentation spheres:\n' + '\n'.join(
+            f'{lbl}:  ⟨ELF⟩={m:.2f}  ⟨|ELF′|⟩={a:.2f} Å$^{{-1}}$  '
+            f'⟨ELF″⟩={s:+.1f} Å$^{{-2}}$' for lbl, m, a, s in stats)
+        ax.text(0.02, 0.02, box, transform=ax.transAxes, fontsize=6.8,
+                va='bottom', ha='left',
+                bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     fig.tight_layout()
 
     for ext in ('png', 'pdf'):
@@ -419,7 +506,7 @@ def main():
     if not args.no_plane:
         try:
             plot_elf_plane(grid, lattice, elements, frac, prefix,
-                           iA=args.plane_atom)
+                           iA=args.plane_atom, radii=radii)
         except Exception as e:
             sys.stderr.write(f'  note: ELF plane plot skipped ({e})\n')
 

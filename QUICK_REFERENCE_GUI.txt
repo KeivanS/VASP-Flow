@@ -153,13 +153,20 @@
 │ ELF bonds       ELF along non-equivalent 1st- AND 2nd-shell bonds (dashed =   │
 │                 2nd), from 02_scf/ELFCAR (LELF=.TRUE.); formula-named PNG/PDF.│
 │                 Absent for SOC / non-collinear (all-zero ELFCAR).             │
+│                 Dotted segments = inside PAW augmentation spheres, where the │
+│                 pseudo-ELF is unphysical; stats box = outside-only averages. │
+│                 2D plane: gray discs mark the augmentation spheres.           │
 │ LOBSTER plots   annotated with ICOxP(EF), antibonding integral ACOxP(EF),    │
 │                 antibonding fraction fAB, and the B→AB crossing nearest EF.  │
 │                 Overlays show the 1st AND 2nd bond shell per element pair    │
 │                 (dashed = 2nd); lobsterin bond range auto-reaches 2nd shell. │
+│ Fat bands       Orbital-weighted bands from 03_bands/PROCAR (LORBIT=11 is    │
+│                 always set): thin gray bands + colored markers per element   │
+│                 and l-channel, marker size ∝ projection weight. Shown next   │
+│                 to the raw bands; own PDF download.                           │
 │ Energy zoom     Bands / DOS / LOBSTER cards have an "Energy window" bar:     │
 │                 enter min/max eV + Zoom to re-render PNG and PDF with that   │
-│                 window (Reset = full range).                                  │
+│                 window (Reset = full range). Applies to fat bands too.       │
 │                                                                               │
 │ OUTCAR analysis  Energy, Fermi level, magnetic moment, forces                 │
 │                                                                               │

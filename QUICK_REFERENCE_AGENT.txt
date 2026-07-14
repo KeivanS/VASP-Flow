@@ -173,6 +173,17 @@
 │   Spin-polarized: spin-up positive, spin-down mirrored (automatic)           │
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ BAND PLOTS & FAT BANDS ──────────────────────────────────────────────────────┐
+│ analyze.sh plots bands from EIGENVAL (band_plot.py — survives a truncated    │
+│ vasprun.xml). 03_bands always sets LORBIT=11, so a PROCAR is written and     │
+│ the orbital-weighted FAT BANDS are generated automatically alongside:         │
+│   analysis/<formula>_band.{png,pdf}                                           │
+│   analysis/<formula>_fatbands.{png,pdf}   marker size ∝ orbital weight,      │
+│                                           colored per element + l-channel    │
+│ Standalone:  ./band_plot.py 03_bands --out X [--ymin -4 --ymax 4]            │
+│              [--no-fatbands]   (fat bands need 03_bands/PROCAR)              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ ELF BOND PROFILES ───────────────────────────────────────────────────────────┐
 │ Plot ELF along non-equivalent nearest-neighbour bonds from an ELFCAR:         │
 │   ./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]     │
@@ -181,6 +192,12 @@
 │ element pair + length; samples ELF centre-to-centre with PBC.                 │
 │ Profiles BOTH the 1st and 2nd neighbour shells (dashed = 2nd; --shells 1     │
 │ for 1st only).                                                                │
+│                                                                               │
+│ HONEST RENDERING: VASP's ELFCAR is the PSEUDO-ELF (no PAW reconstruction),   │
+│ unphysical inside the augmentation spheres (RCORE, read from the POTCAR).    │
+│ 1D: dotted inside the spheres, solid outside; a box reports outside-only     │
+│ ⟨ELF⟩, ⟨|ELF'|⟩, ⟨ELF''⟩ per bond. 2D: semi-transparent gray discs mark      │
+│ the spheres. Interpret bonding from the OUTSIDE region + shape only.         │
 │ Output: PREFIX_elf_bonds.png/pdf  (PREFIX defaults to reduced formula,        │
 │ e.g. MoSe2_elf_bonds.pdf).  ELF=0.5 electron-gas reference marked.            │
 │                                                                               │
