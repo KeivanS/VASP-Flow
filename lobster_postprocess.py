@@ -56,7 +56,7 @@ MEASURES = {
     "COOP": ("COOPCAR.lobster", -1),
 }
 
-LABEL_RE = re.compile(r"No\.\d+:([A-Za-z]+)\d+->([A-Za-z]+)\d+\(([0-9.]+)\)")
+LABEL_RE = re.compile(r"No\.\d+:([A-Za-z]+)(\d+)->([A-Za-z]+)(\d+)\(([0-9.]+)\)")
 
 
 def read_lobster_car(path):
@@ -84,15 +84,19 @@ def read_lobster_car(path):
         m = LABEL_RE.match(labels[k])
         if not m:
             continue
-        a, b, dist = m.group(1), m.group(2), float(m.group(3))
+        a, b, dist = m.group(1), m.group(3), float(m.group(5))
         pair = "-".join(sorted((a, b)))
+        # A bond between two DIFFERENT atoms is listed once (A->B); a
+        # same-atom pair (e.g. La1->La1 + translation) is listed twice (±T).
+        same = m.group(1, 2) == m.group(3, 4)
         y = np.zeros(len(E))
         iy = np.zeros(len(E))
         for s in range(nspin):
             base = 1 + s * 2 * ncol
             y += data[:, base + 2 * k]
             iy += data[:, base + 2 * k + 1]
-        bonds.append({"pair": pair, "dist": dist, "y": y, "iy": iy})
+        bonds.append({"pair": pair, "dist": dist, "y": y, "iy": iy,
+                      "same": same})
     return E, bonds
 
 
@@ -163,15 +167,21 @@ def measure_groups(path, anti_sign):
     for bd in bonds:
         key = (bd["pair"], round(bd["dist"], DIST_DECIMALS))
         g = acc.setdefault(key, {"y": np.zeros(len(E)), "iy": np.zeros(len(E)),
-                                 "n": 0})
+                                 "n": 0, "mult": 0.0})
         g["y"] += bd["y"]
         g["iy"] += bd["iy"]
         g["n"] += 1
+        # unique bonds per cell: same-atom pairs are listed ±T (count 1/2),
+        # different-atom pairs once (count 1)
+        g["mult"] += 0.5 if bd["same"] else 1.0
     out = {}
     for key, g in acc.items():
-        # de-duplicate: every physical contact is listed in both directions
-        y = g["y"] / 2.0
-        iy = g["iy"] / 2.0
+        # PER BOND: mean over the equivalent contacts. The curve of one bond
+        # is direction-independent, so the mean is exact whether the group
+        # was listed once or in both ±T directions — this is directly
+        # comparable to the per-bond entries of ICO*LIST.lobster.
+        y = g["y"] / g["n"]
+        iy = g["iy"] / g["n"]
         B, A, fAB = bonding_antibonding(E, y, anti_sign)
         out[key] = {
             "I": integral_at_fermi(E, iy),
@@ -179,7 +189,7 @@ def measure_groups(path, anti_sign):
             "A": A,
             "fAB": fAB,
             "Esign": ";".join(f"{e:.4f}" for e in sign_changes_below_fermi(E, y)),
-            "n": g["n"] // 2,
+            "n": int(round(g["mult"])),
         }
     return out
 

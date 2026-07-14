@@ -933,20 +933,23 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
             y += data[:, 1 + s * 2 * ncol + 2 * idx + 1]
         return y
 
-    # TOTAL over all bonds (each contact is listed both directions → /2 = per cell)
-    label_re = re.compile(r"No\.\d+:([A-Za-z]+)\d+->([A-Za-z]+)\d+\(([0-9.]+)\)")
-    groups = defaultdict(list)                   # "A-B" -> [(dist, idx), ...]
+    # TOTAL per cell. LOBSTER's generator lists a bond between two DIFFERENT
+    # atoms once (A->B), but a same-atom pair (e.g. La1->La1 + translation)
+    # appears twice (±T) — so same-atom entries carry weight 1/2. (A uniform
+    # /2 halved the hetero-pair contribution.)
+    label_re = re.compile(r"No\.\d+:([A-Za-z]+)(\d+)->([A-Za-z]+)(\d+)\(([0-9.]+)\)")
+    groups = defaultdict(list)          # "A-B" -> [(dist, col, same_atom), ...]
     total  = np.zeros(len(E))
-    itotal = np.zeros(len(E))                    # total running integral (ICOxP)
+    itotal = np.zeros(len(E))           # total running integral (ICOxP), per cell
     for k in range(1, ncol):
-        total += curve(k)
-        itotal += integ(k)
         mlab = label_re.match(labels[k])
+        same = bool(mlab) and mlab.group(1, 2) == mlab.group(3, 4)
+        w = 0.5 if same else 1.0
+        total  += w * curve(k)
+        itotal += w * integ(k)
         if mlab:
-            a, b, dist = mlab.group(1), mlab.group(2), float(mlab.group(3))
-            groups["-".join(sorted((a, b)))].append((dist, k))
-    total /= 2.0
-    itotal /= 2.0
+            a, b, dist = mlab.group(1), mlab.group(3), float(mlab.group(5))
+            groups["-".join(sorted((a, b)))].append((dist, k, same))
 
     # Integrated value at E_F (ICOHP/ICOBI/ICOOP, LOBSTER sign convention)
     icoxp = float(np.interp(0.0, E, itotal))
@@ -970,20 +973,28 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
         if ecross is None or abs(e0) < abs(ecross):
             ecross = e0
 
-    # Bond-shell overlays per element pair: 1st shell (solid) + 2nd shell
-    # (dashed), each the sum of its equivalent bonds, per cell.
+    # Bond-shell overlays per element pair: PER BOND (mean over the equivalent
+    # bonds — direction-independent, so single vs ±T double listing is moot).
+    # 1st shell solid, 2nd dashed. Legend carries the multiplicity (unique
+    # bonds per cell) and the per-bond integral at E_F.
+    def _shell(pair, sel, ls_, tag=''):
+        n    = len(sel)
+        mult = int(round(sum(0.5 if s else 1.0 for _, _, s in sel)))
+        pb   = sum(curve(k) for _, k, _ in sel) / n
+        ipb  = float(np.interp(0.0, E, sum(integ(k) for _, k, _ in sel) / n))
+        return (f"{pair} ({sel[0][0]:.2f} Å{tag}, ×{mult}): {ipb:+.2f}/bond",
+                pb, ls_)
+
     nn = []
     for pair, items in sorted(groups.items()):
-        dmin = min(d for d, _ in items)
-        shell1 = [k for d, k in items if d <= dmin * 1.05]
-        rest   = [(d, k) for d, k in items if d > dmin * 1.05]
-        nn.append((f"{pair} ({dmin:.2f} Å)",
-                   sum(curve(k) for k in shell1) / 2.0, '-'))
+        dmin   = min(d for d, _, _ in items)
+        shell1 = [it for it in items if it[0] <= dmin * 1.05]
+        rest   = [it for it in items if it[0] > dmin * 1.05]
+        nn.append(_shell(pair, shell1, '-'))
         if rest:
-            d2 = min(d for d, _ in rest)
-            shell2 = [k for d, k in rest if d <= d2 * 1.05]
-            nn.append((f"{pair} ({d2:.2f} Å, 2nd)",
-                       sum(curve(k) for k in shell2) / 2.0, '--'))
+            d2 = min(d for d, _, _ in rest)
+            nn.append(_shell(pair, [it for it in rest if it[0] <= d2 * 1.05],
+                             '--', ', 2nd'))
 
     emin = float(CONFIG.get('dos_xmin', -10)) if emin is None else float(emin)
     emax = float(CONFIG.get('dos_xmax', 5))   if emax is None else float(emax)
@@ -995,8 +1006,8 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
     t = total[m]
     ax.fill_betweenx(Em, 0, t, where=(t >= 0), color='#2a9d4a', alpha=0.30)
     ax.fill_betweenx(Em, 0, t, where=(t < 0),  color='#c0392b', alpha=0.30)
-    ax.plot(t, Em, color='k', lw=1.8, label='total (all bonds)')
-    for lbl, yy, ls in nn:                        # bond-shell overlays (thin)
+    ax.plot(t, Em, color='k', lw=1.8, label='total (per cell)')
+    for lbl, yy, ls in nn:                        # per-bond shell overlays (thin)
         ax.plot(yy[m], Em, lw=0.9, alpha=0.9, ls=ls, label=lbl)
     ax.axvline(0, color='k', lw=0.7)              # bonding / antibonding boundary
     ax.axhline(0, color='gray', lw=0.9, ls='--')  # Fermi level
@@ -1004,18 +1015,24 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
     ax.set_ylabel('Energy − $E_F$ (eV)', fontsize=11)
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_title(f'{which.upper()} — {project_label}', fontsize=10)
-    ax.legend(fontsize=7, loc='lower right')
+    # South-WEST: curves are bonding-positive (east) at low energy, so the
+    # negative (west) side at the bottom is free of both curves and axes.
+    ax.legend(fontsize=6.5, loc='lower left')
     ax.grid(True, alpha=0.2)
 
-    # Info box: total + antibonding integrals at E_F, antibonding fraction,
-    # and the bonding→antibonding threshold energy (nearest E_F, either side).
+    # Info box: cell-total + antibonding integrals at E_F, antibonding
+    # fraction, and the bonding→antibonding threshold (per-bond values are in
+    # the legend). Placed on the WEST side at the E_F level, where the curves
+    # are usually near zero, so it avoids the plot lines and the axes.
     iname = {'cohp': 'ICOHP', 'cobi': 'ICOBI', 'coop': 'ICOOP'}[which]
     unit  = ' eV' if which == 'cohp' else ''
-    box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}\n"
+    box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}  (cell)\n"
            f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}  (antibonding)\n"
            f"f$_{{AB}}$ = {100*fab:.1f}%\n"
            + (f"B→AB @ {ecross:+.2f} eV" if ecross is not None else "B→AB: no crossing"))
-    ax.text(0.03, 0.97, box, transform=ax.transAxes, fontsize=7.5, va='top', ha='left',
+    y_ef = min(max((0.0 - emin) / (emax - emin), 0.12), 0.88)
+    ax.text(0.03, y_ef, box, transform=ax.transAxes, fontsize=7.5,
+            va='center', ha='left',
             bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     plt.tight_layout()
     fig.savefig(out_png, dpi=150)
@@ -1288,6 +1305,37 @@ def _elf_plane_png(pd_, ana):
     return hits[0] if hits else None
 
 
+def _default_proj_list(dos_dir):
+    """Default DOS projections when the user selected none: every element
+    with s/p/d (+f when the DOSCAR site blocks carry f columns). Keeps the
+    projected-DOS panel rendered with the same plotter/orientation/colors as
+    the total instead of falling back to a generic plot."""
+    els = []
+    for fname in ('CONTCAR', 'POSCAR'):
+        p = os.path.join(dos_dir, fname)
+        if os.path.isfile(p):
+            try:
+                tok = open(p).readlines()[5].split()
+                if tok and not tok[0].lstrip('+-').isdigit():
+                    els = tok
+            except Exception:
+                pass
+            break
+    if not els:
+        return []
+    orbs = ['s', 'p', 'd']
+    try:
+        dl = open(os.path.join(dos_dir, 'DOSCAR')).readlines()
+        nedos = int(dl[5].split()[2])
+        # first data line of the first site block; LORBIT=11 column counts:
+        # 10 (spd) / 17 (spdf) non-spin, 19 (spd) / 33 (spdf) spin-polarised
+        ncols = len(dl[7 + nedos].split())
+        if ncols in (17, 33):
+            orbs.append('f')
+    except Exception:
+        pass
+    return [{'element': e, 'orbitals': list(orbs)} for e in els]
+
 def _ewin_args():
     """Optional ?emin=&emax= energy-window (zoom) override from the request."""
     out = []
@@ -1434,6 +1482,8 @@ def api_plot(slug, ptype):
             if os.path.exists(proj_json):
                 try: proj_list = json.loads(Path(proj_json).read_text())
                 except Exception: pass
+            if not proj_list:                     # no selection → all elements
+                proj_list = _default_proj_list(src)
             # Both DOS plots are our own cumulative (stacked) plotters:
             #   total  = total black + element-stacked
             #   proj   = (element, orbital)-stacked
@@ -1562,6 +1612,8 @@ def api_plot_pdf(slug, ptype):
         if os.path.exists(proj_json):
             try: proj_list = json.loads(Path(proj_json).read_text())
             except Exception: pass
+        if not proj_list:
+            proj_list = _default_proj_list(os.path.join(pd_, '04_dos'))
         if proj_list:
             _cumulative_proj_dos_plot(os.path.join(pd_, '04_dos'), out, slug, proj_list,
                                       emin=zmin, emax=zmax)
