@@ -940,16 +940,24 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
     label_re = re.compile(r"No\.\d+:([A-Za-z]+)(\d+)->([A-Za-z]+)(\d+)\(([0-9.]+)\)")
     groups = defaultdict(list)          # "A-B" -> [(dist, col, same_atom), ...]
     total  = np.zeros(len(E))
-    itotal = np.zeros(len(E))           # total running integral (ICOxP), per cell
+    itotal = np.zeros(len(E))
+    nbonds = 0.0                        # unique bonds per cell (Σ weights)
     for k in range(1, ncol):
         mlab = label_re.match(labels[k])
         same = bool(mlab) and mlab.group(1, 2) == mlab.group(3, 4)
         w = 0.5 if same else 1.0
         total  += w * curve(k)
         itotal += w * integ(k)
+        nbonds += w
         if mlab:
             a, b, dist = mlab.group(1), mlab.group(3), float(mlab.group(5))
             groups["-".join(sorted((a, b)))].append((dist, k, same))
+    # Normalise the total to the MEAN PER BOND so it lives on the same scale
+    # as the per-bond shell overlays (this is also LOBSTER's own "Average"
+    # convention). The per-cell sum is nbonds × this.
+    if nbonds > 0:
+        total  = total / nbonds
+        itotal = itotal / nbonds
 
     # Integrated value at E_F (ICOHP/ICOBI/ICOOP, LOBSTER sign convention)
     icoxp = float(np.interp(0.0, E, itotal))
@@ -1006,7 +1014,7 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
     t = total[m]
     ax.fill_betweenx(Em, 0, t, where=(t >= 0), color='#2a9d4a', alpha=0.30)
     ax.fill_betweenx(Em, 0, t, where=(t < 0),  color='#c0392b', alpha=0.30)
-    ax.plot(t, Em, color='k', lw=1.8, label='total (per cell)')
+    ax.plot(t, Em, color='k', lw=1.8, label='total (mean per bond)')
     for lbl, yy, ls in nn:                        # per-bond shell overlays (thin)
         ax.plot(yy[m], Em, lw=0.9, alpha=0.9, ls=ls, label=lbl)
     ax.axvline(0, color='k', lw=0.7)              # bonding / antibonding boundary
@@ -1026,8 +1034,9 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
     # are usually near zero, so it avoids the plot lines and the axes.
     iname = {'cohp': 'ICOHP', 'cobi': 'ICOBI', 'coop': 'ICOOP'}[which]
     unit  = ' eV' if which == 'cohp' else ''
-    box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}  (cell)\n"
-           f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}  (antibonding)\n"
+    box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}/bond\n"
+           f"  (mean of {nbonds:.0f} bonds; cell {icoxp*nbonds:.2f}{unit})\n"
+           f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}/bond  (antibonding)\n"
            f"f$_{{AB}}$ = {100*fab:.1f}%\n"
            + (f"B→AB @ {ecross:+.2f} eV" if ecross is not None else "B→AB: no crossing"))
     y_ef = min(max((0.0 - emin) / (emax - emin), 0.12), 0.88)
