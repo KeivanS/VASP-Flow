@@ -502,17 +502,28 @@ class VASPInputGenerator:
             f.write('cp "$SCF_DIR/CHGCAR" "$HERE/"\n')
             f.write('echo "  CHGCAR copied from 02_scf"\n')
             self._write_copy_if_newer(f, '$SCF_DIR', 'POSCAR', 'POSCAR', '02_scf')
-            # Set NBANDS from NELECT in SCF OUTCAR: ceil(NELECT/2) + 10, rounded to even
+            # Set NBANDS from NELECT in SCF OUTCAR, rounded to even.
+            # Without SOC each band holds 2 electrons: occupied = NELECT/2, margin 10.
+            # With SOC (noncollinear) each band holds 1: occupied = NELECT, margin 20.
+            # A manually edited NBANDS is kept as long as it can hold all electrons.
+            soc = self.instructions.get('soc', False)
+            occ_expr = 'NELECT' if soc else 'NELECT / 2'
+            margin = 20 if soc else 10
             f.write('if [ -f "$SCF_DIR/OUTCAR" ]; then\n')
             f.write('    NELECT=$(grep "^ *NELECT" "$SCF_DIR/OUTCAR" | head -1 | awk \'{print int($3)}\')\n')
             f.write('    if [ -n "$NELECT" ] && [ "$NELECT" -gt 0 ]; then\n')
-            f.write('        NBANDS=$(( (NELECT / 2 + 10 + 1) / 2 * 2 ))\n')
-            f.write('        if grep -q "^NBANDS" "$HERE/INCAR"; then\n')
-            f.write('            sed -i.bak "s/^NBANDS.*/NBANDS = $NBANDS/" "$HERE/INCAR"\n')
+            f.write(f'        OCC=$(( {occ_expr} ))\n')
+            f.write(f'        NBANDS=$(( (OCC + {margin} + 1) / 2 * 2 ))\n')
+            f.write('        CUR=$(grep "^ *NBANDS" "$HERE/INCAR" | head -1 | tr -cd "0-9")\n')
+            f.write('        if [ -n "$CUR" ] && [ "$CUR" -gt "$OCC" ]; then\n')
+            f.write('            echo "  NBANDS = $CUR  kept from INCAR (needs > $OCC occupied)"\n')
+            f.write('        elif [ -n "$CUR" ]; then\n')
+            f.write('            sed -i.bak "s/^ *NBANDS.*/NBANDS = $NBANDS/" "$HERE/INCAR"\n')
+            f.write('            echo "  NBANDS = $NBANDS  (was $CUR: too small for NELECT = $NELECT, occupied = $OCC)"\n')
             f.write('        else\n')
             f.write('            echo "NBANDS = $NBANDS" >> "$HERE/INCAR"\n')
+            f.write('            echo "  NBANDS = $NBANDS  (NELECT = $NELECT, occupied = $OCC)"\n')
             f.write('        fi\n')
-            f.write('        echo "  NBANDS = $NBANDS  (NELECT = $NELECT, occupied = $((NELECT/2)))"\n')
             f.write('    fi\n')
             f.write('fi\n')
         os.chmod(f"{output_dir}/copy_from_scf.sh", 0o755)
