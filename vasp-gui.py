@@ -204,6 +204,9 @@ def api_generate():
     if d.get('is_2d'):      methods.append('2D monolayer')
     for e in u_entries:
         methods.append(f"GGA+U with U={e['U']} on {e['element']}-{e['orbital']} orbitals")
+    if not d.get('u_auto', True):
+        # disable the automatic default-U lookup (hubbard_u_defaults.csv)
+        methods.append('no GGA+U (automatic default-U lookup disabled)')
 
     # Tasks
     tasks, conv_lines = [], []
@@ -759,7 +762,10 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
     ax.set_title(f'Cumulative DOS — {project_label}')
     ax.grid(True, alpha=0.2)
     plt.tight_layout()
-    fig.savefig(out_png, dpi=150)
+    # Always save the PNG (browser) + PDF (publication) pair.
+    _stem = os.path.splitext(out_png)[0]
+    for _ext in ('png', 'pdf'):
+        fig.savefig(f'{_stem}.{_ext}', dpi=150 if _ext == 'png' else None)
     plt.close(fig)
     return True
 
@@ -880,7 +886,10 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
     ax.legend(fontsize=8, loc='upper left')
     ax.grid(True, alpha=0.2)
     plt.tight_layout()
-    fig.savefig(out_png, dpi=150)
+    # Always save the PNG (browser) + PDF (publication) pair.
+    _stem = os.path.splitext(out_png)[0]
+    for _ext in ('png', 'pdf'):
+        fig.savefig(f'{_stem}.{_ext}', dpi=150 if _ext == 'png' else None)
     plt.close(fig)
     return True
 
@@ -1044,7 +1053,10 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
             va='center', ha='left',
             bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     plt.tight_layout()
-    fig.savefig(out_png, dpi=150)
+    # Always save the PNG (browser) + PDF (publication) pair.
+    _stem = os.path.splitext(out_png)[0]
+    for _ext in ('png', 'pdf'):
+        fig.savefig(f'{_stem}.{_ext}', dpi=150 if _ext == 'png' else None)
     plt.close(fig)
     return True
 
@@ -2537,12 +2549,14 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
   <div class="checks" style="margin-bottom:12px;">
     <label class="ck"><input type="checkbox" id="hexagonal" checked> Hexagonal BZ</label>
     <label class="ck"><input type="checkbox" id="is_2d"> 2D / slab (k<sub>z</sub>=1)</label>
-    <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U</label>
+    <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U (explicit)</label>
+    <label class="ck" title="Tabulated literature U values (hubbard_u_defaults.csv, with references) are applied automatically to d/f elements when the structure contains an electronegative anion (O, F, S, Se, Te, Cl, Br, I). Uncheck to disable; explicit GGA+U entries always override the defaults.">
+      <input type="checkbox" id="u_auto" checked> Default Hubbard U (auto lookup)</label>
   </div>
   <!-- GGA+U rows -->
   <div id="u-section" class="hidden">
     <div style="font-size:11px;font-weight:600;color:var(--sub);margin-bottom:6px;">
-      Element / orbital / U value (eV)
+      Element / orbital / U value (eV) — overrides the automatic defaults
     </div>
     <div id="u-rows"></div>
     <button class="btn btn-ghost btn-sm" onclick="addURow()">+ Add element</button>
@@ -3022,6 +3036,7 @@ async function loadProjectSettings(){
 
     // GGA+U
     c('use_u', settings.use_u);
+    c('u_auto', settings.u_auto !== false);   // default ON
     toggleU(document.getElementById('use_u'));
     if(settings.use_u && settings.u_entries?.length){
       document.getElementById('u-rows').innerHTML='';
@@ -3307,6 +3322,7 @@ async function saveProjectSettings(){
     hexagonal:      chk('hexagonal'),
     is_2d:          chk('is_2d'),
     use_u:          chk('use_u'),
+    u_auto:         chk('u_auto'),
     u_entries:      getUEntries(),
     param_mode:     PARAM_MODE,
     conv_kp:        v('conv_kp'),

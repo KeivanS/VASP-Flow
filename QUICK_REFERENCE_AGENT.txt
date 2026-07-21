@@ -46,6 +46,27 @@
 │ PRESSURE: 10 GPa     constant-P relax: ISIF=3, IBRION=2, PSTRESS (kbar/GPa)  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ DEFAULT HUBBARD U (automatic GGA+U) ─────────────────────────────────────────┐
+│ When the POSCAR contains a tabulated d/f element TOGETHER WITH an             │
+│ electronegative anion (O, F, S, Se, Te, Cl, Br, I), GGA+U (Dudarev) is      │
+│ applied by DEFAULT                                                            │
+│ with U/J looked up from  hubbard_u_defaults.csv  (repo root; element,        │
+│ orbital, U, J + literature reference per row — edit/extend as needed).       │
+│ Defaults = Materials Project fitted U where available, else the midpoint of  │
+│ the linear-response (Cococcioni & de Gironcoli) range:                        │
+│   d: V 3.25, Cr 3.7, Mn 3.9, Fe 5.3, Co 3.32, Ni 6.2, Cu 4.75, Mo 4.38,     │
+│      W 6.2                                                                    │
+│   f: La 10.3/J1.0, Ce 5.0, Pr 5.25, Nd 5.75, Sm 6.25, Eu 6.5, Gd 6.7/J0.7,  │
+│      Tb-Yb 6.0, Th 3.0, U 4.5/J0.54, Pu 4.75                                 │
+│ The CSV also lists the LR ranges + MP values per element. Calibrated for     │
+│ PBE(-sol)/PAW — do NOT reuse with SCAN/R2SCAN or HSE06 without revalidation. │
+│ LMAXMIX (4 d / 6 f) is set automatically with LDAU.                          │
+│                                                                               │
+│ Disable:   GGA_U: OFF        (or:  no GGA+U  /  without GGA+U)               │
+│ Override:  Methods: GGA+U with U=4.0 on Fe-d    (explicit always wins)       │
+│ No anion (e.g. LaBi, intermetallics) -> defaults NOT applied.                 │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ EXPLICIT VASP KEYWORDS (any INCAR tag) ───────────────────────────────────────┐
 │ Every VASP keyword can be specified explicitly — nothing is hard-wired.       │
 │ A tag that already exists is overwritten in place; new tags are appended      │

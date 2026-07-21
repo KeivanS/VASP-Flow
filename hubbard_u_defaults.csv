@@ -1,0 +1,38 @@
+# HUBBARD U PARAMETERS — consolidated reference table (VASP-Flow defaults)
+# Conditions: calibrated for PBE(-sol) GGA with PAW potentials; values are the
+#   EFFECTIVE U (U_eff = U - J) of Dudarev's approach (VASP LDAUTYPE=2) unless
+#   a nonzero J is listed (VASP applies U - J internally).
+# Default policy (U_eV column): Materials Project fitted value where available,
+#   otherwise the midpoint of the linear-response (LR-cDFT) range.
+# WARNING: do NOT carry these to meta-GGAs (SCAN/R2SCAN) or hybrids (HSE06)
+#   without revalidation — those functionals already reduce self-interaction.
+# Sources: Wang, Maxisch & Ceder, Phys. Rev. B 73, 195107 (2006); Jain et al.,
+#   Comput. Mater. Sci. 50, 2295 (2011) [Materials Project]; Cococcioni & de
+#   Gironcoli, Phys. Rev. B 71, 035105 (2005); Himmetoglu et al., Int. J.
+#   Quantum Chem. 114, 14 (2014) [linear response].
+element,orbital,U_eV,J_eV,U_MP_eV,U_LR_range_eV,context,reference
+V,d,3.25,0.0,3.25,3.0-4.5,vanadium oxides; multivalent battery cathodes,"Wang/Ceder PRB 73, 195107 (2006); MP"
+Cr,d,3.7,0.0,3.7,3.5-4.0,antiferromagnetic oxides; 2D halides (CrI3),"Wang/Ceder PRB 73, 195107 (2006); MP"
+Mn,d,3.9,0.0,3.9,4.0-5.5,strongly environment-dependent (Mn2+ vs Mn4+),"Wang/Ceder PRB 73, 195107 (2006); MP"
+Fe,d,5.3,0.0,5.3,4.3-5.0,iron oxides; olivines (LiFePO4); pyrite,"Wang/Ceder PRB 73, 195107 (2006); MP"
+Co,d,3.32,0.0,3.32,4.5-5.5,cobaltites (LiCoO2); spinels,"Wang/Ceder PRB 73, 195107 (2006); MP"
+Ni,d,6.2,0.0,6.2,5.0-6.5,correlated Mott insulators (NiO),"Wang/Ceder PRB 73, 195107 (2006); MP"
+Cu,d,4.75,0.0,,4.0-5.5,cuprates / CuO; NOTE: MP applies no U to Cu,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"
+Mo,d,4.38,0.0,4.38,2.5-3.5,molybdates; MoS2 defect states,"Jain et al., Comput. Mater. Sci. 50, 2295 (2011); MP"
+W,d,6.2,0.0,6.2,2.0-3.0,tungsten bronzes and oxides,"MP (pymatgen MPRelaxSet)"
+La,f,10.3,1.0,,,empty 4f — shifts spuriously low GGA 4f bands upward,"Czyzyk & Sawatzky, PRB 49, 14211 (1994); common VASP practice"
+Ce,f,5.0,0.0,,4.5-5.5,ceria (CeO2/Ce2O3) phase stability; localized 4f,"Fabris et al. PRB 71, 041102(R) (2005); Castleton et al. JCP 127, 244704 (2007); LR midpoint"
+Pr,f,5.25,0.0,,5.0-5.5,heavy-fermion systems; rare-earth nickelates,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"
+Nd,f,5.75,0.0,,5.5-6.0,permanent magnets; localized 4f frameworks,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"
+Sm,f,6.25,0.0,,6.0-6.5,intermediate-valence behavior,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"
+Eu,f,6.5,0.0,,6.0-7.0,chalcogenides (EuO/EuS); magnetic semiconductors,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"
+Gd,f,6.7,0.7,,6.0-7.0,half-filled 4f7 (core-like),"Petersen, Hafner & Marsman, JPCM 18, 7021 (2006); consistent with LR range"
+Tb,f,6.0,0.0,,,generic localized-4f default — tune per system,"common practice; cf. Topsakal & Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)"
+Dy,f,6.0,0.0,,,generic localized-4f default — tune per system,"common practice; cf. Topsakal & Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)"
+Ho,f,6.0,0.0,,,generic localized-4f default — tune per system,"common practice; cf. Topsakal & Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)"
+Er,f,6.0,0.0,,,generic localized-4f default — tune per system,"common practice; cf. Topsakal & Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)"
+Tm,f,6.0,0.0,,,generic localized-4f default — tune per system,"common practice; cf. Topsakal & Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)"
+Yb,f,6.0,0.0,,,generic localized-4f default — tune per system,"common practice; cf. Topsakal & Wentzcovitch, Comput. Mater. Sci. 95, 263 (2014)"
+Th,f,3.0,0.0,,2.0-4.0,actinide baseline; often U=0 if 5f empty,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"
+U,f,4.5,0.54,,4.0-4.5,nuclear fuels (UO2),"Dudarev et al., PRB 57, 1505 (1998); consistent with LR range"
+Pu,f,4.75,0.0,,4.5-5.0,complex phase diagrams; highly correlated 5f,"LR midpoint; Cococcioni & de Gironcoli PRB 71, 035105 (2005)"

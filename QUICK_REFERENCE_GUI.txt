@@ -65,6 +65,9 @@
 
 ┌─ TASKS ───────────────────────────────────────────────────────────────────────┐
 │ ☑ Structure relaxation   Optimize atomic positions (IBRION=2)                │
+│ Default Hubbard U (auto lookup) — checked by default: tabulated U/J          │
+│   (hubbard_u_defaults.csv, with references) applied to d/f elements when     │
+│   O, F, S, Se, Te, Cl, Br, or I is present. Uncheck to disable.              │
 │ ☑ SCF                    Self-consistent charge density                       │
 │ ☑ Band structure         Electronic band dispersion — needs SCF first        │
 │ ☑ DOS                    Density of states — needs SCF first                 │

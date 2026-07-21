@@ -20,6 +20,49 @@ _WANNIER90_X = os.environ.get('WANNIER90_X', 'wannier90.x')
 _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster-5.1.0-OSX')
 
 
+# ── Default Hubbard U lookup ─────────────────────────────────────────────────
+# Values live in hubbard_u_defaults.csv (repo root) with full references;
+# this hard-coded fallback mirrors the CSV so generation works without it.
+# Applied automatically (Dudarev GGA+U) when a tabulated d/f element occurs
+# together with an electronegative anion (O, F, S, Se, Te, Cl, Br, I) —
+# disable with 'GGA_U: OFF', override with explicit 'GGA+U with U=... on El-orb'.
+_U_FALLBACK = {
+    'V': ('d', 3.25, 0.0), 'Cr': ('d', 3.7, 0.0),  'Mn': ('d', 3.9, 0.0),
+    'Fe': ('d', 5.3, 0.0), 'Co': ('d', 3.32, 0.0), 'Ni': ('d', 6.2, 0.0),
+    'Cu': ('d', 4.75, 0.0), 'Mo': ('d', 4.38, 0.0), 'W': ('d', 6.2, 0.0),
+    'La': ('f', 10.3, 1.0), 'Ce': ('f', 5.0, 0.0),  'Pr': ('f', 5.25, 0.0),
+    'Nd': ('f', 5.75, 0.0), 'Sm': ('f', 6.25, 0.0), 'Eu': ('f', 6.5, 0.0),
+    'Gd': ('f', 6.7, 0.7),  'Th': ('f', 3.0, 0.0),  'U': ('f', 4.5, 0.54),
+    'Pu': ('f', 4.75, 0.0),
+    **{_el: ('f', 6.0, 0.0) for _el in
+       ('Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb')},
+}
+_U_ANIONS = ('O', 'F', 'S', 'Se', 'Te', 'Cl', 'Br', 'I')
+
+
+def load_u_defaults():
+    """{element: {'orbital','U','J'}} read from hubbard_u_defaults.csv next to
+    the repo root (lines starting with '#' are metadata and skipped); falls
+    back to the built-in mirror if the CSV is missing."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', 'hubbard_u_defaults.csv')
+    out = {}
+    try:
+        import csv
+        with open(path, newline='') as fh:
+            rows = [ln for ln in fh if not ln.lstrip().startswith('#')]
+        for r in csv.DictReader(rows):
+            out[r['element'].strip()] = {'orbital': r['orbital'].strip(),
+                                         'U': float(r['U_eV']),
+                                         'J': float(r['J_eV'])}
+    except Exception:
+        pass
+    if not out:
+        out = {el: {'orbital': o, 'U': u, 'J': j}
+               for el, (o, u, j) in _U_FALLBACK.items()}
+    return out
+
+
 _INCAR_STEPS = ('all', 'relax', 'scf', 'bands', 'dos', 'wannier',
                 'dfpt', 'phonons', 'lobster')
 
@@ -1615,14 +1658,31 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 f"MAGMOM = {n}*{moment}", ""]
 
     def _u_lines(self) -> list:
-        """Generate GGA+U INCAR lines with actual per-element U values."""
+        """Generate GGA+U INCAR lines.
+
+        Explicit user entries (instructions 'GGA+U with U=... on El-orb')
+        always win. Otherwise, DEFAULT U values from hubbard_u_defaults.csv
+        are applied automatically when a tabulated d/f element occurs
+        together with an electronegative anion (O, F, S, Se, Te, Cl, Br, I). Disable
+        the automatic defaults with 'GGA_U: OFF' in the instructions.
+        """
         u_info = self.instructions.get('gga_u', {})
-        if not u_info.get('enabled'):
-            return []
-        els = u_info.get('elements', {})
+        els  = u_info.get('elements', {}) if u_info.get('enabled') else {}
+        auto = False
+        if not els and self.instructions.get('gga_u_auto', True):
+            # The tabulated U values are calibrated for PBE(-sol) GGA — never
+            # auto-apply them under meta-GGA/hybrid functionals, which already
+            # reduce the self-interaction error (explicit entries still win).
+            func_ok = self.instructions.get('functional', 'PBE') not in \
+                      ('R2SCAN', 'HSE06')
+            if func_ok and any(a in (self.elements or []) for a in _U_ANIONS):
+                table = load_u_defaults()
+                els = {el: table[el] for el in (self.elements or [])
+                       if el in table}
+                auto = bool(els)
         if not els:
             return []
-        # Build LDAUL, LDAUU, LDAUJ arrays in element order
+        # Build LDAUL, LDAUU, LDAUJ arrays in species order
         orb_map = {'s': 0, 'p': 1, 'd': 2, 'f': 3}
         ldaul, ldauu, ldauj = [], [], []
         for el in (self.elements or list(els.keys())):
@@ -1630,16 +1690,24 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 orb = els[el].get('orbital', 'd')
                 ldaul.append(str(orb_map.get(orb, 2)))
                 ldauu.append(str(els[el].get('U', 0.0)))
-                ldauj.append('0.0')
+                ldauj.append(str(els[el].get('J', 0.0)))
             else:
                 ldaul.append('-1')
                 ldauu.append('0.0')
                 ldauj.append('0.0')
-        return ["# GGA+U (Dudarev, LDAUTYPE=2)",
+        lmax = 6 if any(els[e].get('orbital') == 'f' for e in els) else 4
+        head = ["# GGA+U (Dudarev, LDAUTYPE=2)"]
+        if auto:
+            head = ["# GGA+U (Dudarev, LDAUTYPE=2) — DEFAULT U from the lookup",
+                    "# table hubbard_u_defaults.csv (d/f element + electronegative anion).",
+                    "# Disable with 'GGA_U: OFF' or override with",
+                    "# 'GGA+U with U=<val> on <El>-<orb>' in the instructions."]
+        return head + [
                 "LDAU = .TRUE.", "LDAUTYPE = 2",
                 f"LDAUL = {' '.join(ldaul)}",
                 f"LDAUU = {' '.join(ldauu)}",
                 f"LDAUJ = {' '.join(ldauj)}",
+                f"LMAXMIX = {lmax}    ! d/f charge-density mixing (required with LDAU)",
                 "LDAUPRINT = 2", ""]
 
     def _generate_incar_relax(self) -> str:

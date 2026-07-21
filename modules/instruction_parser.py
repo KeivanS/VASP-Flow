@@ -32,6 +32,7 @@ class InstructionParser:
             'soc':            self._extract_soc(content),
             'magnetization':  self._extract_magnetization(content),
             'gga_u':          self._extract_gga_u(content),
+            'gga_u_auto':     self._extract_gga_u_auto(content),
             'tasks':          self._extract_tasks(content),
             'convergence':    self._extract_convergence(content),
             'kpath':          self._extract_kpath(content),
@@ -193,6 +194,22 @@ class InstructionParser:
         
         return u_info
     
+    def _extract_gga_u_auto(self, content: str) -> bool:
+        """Switch for the automatic default-U lookup (hubbard_u_defaults.csv).
+
+        True (default): tabulated U values are applied automatically to d/f
+        elements in compounds containing O, F, S, Se, Te, Cl, Br, or I.
+        Turned off by any of:
+            GGA_U: OFF        (also = FALSE / NONE / NO / 0)
+            no GGA+U   /   without GGA+U   /   no Hubbard U
+        Explicit 'GGA+U with U=... on El-orb' entries are unaffected — they
+        always override the defaults.
+        """
+        return not re.search(
+            r'GGA_?\+?U\s*[:=]\s*(OFF|FALSE|NONE|NO|0)\b'
+            r'|\b(no|without)\s+(GGA\s*\+?\s*U|Hubbard\s*U|DFT\s*\+?\s*U)',
+            content, re.IGNORECASE)
+
     def _extract_tasks(self, content: str) -> List[str]:
         """Extract list of tasks to perform"""
         tasks = []

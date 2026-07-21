@@ -97,6 +97,8 @@ In the **Setup** tab:
 
 **Spin** — leave as *Non-magnetic* unless you know your material has magnetic order or you need spin-orbit coupling (SOC).
 
+**Hubbard U** — GGA+U (Dudarev) is applied **automatically** when the structure contains a d/f element with a tabulated U value *and* an electronegative anion (O, F, S, Se, Te, Cl, Br, I). The values and their literature references live in [`hubbard_u_defaults.csv`](hubbard_u_defaults.csv) — edit that file to change the defaults. Uncheck *Default Hubbard U* in Setup (or put `GGA_U: OFF` in the instructions file) to disable; explicit per-element GGA+U entries always override the lookup.
+
 **Tasks** — check the calculations you want to run:
 
 | Task | When to use |
