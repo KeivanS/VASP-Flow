@@ -10,7 +10,7 @@
 # that the GUI reads at startup into its CONFIG defaults.
 #
 # Three-layer configuration:
-#   1. site.env (this file) — sets default values via the Makefile on startup.
+#   1. default_paths (this file) — sets default values via the Makefile on startup.
 #   2. System Setup page in the GUI — lets you change any path interactively;
 #      saved to settings.json in your projects directory and auto-synced to
 #      profiles/slurm.json for SLURM agent runs.
@@ -56,12 +56,8 @@ MPI_NP     = 16
 # Use full path if wannier90.x is not on your PATH
 WANNIER90_X = wannier90.x
 
-# ── Structure visualizer (optional) ─────────────────────────────────────────
-# Application used to open POSCAR/CIF files (Jmol, VESTA, OVITO, …).
-# Leave empty to disable.  The GUI currently exposes this for future use;
-# the SC_SNAPS tool uses it to open structures with a single click.
-# Examples:
-#   VISUALIZER_X = ~/bin/jmol
-#   VISUALIZER_X = /Applications/VESTA.app/Contents/MacOS/VESTA
-#   VISUALIZER_X = ovito
-# VISUALIZER_X =
+# ── Structure visualizer ────────────────────────────────────────────────────
+# Opens POSCAR in Jmol/VESTA when you click 🔬 Visualize in the GUI.
+# Use full path or a binary on your PATH.
+# Leave blank to disable the button.
+VISUALIZER_X = ~/bin/jmol
