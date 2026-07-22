@@ -97,7 +97,16 @@ In the **Setup** tab:
 
 **Spin** — leave as *Non-magnetic* unless you know your material has magnetic order or you need spin-orbit coupling (SOC).
 
-**Hubbard U** — GGA+U (Dudarev) is applied **automatically** when the structure contains a d/f element with a tabulated U value *and* an electronegative anion (O, F, S, Se, Te, Cl, Br, I). The values and their literature references live in [`hubbard_u_defaults.csv`](hubbard_u_defaults.csv) — edit that file to change the defaults. Uncheck *Default Hubbard U* in Setup (or put `GGA_U: OFF` in the instructions file) to disable; explicit per-element GGA+U entries always override the lookup.
+**Hubbard U** — GGA+U (Dudarev, LDAUTYPE=2) is applied **automatically** when the structure contains a d/f element with a tabulated U value *and* an electronegative anion (O, F, S, Se, Te, Cl, Br, I). This covers oxides, sulfides (e.g. AgCrP₂S₆), selenides, tellurides, and halides. The Dudarev parameter is U_eff = U − J; J is set to zero automatically so no separate entry is needed. Values and literature references live in [`hubbard_u_defaults.csv`](hubbard_u_defaults.csv) — edit that file to change the defaults. Uncheck *Default Hubbard U* in Setup (or put `GGA_U: OFF` in the instructions file) to disable; explicit per-element GGA+U entries always override the lookup.
+
+**K-mesh density** — all Gamma-centred meshes are generated automatically from the POSCAR geometry using a *k-points per reciprocal atom* (kpra) target. Two tiers are available via the *K-mesh density* selector (or `KMESH_DENSITY: coarse|fine` in the instructions file):
+
+| Tier | kpra | Typical use |
+|---|---|---|
+| coarse | 1000 | Relaxation, convergence test starting point |
+| fine | 5000 | SCF, DOS, DFPT, spectroscopic steps (default) |
+
+Subdivisions Nᵢ scale with the reciprocal lattice vector magnitudes (Nᵢ ∝ |**b**ᵢ\*|) and are rounded to the nearest even integer. For hexagonal cells (a = b, γ = 120°) the in-plane values are fixed at 6 (coarse) or 12 (fine). The DOS mesh is always 2× the SCF mesh; the DFPT mesh is forced to match SCF exactly. Use `KMESH: N1 N2 N3` to override with an explicit grid.
 
 **Tasks** — check the calculations you want to run:
 

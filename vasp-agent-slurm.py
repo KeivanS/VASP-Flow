@@ -527,7 +527,7 @@ fi'''
             # Same shifted POSCAR as the kpoints test (see comment above).
             write_shifted_poscar(self.poscar_file, os.path.join(d, 'POSCAR'))
             with open(os.path.join(d, 'KPOINTS'), 'w') as f:
-                f.write(self.generator._generate_kpoints_auto('medium'))
+                f.write(self.generator._generate_kpoints_auto('coarse'))
             incar_text = self.generator._generate_incar_scf()
             if 'ISIF' not in incar_text:
                 incar_text += '\nISIF = 2\n'

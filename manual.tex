@@ -119,7 +119,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v1.8 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v1.9 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -450,10 +450,10 @@ from Materials Project IDs.  For every \texttt{mp-id} it downloads the
 \texttt{instructions.txt} (an SCF task plus an \texttt{INCAR scf:} block
 setting \texttt{LELF = .TRUE.} for the electron localization function),
 and writes a \texttt{runall.sh} that calls the chosen agent to build the
-inputs and then runs or submits each job.  Each SCF uses a medium
-\texttt{10 10 10} $\Gamma$-mesh by default; edit the \texttt{KMESH} line in
-\texttt{\_ht\_inputs/<id>/instructions.txt} (or pass \texttt{-{}-kmesh}) to
-change it.
+inputs and then runs or submits each job.  Each SCF uses the automatic
+\texttt{coarse} density (1000~kpra, cell-aware) by default; override via
+\texttt{KMESH\_DENSITY: fine} in \texttt{\_ht\_inputs/<id>/instructions.txt}
+or supply an explicit \texttt{-{}-kmesh} grid.
 
 \begin{lstlisting}[language=bash]
 pip install pymatgen mp-api          # MP download + primitive standardisation
@@ -483,9 +483,11 @@ Option & Meaning \\ \midrule
 \texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
 \texttt{-{}-mpi} & MPI tasks per job. \\
 \texttt{-{}-encut} & Optional ENCUT override (eV). \\
-\texttt{-{}-kmesh} & SCF $\Gamma$-mesh, e.g. \texttt{'8 8 8'} or \texttt{'12'}
-  (cubic); default medium \texttt{10 10 10}. Per-material edits via the
-  \texttt{KMESH} line in \texttt{instructions.txt}. \\
+\texttt{-{}-kmesh} & Explicit SCF $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'} or
+  \texttt{'12'} (cubic); overrides the automatic density.  Without this flag,
+  the cell-aware coarse (1000~kpra) density is used.  Per-material overrides
+  via the \texttt{KMESH} or \texttt{KMESH\_DENSITY} line in
+  \texttt{instructions.txt}. \\
 \texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM only; see below. \\
 \bottomrule
 \end{tabularx}
@@ -546,6 +548,7 @@ The parser is case-insensitive and searches the entire file, so section
 order is flexible.
 
 \subsection{Keyword reference}
+\label{sec:keywords}
 
 \begin{tabularx}{\linewidth}{@{}lX@{}}
 \thead
@@ -560,6 +563,11 @@ Keyword & Meaning \\ \midrule
 \texttt{KMESH:} & Explicit Gamma k-mesh overriding the automatic density,
   e.g.\ \texttt{8 8 8} or \texttt{12} (cubic).  Applies to every automatic
   mesh (relax/SCF/DOS); for 2-D give the third value (\texttt{12 12 1}). \\
+\texttt{KMESH\_DENSITY:} & Automatic k-mesh density tier: \texttt{coarse}
+  (1000~kpra, default for relaxation and convergence tests) or \texttt{fine}
+  (5000~kpra, default for SCF/DOS/spectroscopic steps).  kpra $= N_k \times
+  N_\mathrm{atoms}$ where $N_k = N_x N_y N_z$; subdivisions scale as
+  $N_i \propto |\mathbf{b}_i^*|$.  Overridden by explicit \texttt{KMESH}. \\
 \texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
   \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
   \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
@@ -666,8 +674,61 @@ Methods: GGA+U with U=4.0 on Fe-d orbitals
          GGA+U with U=6.0 on Ce-f orbitals
 \end{lstlisting}
 
-Dudarev scheme (LDAUTYPE=2); $J = 0$ is set automatically.
+Dudarev scheme (LDAUTYPE=2); $U_{\mathrm{eff}} = U - J$ with $J = 0$ set
+automatically.  In the Dudarev formalism the parameter labelled $U$ is already
+$U_{\mathrm{eff}}$, so no separate $J$ entry is needed.
 Combine freely with \texttt{collinear magnetization}.
+
+The automatic lookup is triggered whenever the structure contains a
+transition-metal or rare-earth element \emph{and} at least one
+electronegative anion from the set
+O, F, S, Se, Te, Cl, Br, I.
+This covers oxides, sulfides (e.g.\ AgCrP$_2$S$_6$), selenides, tellurides,
+and halides.  U values are read from \texttt{hubbard\_u\_defaults.csv};
+elements absent from the table (e.g.\ Ag with a filled $d^{10}$ shell)
+receive no correction.
+
+% ============================================================
+\subsection{Automatic k-mesh generation}
+\label{sec:kmesh}
+% ============================================================
+
+All Gamma-centred meshes are generated automatically from the POSCAR geometry.
+Two density tiers are available via the \texttt{KMESH\_DENSITY} key
+(Section~\ref{sec:keywords}):
+
+\begin{tabularx}{\linewidth}{@{}lllX@{}}
+\thead
+Tier & kpra & Typical use & Notes \\ \midrule
+\texttt{coarse} & 1000 & Relaxation, convergence tests & Agent k-point sweeps start here \\
+\texttt{fine}   & 5000 & SCF, DOS, spectroscopic steps & Default for all production steps \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\textbf{kpra} (k-points per reciprocal atom) $= N_x N_y N_z \times N_\mathrm{atoms}$.
+Given a target kpra and the reciprocal lattice vectors $\mathbf{b}_i^*$
+(columns of $2\pi(\mathbf{A}^{-1})^\top$), the algorithm solves
+
+\[
+  N_i = \lceil \alpha \, |\mathbf{b}_i^*| \rceil_{\text{even}}, \qquad
+  \alpha = \left(\frac{N_k}{|\mathbf{b}_1^*||\mathbf{b}_2^*||\mathbf{b}_3^*|}\right)^{1/3},
+  \quad N_k = \mathrm{kpra}/N_\mathrm{atoms}.
+\]
+
+Each $N_i$ is rounded to the nearest even integer so that BZ boundary points
+($k = 1/2$) are always included.  For 2-D slabs $N_z$ is fixed to 1.
+
+\textbf{Hexagonal cells} ($a = b$, $\gamma = 120°$): in-plane subdivisions
+are fixed at 6 (coarse) or 12 (fine); $N_z$ is still computed from
+$|\mathbf{b}_3^*|/|\mathbf{b}_1^*|$ to maintain uniform sampling.
+
+\textbf{DOS mesh}: always $2N_x \times 2N_y \times 2N_z$, ensuring denser
+sampling for accurate spectral features.  The DFPT mesh is forced to match
+the SCF mesh exactly.
+
+An explicit \texttt{KMESH: N1 N2 N3} entry overrides the automatic density
+for all steps.
 
 % ============================================================
 \section{Advanced INCAR Control}
@@ -1456,6 +1517,19 @@ Band plot empty or not shown &
     after the reduced formula (\texttt{MoSe2\_elf\_bonds.pdf}).  Detects the
     all-zero \texttt{ELFCAR} that VASP writes for non-collinear / spin-orbit
     runs and reports it instead of emitting a blank plot.
+  \item[\textcolor{mainblue}{v1.9} (2026-07-22)]
+    Physics-based cell-aware k-mesh generation replacing fixed uniform grids.
+    Two density tiers: \textbf{coarse} (1000 k-points per reciprocal atom,
+    kpra) for convergence tests and relaxations; \textbf{fine} (5000~kpra) for
+    SCF, DOS, and spectroscopic steps.  Subdivisions $N_i \propto |\mathbf{b}_i^*|$
+    from reciprocal lattice vectors, all-even to include BZ boundary points;
+    $N_z = 1$ for 2-D slabs.  Hexagonal systems: fixed $6{\times}6$ (coarse)
+    or $12{\times}12$ (fine) in-plane, $N_z$ from $|\mathbf{b}_3^*|/|\mathbf{b}_1^*|$.
+    DOS mesh always $2N_x{\times}2N_y{\times}2N_z$.  DFPT forced to match SCF
+    mesh exactly.  New instruction key \texttt{KMESH\_DENSITY} (coarse/fine).
+    GGA+U anion gate extended to all chalcogenides and halides
+    (O, F, S, Se, Te, Cl, Br, I); Hubbard lookup table now covers sulfides
+    such as AgCrP$_2$S$_6$.
 \end{description}
 
 % ============================================================
@@ -1468,9 +1542,9 @@ Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
 Section~\ref{sec:highthroughput}).  For each Materials Project ID it
 downloads the \textbf{primitive} cell, stages an SCF calculation that also
 writes the electron localization function (\texttt{LELF = .TRUE.}
-$\rightarrow$ \texttt{ELFCAR}) on a medium \texttt{10 10 10} $\Gamma$-mesh
-(default; editable per material or via \texttt{-{}-kmesh}), and builds a
-\texttt{runall.sh}.
+$\rightarrow$ \texttt{ELFCAR}) on a cell-aware coarse $\Gamma$-mesh
+(1000~kpra default; override with \texttt{KMESH\_DENSITY} or
+\texttt{-{}-kmesh}), and builds a \texttt{runall.sh}.
 
 \begin{lstlisting}[language=bash]
 pip install pymatgen mp-api

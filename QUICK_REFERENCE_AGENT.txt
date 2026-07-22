@@ -41,9 +41,24 @@
 │ NSW: 100             max ionic steps                                          │
 │ EDIFFG: -0.01        force convergence criterion (eV/Å)                      │
 │ ENCUT: 520           manual ENCUT override (eV)                              │
+│ KMESH_DENSITY: fine  automatic k-mesh tier (coarse=1000 kpra / fine=5000)   │
+│ KMESH: 8 8 8         explicit Gamma-mesh overriding KMESH_DENSITY            │
 │ NKPTS: 60            k-points per band segment                               │
 │ MPI: 128             total MPI tasks                                         │
 │ PRESSURE: 10 GPa     constant-P relax: ISIF=3, IBRION=2, PSTRESS (kbar/GPa)  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+┌─ AUTOMATIC K-MESH (kpra) ─────────────────────────────────────────────────────┐
+│ Two density tiers — select via KMESH_DENSITY: coarse | fine                  │
+│   coarse  1000 kpra   relaxation and convergence tests                        │
+│   fine    5000 kpra   SCF, DOS, DFPT, LOBSTER, Wannier90                     │
+│ kpra = Nx×Ny×Nz × N_atoms                                                    │
+│ Subdivisions: Ni ∝ |b_i*| (reciprocal lattice vector norms), all even        │
+│ DOS mesh: always 2Nx × 2Ny × 2Nz (twice the SCF mesh)                       │
+│ DFPT mesh: forced equal to SCF mesh                                           │
+│ Hexagonal cells (a=b, γ=120°): Nx=Ny=6 (coarse) or 12 (fine); Nz from |b3*| │
+│ 2-D slabs: Nz=1 always                                                       │
+│ Explicit KMESH overrides KMESH_DENSITY for all steps                         │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ DEFAULT HUBBARD U (automatic GGA+U) ─────────────────────────────────────────┐
@@ -455,7 +470,7 @@
 │   --agent local|slurm   which agent (prompts if omitted)                      │
 │   --functional PBE      PBE (default) / PBEsol / R2SCAN / ...                 │
 │   --encut 600           optional ENCUT override (eV)                          │
-│   --kmesh '10 10 10'   SCF Gamma-mesh; medium 10x10x10 default (editable)     │
+│   --kmesh '10 10 10'   explicit SCF Gamma-mesh; overrides KMESH_DENSITY       │
 │   --chain / --no-chain  SLURM: afterok-chain materials (default on)           │
 │                                                                               │
 │ Output:                                                                       │
