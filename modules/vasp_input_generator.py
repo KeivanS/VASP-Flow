@@ -1988,6 +1988,11 @@ echo "      Data:  band.yaml  FORCE_SETS"
         nx = max(1, round(alpha * b[0]))
         ny = max(1, round(alpha * b[1]))
         nz = 1 if self.instructions.get('is_2d', False) else max(1, round(alpha * b[2]))
+        # Enforce even parity so BZ boundary points (k=1/2) are always sampled.
+        # 2D slab nz=1 is intentional (Gamma-only out-of-plane) and left as-is.
+        if nx % 2: nx += 1
+        if ny % 2: ny += 1
+        if nz > 1 and nz % 2: nz += 1
         return nx, ny, nz
 
     def _generate_kpoints_auto(self, density: str = 'fine') -> str:
