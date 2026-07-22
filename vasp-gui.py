@@ -1052,31 +1052,29 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
     ax.set_ylabel('Energy − $E_F$ (eV)', fontsize=11)
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_title(f'{which.upper()} — {project_label}', fontsize=10)
-    # South-WEST: curves are bonding-positive (east) at low energy, so the
-    # negative (west) side at the bottom is free of both curves and axes.
-    ax.legend(fontsize=6.5, loc='lower left')
+    ax.legend(fontsize=6.5, loc='upper left',
+              bbox_to_anchor=(1.02, 1), borderaxespad=0)
     ax.grid(True, alpha=0.2)
 
-    # Info box: cell-total + antibonding integrals at E_F, antibonding
-    # fraction, and the bonding→antibonding threshold (per-bond values are in
-    # the legend). Placed on the WEST side at the E_F level, where the curves
-    # are usually near zero, so it avoids the plot lines and the axes.
+    # Info box placed to the right of the axes (below the legend), outside the
+    # plot area so it never overlaps the curves.
     iname = {'cohp': 'ICOHP', 'cobi': 'ICOBI', 'coop': 'ICOOP'}[which]
     unit  = ' eV' if which == 'cohp' else ''
     box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}/bond\n"
-           f"  (mean of {nbonds:.0f} bonds; cell {icoxp*nbonds:.2f}{unit})\n"
-           f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}/bond  (antibonding)\n"
+           f"  (mean of {nbonds:.0f} bonds;\n"
+           f"  cell {icoxp*nbonds:.2f}{unit})\n"
+           f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}/bond\n"
            f"f$_{{AB}}$ = {100*fab:.1f}%\n"
            + (f"B→AB @ {ecross:+.2f} eV" if ecross is not None else "B→AB: no crossing"))
-    y_ef = min(max((0.0 - emin) / (emax - emin), 0.12), 0.88)
-    ax.text(0.03, y_ef, box, transform=ax.transAxes, fontsize=7.5,
-            va='center', ha='left',
+    ax.text(1.02, 0.0, box, transform=ax.transAxes, fontsize=7.5,
+            va='bottom', ha='left',
             bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     plt.tight_layout()
     # Always save the PNG (browser) + PDF (publication) pair.
     _stem = os.path.splitext(out_png)[0]
     for _ext in ('png', 'pdf'):
-        fig.savefig(f'{_stem}.{_ext}', dpi=150 if _ext == 'png' else None)
+        fig.savefig(f'{_stem}.{_ext}', dpi=150 if _ext == 'png' else None,
+                    bbox_inches='tight')
     plt.close(fig)
     return True
 
