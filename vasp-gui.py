@@ -36,6 +36,8 @@ CONFIG = {
     'mpi_launch':             os.environ.get('MPI_LAUNCH',      'mpirun -np'),
     'mpi_np':                 int(os.environ.get('MPI_NP',      '1')),
     'wannier90_x':            os.environ.get('WANNIER90_X',     'wannier90.x'),
+    'lobster_x':              os.environ.get('LOBSTER_X',       'lobster'),
+    'visualizer_x':           os.environ.get('VISUALIZER_X',    ''),
     'potcar_dir':             os.environ.get('VASP_POTCAR_DIR', ''),
     # SLURM settings
     'slurm_partition':        'standard',
@@ -164,6 +166,7 @@ def api_config():
         'vasp_ncl':        CONFIG['vasp_ncl'],
         'vasp_gam':        CONFIG['vasp_gam'],
         'wannier90_x':     CONFIG['wannier90_x'],
+        'lobster_x':       CONFIG['lobster_x'],
         'mpi_cmd':         CONFIG['slurm_mpi_cmd'],
         'mpi_np':          CONFIG['slurm_nodes'] * CONFIG['slurm_ntasks_per_node'],
         'modules':         [],
@@ -182,6 +185,65 @@ def api_config():
     Path(os.path.join(profiles_dir, 'slurm.json')).write_text(
         json.dumps(slurm_profile, indent=2))
     return jsonify(ok=True)
+
+
+def _is_shell_script(path: str) -> bool:
+    try:
+        with open(path, 'rb') as f:
+            return f.read(2) == b'#!'
+    except Exception:
+        return False
+
+
+def _launch_visualizer(visualizer: str, filepath: str):
+    """Open filepath in the configured visualizer.
+
+    Handles macOS .app bundles, shell scripts, and plain binaries.
+    Launched detached (Popen, not run) so the GUI doesn't block.
+    """
+    env = os.environ.copy()
+    vx = os.path.expanduser(visualizer)
+    if vx.endswith('.app'):
+        subprocess.Popen(['open', '-a', vx, filepath], env=env)
+    elif vx.endswith('.sh') or _is_shell_script(vx):
+        subprocess.Popen(['sh', vx, filepath], env=env)
+    else:
+        subprocess.Popen([vx, filepath], env=env)
+
+
+@app.route('/api/visualize_poscar', methods=['POST'])
+def api_visualize_poscar():
+    """Convert the POSCAR text → XYZ, then open it in the configured visualizer."""
+    import tempfile
+    d          = request.json or {}
+    poscar_txt = d.get('poscar', '').strip()
+    visualizer = CONFIG.get('visualizer_x', '').strip()
+
+    if not poscar_txt:
+        return jsonify(error='No POSCAR content provided.'), 400
+    if not visualizer:
+        return jsonify(error=(
+            'No visualizer set. Add a path under System Setup → Structure visualizer '
+            'and click Save Settings.')), 400
+
+    try:
+        from poscar2xyz import poscar_text_to_xyz
+        xyz_txt = poscar_text_to_xyz(poscar_txt, source_name='POSCAR')
+    except Exception as exc:
+        return jsonify(error=f'POSCAR→XYZ conversion failed: {exc}'), 500
+
+    # Write XYZ to a temp file that persists until the visualizer reads it.
+    tmp = tempfile.NamedTemporaryFile(suffix='.xyz', delete=False, mode='w')
+    tmp.write(xyz_txt)
+    tmp.close()
+
+    try:
+        _launch_visualizer(visualizer, tmp.name)
+    except Exception as exc:
+        return jsonify(error=f'Could not launch visualizer: {exc}'), 500
+
+    return jsonify(ok=True)
+
 
 @app.route('/api/generate', methods=['POST'])
 def api_generate():
@@ -325,7 +387,8 @@ def api_generate():
         env['VASP_POTCAR_DIR'] = potcar_dir
     for key, evar in [('vasp_std','VASP_STD'), ('vasp_ncl','VASP_NCL'),
                       ('vasp_gam','VASP_GAM'), ('mpi_launch','MPI_LAUNCH'),
-                      ('wannier90_x','WANNIER90_X')]:
+                      ('wannier90_x','WANNIER90_X'), ('lobster_x','LOBSTER_X'),
+                      ('visualizer_x','VISUALIZER_X')]:
         val = CONFIG.get(key, '')
         if val:
             env[evar] = val
@@ -2250,6 +2313,10 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
         <input id="cfg_vasp_gam" placeholder="e.g. ~/bin/vasp_gam"></div>
       <div class="f"><label>Wannier90 binary</label>
         <input id="cfg_wannier90_x" placeholder="wannier90.x"></div>
+      <div class="f"><label>LOBSTER binary</label>
+        <input id="cfg_lobster_x" placeholder="e.g. lobster or ~/bin/lobster-5.1.0"></div>
+      <div class="f"><label>Structure visualizer <span style="font-weight:400;color:var(--sub);">(Jmol / VESTA — optional)</span></label>
+        <input id="cfg_visualizer_x" placeholder="e.g. ~/bin/jmol or /Applications/VESTA.app/Contents/MacOS/VESTA"></div>
       <div class="f" style="grid-column:1/-1;"><label>POTCAR library directory</label>
         <input id="cfg_potcar_dir" placeholder="e.g. /opt/vasp/potpaw_PBE.54"
                oninput="document.getElementById('potcar_dir').value=this.value; onPotcarDir()">
@@ -2366,6 +2433,10 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <label class="btn btn-ghost btn-sm" style="cursor:pointer;">
       📁 Load file <input type="file" id="poscar_file" style="display:none" onchange="loadFile(this)">
     </label>
+    <button class="btn btn-ghost btn-sm" onclick="visualizePoscar()"
+            title="Convert to XYZ and open in the structure visualizer set in System Setup">
+      🔬 Visualize
+    </button>
     <span id="poscar-elements" style="font-size:12px;color:var(--sub);"></span>
   </div>
 </div>
@@ -2693,6 +2764,8 @@ window.addEventListener('DOMContentLoaded', () => {
   s('cfg_vasp_ncl',             CFG.vasp_ncl);
   s('cfg_vasp_gam',             CFG.vasp_gam);
   s('cfg_wannier90_x',          CFG.wannier90_x);
+  s('cfg_lobster_x',            CFG.lobster_x);
+  s('cfg_visualizer_x',         CFG.visualizer_x);
   s('cfg_potcar_dir',           CFG.potcar_dir);
   // System Setup — workstation MPI
   s('cfg_mpi_launch',           CFG.mpi_launch);
@@ -2762,6 +2835,8 @@ async function saveSystemConfig(){
     vasp_ncl:               v('cfg_vasp_ncl'),
     vasp_gam:               v('cfg_vasp_gam'),
     wannier90_x:            v('cfg_wannier90_x') || 'wannier90.x',
+    lobster_x:              v('cfg_lobster_x') || 'lobster',
+    visualizer_x:           v('cfg_visualizer_x'),
     potcar_dir:             v('cfg_potcar_dir'),
     // workstation MPI (launch command only; core count is set per-project)
     mpi_launch:             v('cfg_mpi_launch') || 'mpirun -np',
@@ -3045,6 +3120,17 @@ function loadFile(inp){
   const r=new FileReader();
   r.onload=e=>{document.getElementById('poscar').value=e.target.result; onPoscar();};
   r.readAsText(inp.files[0]);
+}
+
+async function visualizePoscar(){
+  const poscar=document.getElementById('poscar')?.value?.trim();
+  if(!poscar){ alertTop('Paste or load a POSCAR first.','warn'); return; }
+  const res=await fetch('/api/visualize_poscar',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({poscar})
+  });
+  const j=await res.json();
+  if(!res.ok) alertTop('Visualizer: '+(j.error||'unknown error'),'error');
 }
 
 // ── POTCAR directory + variant selection ───────────────────────────────────

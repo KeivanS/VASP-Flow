@@ -1,12 +1,24 @@
-# site.env — Platform configuration for VASP Workflow GUI
+# default_paths — Platform configuration for VASP Workflow GUI
 #
 # First-time setup:
-#   cp site.env.example site.env
-#   edit site.env for your system
+#   make setup          (copies this file to default_paths)
+#   edit default_paths  for your system
 #   make run
 #
 # This file uses Makefile variable syntax (KEY = value).
-# The Makefile includes it and exports all variables to the Python app.
+# The Makefile includes it and exports all variables as environment variables
+# that the GUI reads at startup into its CONFIG defaults.
+#
+# Three-layer configuration:
+#   1. site.env (this file) — sets default values via the Makefile on startup.
+#   2. System Setup page in the GUI — lets you change any path interactively;
+#      saved to settings.json in your projects directory and auto-synced to
+#      profiles/slurm.json for SLURM agent runs.
+#   3. profiles/workstation.json — used when running vasp-agent.py directly
+#      from the command line (without the GUI).  Leave empty strings to inherit
+#      from environment variables / site.env defaults.
+#
+# Precedence: GUI-saved settings (settings.json) > site.env > built-in defaults.
 # Lines starting with # are comments.
 
 # ── Python interpreter ──────────────────────────────────────────────────────
@@ -22,14 +34,12 @@ VASP_NCL = ~/BIN/vasp_ncl
 VASP_GAM = ~/BIN/vasp_gam
 
 # ── LOBSTER (bonding analysis, 08_lobster step) ─────────────────────────────
-# Path/name of the lobster binary. Optional — defaults to lobster-5.1.0-OSX on
-# PATH. Can also be overridden at runtime via $LOBSTER_BIN.
-LOBSTER_X = lobster-5.1.0-OSX
+# Path or name of the lobster binary.  Must be on PATH or a full path.
+LOBSTER_X = lobster
 
 # ── POTCAR library ──────────────────────────────────────────────────────────
-# Directory that contains element sub-folders (e.g. PAW_PBE/Ga, PAW_PBE/As …)
+# Directory that contains element sub-folders (e.g. Ga/, As/ …)
 # Leave commented out to inherit $VASP_POTCAR_DIR from your shell (~/.bashrc).
-# Uncomment and set a path only if you want to override the shell variable.
 # VASP_POTCAR_DIR = /path/to/PAW_PBE
 
 # ── MPI launcher ────────────────────────────────────────────────────────────
@@ -38,11 +48,20 @@ LOBSTER_X = lobster-5.1.0-OSX
 #   mpirun -np          (Open MPI, standard Linux/Mac)
 #   mpiexec -n          (Intel MPI, MPICH)
 #   srun -n             (SLURM clusters)
-#   mpirun -np --bind-to core   (Open MPI, multi-socket Mac)
 # Set MPI_NP = 1 (or leave MPI_LAUNCH empty) for serial execution.
 MPI_LAUNCH = mpirun -np
 MPI_NP     = 16
 
 # ── Wannier90 executable ─────────────────────────────────────────────────────
-# Use full path if wannier90.x is not in your PATH
+# Use full path if wannier90.x is not on your PATH
 WANNIER90_X = wannier90.x
+
+# ── Structure visualizer (optional) ─────────────────────────────────────────
+# Application used to open POSCAR/CIF files (Jmol, VESTA, OVITO, …).
+# Leave empty to disable.  The GUI currently exposes this for future use;
+# the SC_SNAPS tool uses it to open structures with a single click.
+# Examples:
+#   VISUALIZER_X = ~/bin/jmol
+#   VISUALIZER_X = /Applications/VESTA.app/Contents/MacOS/VESTA
+#   VISUALIZER_X = ovito
+# VISUALIZER_X =

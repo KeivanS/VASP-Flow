@@ -1,9 +1,9 @@
 # ── Load platform settings ──────────────────────────────────────────────────
-# '-include' means: silently skip if site.env does not exist yet
--include site.env
+# '-include' means: silently skip if default_paths does not exist yet
+-include default_paths
 export
 
-# Fallbacks (used only when site.env is missing)
+# Fallbacks (used only when default_paths is missing)
 PYTHON      ?= python3
 VASP_STD    ?= ~/BIN/vasp_std
 VASP_NCL    ?= ~/BIN/vasp_ncl
@@ -21,11 +21,11 @@ snaps:
 	$(PYTHON) sc-snaps-gui.py
 
 setup:
-	@if [ -f site.env ]; then \
-		echo "site.env already exists — edit it to change settings"; \
+	@if [ -f default_paths ]; then \
+		echo "default_paths already exists — edit it to change settings"; \
 	else \
-		cp site.env.example site.env; \
-		echo "Created site.env — edit it for your system, then run: make run"; \
+		cp default_paths.example default_paths; \
+		echo "Created default_paths — edit it for your system, then run: make run"; \
 	fi
 
 clean:
@@ -35,12 +35,12 @@ clean:
 	@echo "Clean complete."
 
 help:
-	@echo "make setup  — create site.env from template (first-time setup)"
+	@echo "make setup  — create default_paths from template (first-time setup)"
 	@echo "make run    — start the VASP Workflow GUI  (port 5001)"
 	@echo "make snaps  — start the SC-Snaps GUI       (port 5050)"
 	@echo "make clean  — remove generated temp files"
 	@echo ""
-	@echo "Platform settings (edit site.env):"
+	@echo "Platform settings (edit default_paths):"
 	@echo "  PYTHON      = $(PYTHON)"
 	@echo "  VASP_STD    = $(VASP_STD)"
 	@echo "  VASP_NCL    = $(VASP_NCL)"

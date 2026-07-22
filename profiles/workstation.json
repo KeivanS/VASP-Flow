@@ -7,6 +7,8 @@
   "mpi_cmd": "",
   "mpi_np": 0,
   "wannier90_x": "",
+  "lobster_x": "",
+  "visualizer_x": "",
   "modules": [],
   "slurm": null
 }

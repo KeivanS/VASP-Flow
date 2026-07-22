@@ -17,7 +17,7 @@ _VASP_GAM    = os.environ.get('VASP_GAM',    '~/BIN/vasp_gam')
 _MPI_LAUNCH  = os.environ.get('MPI_LAUNCH',  'mpirun -np')
 _MPI_NP      = int(os.environ.get('MPI_NP',  '1'))
 _WANNIER90_X = os.environ.get('WANNIER90_X', 'wannier90.x')
-_LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster-5.1.0-OSX')
+_LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster')
 
 
 # ── Default Hubbard U lookup ─────────────────────────────────────────────────
