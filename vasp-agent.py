@@ -558,7 +558,7 @@ class VASPWorkflowAgent:
 
         # ── choose_params.py (auto-select converged ENCUT / k-mesh) ─────
         chooser_src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   'conv_choose.py')
+                                   'modules', 'conv_choose.py')
         if os.path.isfile(chooser_src):
             chooser = os.path.join(conv_dir, 'choose_params.py')
             shutil.copy(chooser_src, chooser)
@@ -996,8 +996,8 @@ class VASPWorkflowAgent:
 
     # ── analysis ────────────────────────────────────────────────────────────
     def _copy_util(self, ana_dir, src_name, dst_name):
-        """Copy a standalone utility next to this agent into analysis/. True on success."""
-        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), src_name)
+        """Copy a standalone utility from modules/ into analysis/. True on success."""
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules', src_name)
         if not os.path.exists(src):
             return False
         dst = os.path.join(ana_dir, dst_name)
@@ -1007,16 +1007,20 @@ class VASPWorkflowAgent:
         return True
 
     def _gen_elf_bonds_script(self, ana_dir):
-        """Copy elf_bonds.py -> analysis/plot_elf_bonds.py."""
+        """Copy modules/elf_bonds.py -> analysis/plot_elf_bonds.py."""
         return self._copy_util(ana_dir, 'elf_bonds.py', 'plot_elf_bonds.py')
 
     def _gen_band_eigenval_script(self, ana_dir):
-        """Copy band_plot.py -> analysis/plot_band_eigenval.py (default band plotter)."""
+        """Copy modules/band_plot.py -> analysis/plot_band_eigenval.py."""
         return self._copy_util(ana_dir, 'band_plot.py', 'plot_band_eigenval.py')
 
     def _gen_dos_script(self, ana_dir):
-        """Copy dos_plot.py -> analysis/plot_dos.py (cumulative total + projected DOS)."""
+        """Copy modules/dos_plot.py -> analysis/plot_dos.py."""
         return self._copy_util(ana_dir, 'dos_plot.py', 'plot_dos.py')
+
+    def _gen_cohp_plot_script(self, ana_dir):
+        """Copy modules/cohp_plot.py -> analysis/plot_cohp.py."""
+        return self._copy_util(ana_dir, 'cohp_plot.py', 'plot_cohp.py')
 
     def _gen_analysis(self, calc_dirs):
         pd  = self.project_dir
@@ -1118,15 +1122,26 @@ class VASPWorkflowAgent:
                 f.write('fi\n\n')
 
             # ── LOBSTER bonding: aggregate ICOHP/ICOBI/ICOOP + antibonding ──
-            if has_lobster:
+            if has_lobster and self._gen_cohp_plot_script(ana):
                 pp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                  'lobster_postprocess.py')
+                                  'modules', 'lobster_postprocess.py')
                 f.write('if [ -f "$HERE/08_lobster/COHPCAR.lobster" ]; then\n')
                 f.write('    echo "=== LOBSTER bonding (ICOHP/ICOBI/ICOOP + antibonding) ==="\n')
                 f.write(f'    python3 "{pp}" --dir "$HERE/08_lobster" '
                         '--out "$HERE/08_lobster/lobster_summary.csv" 2>&1\n')
                 f.write('    cp "$HERE/08_lobster/lobster_summary.csv" "$HERE/analysis/" 2>/dev/null || true\n')
                 f.write('    echo "  Saved: 08_lobster/lobster_summary.csv"\n')
+                f.write('    echo "=== LOBSTER COHP / COBI / COOP plots ==="\n')
+                f.write('    for WHICH in cohp cobi coop; do\n')
+                f.write('        UPPER=$(echo "$WHICH" | tr "[:lower:]" "[:upper:]")\n')
+                f.write('        if [ -f "$HERE/08_lobster/${UPPER}CAR.lobster" ]; then\n')
+                f.write('            ( cd "$HERE/analysis" && python3 plot_cohp.py \\\n')
+                f.write('                "$HERE/08_lobster" \\\n')
+                f.write('                "$HERE/analysis/${BASE}_${WHICH}" \\\n')
+                f.write('                "$BASE" --which "$WHICH" ) 2>&1\n')
+                f.write('        fi\n')
+                f.write('    done\n')
+                f.write('    echo "  Saved: analysis/*_cohp.* *_cobi.* *_coop.*"\n')
                 f.write('fi\n\n')
 
             f.write('echo ""\n')

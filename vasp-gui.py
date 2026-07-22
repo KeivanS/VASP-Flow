@@ -917,166 +917,13 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
 @_plot_locked
 def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
                     emin=None, emax=None):
-    """Plot COHP, COBI or COOP vs energy from *CAR.lobster (portrait).
-
-    Thick black = TOTAL over all bonds (sum, per cell). Thin overlaid lines =
-    the nearest-neighbour shell of each element pair (sum of its equivalent
-    bonds), on the same scale as the total. Energy is the vertical axis
-    (Fermi-referenced, E_F = 0); the descriptor is horizontal (bonding +).
-
-    which='cohp' plots -COHP; 'cobi'/'coop' plot the value directly (positive =
-    bonding for all three after the sign flip). Bonding region shaded green,
-    antibonding red.
-    """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import re
-    from collections import defaultdict
-
-    files = {'cohp': 'COHPCAR.lobster', 'cobi': 'COBICAR.lobster',
-             'coop': 'COOPCAR.lobster'}
-    path = os.path.join(lobster_dir, files.get(which, 'COHPCAR.lobster'))
-    if not os.path.isfile(path):
-        return False
-    lines  = open(path).readlines()
-    ctrl   = lines[1].split()
-    ncol, nspin = int(ctrl[0]), int(ctrl[1])
-    labels = [lines[2 + k].strip() for k in range(ncol)]
-    data   = np.array([ln.split() for ln in lines[2 + ncol:] if ln.strip()], dtype=float)
-    if data.size == 0:
-        return False
-    E    = data[:, 0]
-    sign = -1.0 if which == 'cohp' else 1.0     # plot bonding-positive
-
-    def curve(idx):                              # idx 1.. = bonds; summed over spins
-        y = np.zeros(len(E))
-        for s in range(nspin):
-            y += data[:, 1 + s * 2 * ncol + 2 * idx]
-        return sign * y
-
-    def integ(idx):                              # running integral column (LOBSTER sign)
-        y = np.zeros(len(E))
-        for s in range(nspin):
-            y += data[:, 1 + s * 2 * ncol + 2 * idx + 1]
-        return y
-
-    # TOTAL per cell. LOBSTER's generator lists a bond between two DIFFERENT
-    # atoms once (A->B), but a same-atom pair (e.g. La1->La1 + translation)
-    # appears twice (±T) — so same-atom entries carry weight 1/2. (A uniform
-    # /2 halved the hetero-pair contribution.)
-    label_re = re.compile(r"No\.\d+:([A-Za-z]+)(\d+)->([A-Za-z]+)(\d+)\(([0-9.]+)\)")
-    groups = defaultdict(list)          # "A-B" -> [(dist, col, same_atom), ...]
-    total  = np.zeros(len(E))
-    itotal = np.zeros(len(E))
-    nbonds = 0.0                        # unique bonds per cell (Σ weights)
-    for k in range(1, ncol):
-        mlab = label_re.match(labels[k])
-        same = bool(mlab) and mlab.group(1, 2) == mlab.group(3, 4)
-        w = 0.5 if same else 1.0
-        total  += w * curve(k)
-        itotal += w * integ(k)
-        nbonds += w
-        if mlab:
-            a, b, dist = mlab.group(1), mlab.group(3), float(mlab.group(5))
-            groups["-".join(sorted((a, b)))].append((dist, k, same))
-    # Normalise the total to the MEAN PER BOND so it lives on the same scale
-    # as the per-bond shell overlays (this is also LOBSTER's own "Average"
-    # convention). The per-cell sum is nbonds × this.
-    if nbonds > 0:
-        total  = total / nbonds
-        itotal = itotal / nbonds
-
-    # Integrated value at E_F (ICOHP/ICOBI/ICOOP, LOBSTER sign convention)
-    icoxp = float(np.interp(0.0, E, itotal))
-    # Antibonding integral up to E_F (algebraic, LOBSTER sign convention:
-    # COHP antibonding > 0; COBI/COOP antibonding < 0) and the antibonding
-    # fraction fAB = |A| / (|B| + |A|), with B + A = ICOxP(E_F).
-    below = E <= 0.0
-    a_int = sign * float(np.trapz(np.minimum(total, 0.0)[below], E[below]))
-    b_int = icoxp - a_int
-    fab   = abs(a_int) / (abs(a_int) + abs(b_int)) if abs(a_int) + abs(b_int) > 0 else 0.0
-    # Bonding->antibonding threshold: the + -> - crossing of the total
-    # (bonding-positive) curve nearest to E_F. It can sit ABOVE E_F — that is
-    # optimized bonding (all antibonding states empty), not an error.
-    ecross = None
-    s_arr = np.sign(total)
-    for i in np.where(np.diff(s_arr) != 0)[0]:
-        d = total[i + 1] - total[i]
-        if d >= 0:                                   # keep only + -> - crossings
-            continue
-        e0 = E[i] - total[i] * (E[i + 1] - E[i]) / d
-        if ecross is None or abs(e0) < abs(ecross):
-            ecross = e0
-
-    # Bond-shell overlays per element pair: PER BOND (mean over the equivalent
-    # bonds — direction-independent, so single vs ±T double listing is moot).
-    # 1st shell solid, 2nd dashed. Legend carries the multiplicity (unique
-    # bonds per cell) and the per-bond integral at E_F.
-    def _shell(pair, sel, ls_, tag=''):
-        n    = len(sel)
-        mult = int(round(sum(0.5 if s else 1.0 for _, _, s in sel)))
-        pb   = sum(curve(k) for _, k, _ in sel) / n
-        ipb  = float(np.interp(0.0, E, sum(integ(k) for _, k, _ in sel) / n))
-        return (f"{pair} ({sel[0][0]:.2f} Å{tag}, ×{mult}): {ipb:+.2f}/bond",
-                pb, ls_)
-
-    nn = []
-    for pair, items in sorted(groups.items()):
-        dmin   = min(d for d, _, _ in items)
-        shell1 = [it for it in items if it[0] <= dmin * 1.05]
-        rest   = [it for it in items if it[0] > dmin * 1.05]
-        nn.append(_shell(pair, shell1, '-'))
-        if rest:
-            d2 = min(d for d, _, _ in rest)
-            nn.append(_shell(pair, [it for it in rest if it[0] <= d2 * 1.05],
-                             '--', ', 2nd'))
-
+    """Plot COHP, COBI or COOP — thin wrapper around modules/cohp_plot.py."""
+    from cohp_plot import plot_cohp_cobi
     emin = float(CONFIG.get('dos_xmin', -10)) if emin is None else float(emin)
     emax = float(CONFIG.get('dos_xmax', 5))   if emax is None else float(emax)
-    m  = (E >= emin) & (E <= emax)
-    Em = E[m]
-    xlabel = {'cohp': '−COHP', 'cobi': 'COBI', 'coop': 'COOP'}[which] + ' (bonding +)'
-
-    fig, ax = plt.subplots(figsize=(3.6, 6.4))   # portrait: energy vertical
-    t = total[m]
-    ax.fill_betweenx(Em, 0, t, where=(t >= 0), color='#2a9d4a', alpha=0.30)
-    ax.fill_betweenx(Em, 0, t, where=(t < 0),  color='#c0392b', alpha=0.30)
-    ax.plot(t, Em, color='k', lw=1.8, label='total (mean per bond)')
-    for lbl, yy, ls in nn:                        # per-bond shell overlays (thin)
-        ax.plot(yy[m], Em, lw=0.9, alpha=0.9, ls=ls, label=lbl)
-    ax.axvline(0, color='k', lw=0.7)              # bonding / antibonding boundary
-    ax.axhline(0, color='gray', lw=0.9, ls='--')  # Fermi level
-    ax.set_ylim(emin, emax)
-    ax.set_ylabel('Energy − $E_F$ (eV)', fontsize=11)
-    ax.set_xlabel(xlabel, fontsize=11)
-    ax.set_title(f'{which.upper()} — {project_label}', fontsize=10)
-    ax.legend(fontsize=6.5, loc='upper left',
-              bbox_to_anchor=(1.02, 1), borderaxespad=0)
-    ax.grid(True, alpha=0.2)
-
-    # Info box placed to the right of the axes (below the legend), outside the
-    # plot area so it never overlaps the curves.
-    iname = {'cohp': 'ICOHP', 'cobi': 'ICOBI', 'coop': 'ICOOP'}[which]
-    unit  = ' eV' if which == 'cohp' else ''
-    box = (f"{iname}(E$_F$) = {icoxp:.3f}{unit}/bond\n"
-           f"  (mean of {nbonds:.0f} bonds;\n"
-           f"  cell {icoxp*nbonds:.2f}{unit})\n"
-           f"A{iname[1:]}(E$_F$) = {a_int:.3f}{unit}/bond\n"
-           f"f$_{{AB}}$ = {100*fab:.1f}%\n"
-           + (f"B→AB @ {ecross:+.2f} eV" if ecross is not None else "B→AB: no crossing"))
-    ax.text(1.02, 0.0, box, transform=ax.transAxes, fontsize=7.5,
-            va='bottom', ha='left',
-            bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
-    plt.tight_layout()
-    # Always save the PNG (browser) + PDF (publication) pair.
-    _stem = os.path.splitext(out_png)[0]
-    for _ext in ('png', 'pdf'):
-        fig.savefig(f'{_stem}.{_ext}', dpi=150 if _ext == 'png' else None,
-                    bbox_inches='tight')
-    plt.close(fig)
-    return True
+    out_stem = os.path.splitext(out_png)[0]
+    return plot_cohp_cobi(lobster_dir, out_stem, project_label,
+                          which=which, emin=emin, emax=emax)
 
 
 # ── spin-resolved band structure plot ─────────────────────────────────────────
@@ -1299,7 +1146,7 @@ def _elf_bond_plot(pd_, ana):
     elfcar = os.path.join(pd_, '02_scf', 'ELFCAR')
     if not os.path.isfile(elfcar):
         return None
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'elf_bonds.py')
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules', 'elf_bonds.py')
     if not os.path.exists(script):
         script = os.path.join(ana, 'plot_elf_bonds.py')   # copied into project
     if not os.path.exists(script):
@@ -1318,7 +1165,7 @@ def _elf_bond_plot(pd_, ana):
 def _eigenval_band_plot(src, ana, base, ymin, ymax, labels, efermi):
     """Default band plotter: run band_plot.py on EIGENVAL → ana/<base>_band.{png,pdf}.
     EIGENVAL is complete even when vasprun.xml is truncated (e.g. OOM finish)."""
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'band_plot.py')
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules', 'band_plot.py')
     if not os.path.exists(script):
         script = os.path.join(ana, 'plot_band_eigenval.py')   # copied into project
     if not os.path.exists(script) or not os.path.isfile(os.path.join(src, 'EIGENVAL')):
