@@ -1,6 +1,0 @@
-This file has been split into two separate references:
-
-  QUICK_REFERENCE_GUI.txt    Browser interface (vasp-gui.py)
-  QUICK_REFERENCE_AGENT.txt  CLI agents (vasp-agent.py / vasp-agent-slurm.py)
-                             also covers ht-mp-scf.py — Materials Project
-                             high-throughput SCF + ELF driver
