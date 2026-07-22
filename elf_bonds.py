@@ -365,19 +365,18 @@ def plot_elf_plane(grid, lattice, elements, frac, prefix, iA=0, ngrid=220,
                    linewidth=1.2, zorder=5)
         ax.annotate(el, (x, y), color='white', fontsize=8, ha='center', va='center',
                     zorder=6, fontweight='bold')
-    ax.text(0.02, 0.02, 'gray discs = PAW augmentation spheres (pseudo-ELF)',
-            transform=ax.transAxes, fontsize=7, color='0.15',
-            bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.8),
-            zorder=7)
     ax.set_aspect('equal')
     ax.set_xlabel('in-plane x (Å)', fontsize=11)
     ax.set_ylabel('in-plane y (Å)', fontsize=11)
     ax.set_title(f'ELF plane through {elemA} + 1st ({elemA}–{neigh[0][1]}) '
                  f'& 2nd ({elemA}–{elemC}) neighbours', fontsize=9)
-    fig.tight_layout()
+    fig.text(0.5, 0.01, 'gray discs = PAW augmentation spheres (pseudo-ELF)',
+             ha='center', fontsize=7, color='0.15',
+             bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.8))
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
     for ext in ('png', 'pdf'):
         out = f'{prefix}_elf_plane.{ext}'
-        fig.savefig(out, dpi=150 if ext == 'png' else None)
+        fig.savefig(out, dpi=150 if ext == 'png' else None, bbox_inches='tight')
         print(f'  Saved: {out}')
     plt.close(fig)
     return dict(central=elemA, first=neigh[0][1], second=elemC)
@@ -448,7 +447,7 @@ def main():
         print(f'  note: no POTCAR next to ELFCAR — using {DEFAULT_RAUG} Å '
               'augmentation radius for all elements')
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(8, 5))
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     stats = []
     print(f'{"bond":<12}{"shell":>6}{"length (A)":>12}{"ELF max":>10}{"ELF min":>10}')
@@ -486,19 +485,20 @@ def main():
     ax.axhline(0.5, color='gray', lw=0.7, ls=':')   # uniform-electron-gas ref
     ax.grid(True, alpha=0.15)
     ax.legend(fontsize=8, title='atom → atom  (dotted = inside PAW sphere)',
-              title_fontsize=8, loc='upper right')
+              title_fontsize=8, loc='upper left',
+              bbox_to_anchor=(1.02, 1), borderaxespad=0)
     if stats:
         box = 'outside augmentation spheres:\n' + '\n'.join(
             f'{lbl}:  ⟨ELF⟩={m:.2f}  ⟨|ELF′|⟩={a:.2f} Å$^{{-1}}$  '
             f'⟨ELF″⟩={s:+.1f} Å$^{{-2}}$' for lbl, m, a, s in stats)
-        ax.text(0.02, 0.02, box, transform=ax.transAxes, fontsize=6.8,
-                va='bottom', ha='left',
+        ax.text(0.0, -0.14, box, transform=ax.transAxes, fontsize=6.8,
+                va='top', ha='left',
                 bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.85))
     fig.tight_layout()
 
     for ext in ('png', 'pdf'):
         out = f'{prefix}_elf_bonds.{ext}'
-        fig.savefig(out, dpi=150 if ext == 'png' else None)
+        fig.savefig(out, dpi=150 if ext == 'png' else None, bbox_inches='tight')
         print(f'  Saved: {out}')
     plt.close(fig)
 
