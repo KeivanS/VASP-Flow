@@ -587,10 +587,14 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS — fine mesh for DOS (5000 kpra)
-        kpoints_content = self._generate_kpoints_auto(density='fine')
+        # KPOINTS — 2× the SCF mesh in every direction for better DOS resolution.
+        _kd = self.instructions.get('kmesh_density', 'fine')
+        nx, ny, nz = self._compute_mesh(_kd)
+        nx2, ny2 = nx * 2, ny * 2
+        nz2 = 1 if self.instructions.get('is_2d') else nz * 2
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(kpoints_content)
+            f.write(f"Automatic Gamma mesh (DOS, 2× SCF: {nx2}×{ny2}×{nz2})\n"
+                    f"0\nGamma\n  {nx2}  {ny2}  {nz2}\n  0    0    0\n")
         
         # Copy from SCF at runtime (relative path)
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -678,11 +682,7 @@ class VASPInputGenerator:
             f.write(self._generate_kpoints_auto(density=_kd))
 
         # Resolve the actual mesh integers so wannier90.win mp_grid matches KPOINTS.
-        _kmesh = self.instructions.get('kmesh')
-        if _kmesh:
-            nx, ny, nz = _kmesh
-        else:
-            nx, ny, nz = self._kpoints_from_kpra({'coarse': 1000, 'fine': 5000}.get(_kd, 5000))
+        nx, ny, nz = self._compute_mesh(_kd)
 
         with open(f"{output_dir}/wannier90.win", 'w') as f:
             f.write(self._generate_wannier90_win(num_wann, num_bands, nx, ny, nz, wannier_info))
@@ -1961,6 +1961,65 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines = self._apply_incar_overrides(lines, 'lobster')
         return '\n'.join(lines) + '\n'
 
+    def _is_hexagonal_cell(self) -> bool:
+        """True when the lattice is hexagonal/trigonal: a=b and γ≈120°.
+
+        Checked against the POSCAR geometry directly so it works even when
+        the user has not ticked the 'Hexagonal BZ' box in the GUI; the
+        instruction flag is an additional override.
+        """
+        if self.instructions.get('is_hex'):
+            return True
+        try:
+            with open(self.poscar) as f:
+                ls = f.readlines()
+            sc = float(ls[1].strip())
+            a1 = np.array([float(x) * sc for x in ls[2].split()[:3]])
+            a2 = np.array([float(x) * sc for x in ls[3].split()[:3]])
+            cos_g = np.dot(a1, a2) / (np.linalg.norm(a1) * np.linalg.norm(a2))
+            return (abs(np.linalg.norm(a1) - np.linalg.norm(a2)) / np.linalg.norm(a1) < 0.01
+                    and abs(cos_g + 0.5) < 0.02)
+        except Exception:
+            return False
+
+    def _compute_mesh(self, density: str) -> tuple:
+        """Central mesh resolver: returns (Nx, Ny, Nz) for a density tier.
+
+        Priority:
+          1. Explicit KMESH instruction (user override, any system).
+          2. Hexagonal/trigonal: fixed in-plane grids (coarse=6×6, fine=12×12)
+             with Nz scaled proportionally to |b3*|/|b1*|.
+          3. All other systems: kpra formula (coarse=1000, fine=5000).
+
+        Even parity is enforced by _kpoints_from_kpra for path 3 and
+        explicitly for path 2.  The 2D slab exception (nz=1) applies to
+        both hexagonal and general cells.
+        """
+        kmesh = self.instructions.get('kmesh')
+        if kmesh:
+            return tuple(kmesh[:3])
+
+        if self._is_hexagonal_cell():
+            n_xy = 6 if density == 'coarse' else 12
+            if self.instructions.get('is_2d'):
+                return n_xy, n_xy, 1
+            try:
+                with open(self.poscar) as f:
+                    ls = f.readlines()
+                sc = float(ls[1].strip())
+                A  = np.array([[float(x) * sc for x in ls[i].split()[:3]]
+                               for i in range(2, 5)])
+                b  = np.linalg.norm(2 * np.pi * np.linalg.inv(A).T, axis=1)
+                nz = max(2, round(n_xy * b[2] / b[0]))
+                if nz % 2:
+                    nz += 1
+            except Exception:
+                nz = 2
+            return n_xy, n_xy, nz
+
+        kpra = {'coarse': 1000, 'fine': 5000}.get(density, 5000)
+        return self._kpoints_from_kpra(kpra)
+
     def _kpoints_from_kpra(self, kpra: int) -> tuple:
         """(Nx, Ny, Nz) Gamma mesh for the given k-points-per-reciprocal-atom target.
 
@@ -1998,30 +2057,22 @@ echo "      Data:  band.yaml  FORCE_SETS"
     def _generate_kpoints_auto(self, density: str = 'fine') -> str:
         """Generate automatic Gamma-centred KPOINTS file.
 
-        density is either 'coarse' (1000 kpra) or 'fine' (5000 kpra), where
-        kpra = Nkx*Nky*Nkz * N_atoms.  The three subdivisions are set
-        inversely proportional to the unit-cell dimensions via the reciprocal
-        lattice vector magnitudes, so Nx*a ≈ Ny*b ≈ Nz*c for orthorhombic
-        and higher symmetry; the reciprocal-vector formulation is correct for
-        any crystal system.  An explicit KMESH in the instructions overrides
-        the density tier for every automatic mesh in the workflow.
+        Routes through _compute_mesh which applies, in priority order:
+          1. Explicit KMESH instruction override.
+          2. Hexagonal/trigonal: fixed grids (coarse 6×6, fine 12×12) with
+             Nz scaled from |b3*|/|b1*|.
+          3. General: kpra formula (coarse=1000, fine=5000 k·atom⁻¹).
+        All grids are Gamma-centred with even Ni; 2D slab keeps nz=1.
         """
-        kmesh = self.instructions.get('kmesh')
-        if kmesh:
-            nx, ny, nz = kmesh
+        nx, ny, nz = self._compute_mesh(density)
+        if self.instructions.get('kmesh'):
             comment = "Automatic Gamma mesh (explicit KMESH override)"
+        elif self._is_hexagonal_cell():
+            comment = f"Automatic Gamma mesh ({density}, hexagonal {nx}×{ny}×{nz})"
         else:
-            kpra_map = {'coarse': 1000, 'fine': 5000}
-            kpra = kpra_map.get(density, 5000)
-            nx, ny, nz = self._kpoints_from_kpra(kpra)
+            kpra = {'coarse': 1000, 'fine': 5000}.get(density, 5000)
             comment = f"Automatic Gamma mesh ({density}, {kpra} kpra)"
-        return (
-            f"{comment}\n"
-            f"0\n"
-            f"Gamma\n"
-            f"  {nx}  {ny}  {nz}\n"
-            f"  0    0    0\n"
-        )
+        return f"{comment}\n0\nGamma\n  {nx}  {ny}  {nz}\n  0    0    0\n"
     
     def _spglib_kpath(self):
         """Spglib/Setyawan-Curtarolo high-symmetry k-path for the POSCAR.
