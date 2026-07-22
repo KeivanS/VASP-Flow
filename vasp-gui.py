@@ -299,10 +299,14 @@ def api_generate():
         if proj:     lines.append(f'WANNIER_PROJ: {proj}')
         if ewin:     lines.append(f'WANNIER_EWIN: {ewin}')
 
-    # Manual params → add to instruction text so parser picks them up
+    # K-mesh density (coarse/fine) and optional explicit override
+    kmesh_density = d.get('kmesh_density', 'fine')
+    lines.append(f'KMESH_DENSITY: {kmesh_density}')
     if param_mode == 'manual':
-        encut_m = d.get('manual_encut','').strip()
+        encut_m  = d.get('manual_encut', '').strip()
+        kmesh_m  = d.get('manual_kmesh', '').strip()
         if encut_m: lines.append(f'ENCUT: {encut_m}')
+        if kmesh_m: lines.append(f'KMESH: {kmesh_m}')
 
     run_dir = CONFIG['projects_dir']
     os.makedirs(run_dir, exist_ok=True)
@@ -340,21 +344,8 @@ def api_generate():
 
     slug = _slug(name)
 
-    # ── if manual mode: patch KPOINTS immediately ───────────────────────
-    if param_mode == 'manual':
-        kmesh_scf = d.get('manual_kmesh_scf','').strip()
-        kmesh_dos = d.get('manual_kmesh_dos','').strip() or kmesh_scf
-        if kmesh_scf:
-            m = _parse_mesh(kmesh_scf)
-            if m:
-                for step in ['01_relax','02_scf']:
-                    kp = os.path.join(_pd(slug), step, 'KPOINTS')
-                    if os.path.exists(kp): _write_kpoints(kp, *m)
-        if kmesh_dos:
-            m = _parse_mesh(kmesh_dos)
-            if m:
-                kp = os.path.join(_pd(slug), '04_dos', 'KPOINTS')
-                if os.path.exists(kp): _write_kpoints(kp, *m)
+    # KMESH_DENSITY and explicit KMESH overrides are now written into
+    # instructions.txt above and handled by the generator directly.
 
     has_conv = bool(conv_lines)
 
@@ -441,38 +432,67 @@ def api_run():
 @app.route('/api/run_phase2', methods=['POST'])
 def api_run_phase2():
     d = request.json or {}
-    slug = d['project']
-    encut, kmesh, kmesh_dos = d.get('encut',''), d.get('kmesh',''), d.get('kmesh_dos','') or d.get('kmesh','')
-    pd = _pd(slug)
-    if not encut or not kmesh:
-        # Fall back to the auto-selected values from the convergence tests
+    slug          = d['project']
+    encut         = d.get('encut', '')
+    kmesh_density = d.get('kmesh_density', 'fine')
+    kmesh         = d.get('kmesh', '')   # explicit NxNxN override (optional)
+    pd_path       = _pd(slug)
+
+    if not encut:
         auto  = _converged_params(slug)
         encut = encut or auto.get('encut', '')
-        kmesh = kmesh or auto.get('kmesh', '')
-        kmesh_dos = kmesh_dos or kmesh
-    if not encut or not kmesh:
-        return jsonify(error='ENCUT and k-mesh are required — none entered and '
+    if not encut:
+        return jsonify(error='ENCUT is required — none entered and '
                              'no auto-selection available (run convergence first)'), 400
 
+    # Patch ENCUT in every INCAR
     for step in _steps(slug):
-        incar = os.path.join(pd, step, 'INCAR')
+        incar = os.path.join(pd_path, step, 'INCAR')
         if os.path.exists(incar):
             txt = Path(incar).read_text()
-            Path(incar).write_text(re.sub(r'^ENCUT.*', f'ENCUT = {encut}', txt, flags=re.MULTILINE))
+            Path(incar).write_text(re.sub(r'^ENCUT.*', f'ENCUT = {encut}', txt,
+                                          flags=re.MULTILINE))
 
-    for step in _steps(slug):
-        if step == '03_bands': continue
-        kp   = os.path.join(pd, step, 'KPOINTS')
-        mesh = _parse_mesh(kmesh_dos if step == '04_dos' else kmesh)
-        if mesh and os.path.exists(kp): _write_kpoints(kp, *mesh)
+    # Patch instructions.txt with the chosen density (and optional explicit mesh)
+    instr_path = os.path.join(pd_path, 'instructions.txt')
+    if os.path.exists(instr_path):
+        instr = Path(instr_path).read_text()
+        instr = re.sub(r'^KMESH_DENSITY\s*:.*$', f'KMESH_DENSITY: {kmesh_density}',
+                       instr, flags=re.MULTILINE | re.IGNORECASE)
+        if not re.search(r'^KMESH_DENSITY', instr, re.MULTILINE | re.IGNORECASE):
+            instr += f'\nKMESH_DENSITY: {kmesh_density}'
+        if kmesh:
+            instr = re.sub(r'^KMESH\s*:.*$', f'KMESH: {kmesh}',
+                           instr, flags=re.MULTILINE | re.IGNORECASE)
+            if not re.search(r'^KMESH\s*:', instr, re.MULTILINE | re.IGNORECASE):
+                instr += f'\nKMESH: {kmesh}'
+        Path(instr_path).write_text(instr)
+
+    # Re-generate KPOINTS for all steps (except band-structure line-mode)
+    from modules.vasp_input_generator import VASPInputGenerator
+    from modules.instruction_parser    import InstructionParser
+    poscar_path = os.path.join(pd_path, 'POSCAR')
+    if os.path.exists(poscar_path) and os.path.exists(instr_path):
+        instr_obj = InstructionParser(instr_path).instructions
+        gen = VASPInputGenerator(poscar_path, instr_obj)
+        density_map_step = {
+            '01_relax': 'coarse',
+            '04_dos':   'fine',
+        }
+        for step in _steps(slug):
+            if step in ('03_bands', '00_convergence'): continue
+            kp = os.path.join(pd_path, step, 'KPOINTS')
+            if not os.path.exists(kp): continue
+            step_density = density_map_step.get(step, kmesh_density)
+            Path(kp).write_text(gen._generate_kpoints_auto(density=step_density))
 
     prod = [s for s in _steps(slug) if not s.startswith('00')]
-    tmp  = os.path.join(pd, '_phase2.sh')
-    with open(tmp,'w') as f:
+    tmp  = os.path.join(pd_path, '_phase2.sh')
+    with open(tmp, 'w') as f:
         f.write('#!/bin/bash\nset -e\n')
         for s in prod:
-            f.write(f'echo ">>> {s}"\ncd "{os.path.join(pd,s)}" && bash run.sh\n')
-    os.chmod(tmp,0o755)
+            f.write(f'echo ">>> {s}"\ncd "{os.path.join(pd_path, s)}" && bash run.sh\n')
+    os.chmod(tmp, 0o755)
     return jsonify(job_key=_launch(tmp, slug, 'phase2'))
 
 @app.route('/api/stream/<path:job_key>')
@@ -2589,10 +2609,17 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div class="g3">
       <div class="f"><label>ENCUT (eV)</label>
         <input id="manual_encut" value="520" placeholder="520"></div>
-      <div class="f"><label>K-mesh (relax / SCF)</label>
-        <input id="manual_kmesh_scf" placeholder="12x12x6"></div>
-      <div class="f"><label>K-mesh for DOS (denser)</label>
-        <input id="manual_kmesh_dos" placeholder="24x24x12"></div>
+      <div class="f"><label>K-mesh density</label>
+        <select id="kmesh_density">
+          <option value="fine">Fine — 5000 k·atom⁻¹ (SCF, DOS, DFPT, LOBSTER)</option>
+          <option value="coarse">Coarse — 1000 k·atom⁻¹ (faster tests)</option>
+        </select></div>
+      <div class="f"><label title="Optional: overrides the density selector for all steps. Format: NxNxN or N N N">Explicit k-mesh override</label>
+        <input id="manual_kmesh" placeholder="e.g. 8x8x4 — leave blank for auto"></div>
+    </div>
+    <div style="font-size:11px;color:var(--sub);margin-top:4px;">
+      Subdivisions are set inversely proportional to cell dimensions (Nx·a ≈ Ny·b ≈ Nz·c).
+      Relax always uses Coarse; DOS always Fine.
     </div>
   </div>
 </div>
@@ -3045,11 +3072,11 @@ async function loadProjectSettings(){
 
     // Param mode
     if(settings.param_mode) setMode(settings.param_mode);
-    s('conv_kp',         settings.conv_kp);
-    s('conv_encut',      settings.conv_encut);
-    s('manual_encut',    settings.manual_encut);
-    s('manual_kmesh_scf',settings.manual_kmesh_scf);
-    s('manual_kmesh_dos',settings.manual_kmesh_dos);
+    s('conv_kp',       settings.conv_kp);
+    s('conv_encut',    settings.conv_encut);
+    s('manual_encut',  settings.manual_encut);
+    s('kmesh_density', settings.kmesh_density || 'fine');
+    s('manual_kmesh',  settings.manual_kmesh);
 
     // Task checkboxes + body visibility
     const tasks=['relax','scf','bands','dos','dfpt','phonons','wannier','lobster'];
@@ -3328,8 +3355,8 @@ async function saveProjectSettings(){
     conv_kp:        v('conv_kp'),
     conv_encut:     v('conv_encut'),
     manual_encut:   v('manual_encut'),
-    manual_kmesh_scf:v('manual_kmesh_scf'),
-    manual_kmesh_dos:v('manual_kmesh_dos'),
+    kmesh_density:  v('kmesh_density'),
+    manual_kmesh:   v('manual_kmesh'),
     relax:  chk('t_relax'), scf:  chk('t_scf'), elf: chk('t_elf'),
     bands:  chk('t_bands'), dos:  chk('t_dos'),
     dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
@@ -3391,15 +3418,16 @@ async function generate(){
     hexagonal:    chk('hexagonal'),
     is_2d:        chk('is_2d'),
     use_u:        chk('use_u'),
+    u_auto:       chk('u_auto'),
     u_entries:    getUEntries(),
     param_mode:   PARAM_MODE,
     // convergence
     conv_kp:      v('conv_kp'),
     conv_encut:   v('conv_encut'),
     // manual
-    manual_encut:    v('manual_encut'),
-    manual_kmesh_scf:v('manual_kmesh_scf'),
-    manual_kmesh_dos:v('manual_kmesh_dos'),
+    manual_encut:  v('manual_encut'),
+    kmesh_density: v('kmesh_density') || 'fine',
+    manual_kmesh:  v('manual_kmesh'),
     // tasks
     relax:        chk('t_relax'),
     scf:          chk('t_scf'),
@@ -3508,8 +3536,13 @@ function buildWorkflow(steps,hasConv){
       </div>
       <div class="g3">
         <div class="f"><label>ENCUT (eV)</label><input id="encut_p2" placeholder="e.g. 520"></div>
-        <div class="f"><label>K-mesh for relax / SCF</label><input id="kmesh_p2" placeholder="e.g. 12x12x6"></div>
-        <div class="f"><label>K-mesh for DOS (denser)</label><input id="kmesh_dos_p2" placeholder="e.g. 24x24x12"></div>
+        <div class="f"><label>K-mesh density (SCF / DFPT / LOBSTER)</label>
+          <select id="kmesh_density_p2">
+            <option value="fine">Fine — 5000 k·atom⁻¹</option>
+            <option value="coarse">Coarse — 1000 k·atom⁻¹</option>
+          </select></div>
+        <div class="f"><label title="Optional explicit override (NxNxN). Leave blank to use Fine/Coarse auto-grid.">Explicit k-mesh override</label>
+          <input id="kmesh_p2" placeholder="e.g. 12x12x6 — leave blank for auto"></div>
       </div>
       <div id="conv-auto-note" style="font-size:11px;color:var(--sub);margin-top:6px;"></div>
     </div>
@@ -3673,8 +3706,8 @@ async function _doRunAll(){
   showLog('all'); stream(d.job_key,'all');
 }
 async function runPhase2(){
-  const encut=v('encut_p2'),kmesh=v('kmesh_p2'),kmesh_dos=v('kmesh_dos_p2');
-  if(!encut||!kmesh){alert('Enter ENCUT and k-mesh first.');return;}
+  const encut=v('encut_p2'),kmesh_density=v('kmesh_density_p2'),kmesh=v('kmesh_p2');
+  if(!encut||!kmesh_density){alert('Enter ENCUT and k-mesh density first.');return;}
   try{
     const chk=await post('/api/check_overwrite',{mode:'run',project:PROJECT,step:'calculations'});
     const cd=await chk.json();
@@ -3684,15 +3717,15 @@ async function runPhase2(){
         [`The following steps already have OUTCAR files:`,
          cd.steps.map(s=>`&nbsp;&nbsp;• ${s}`).join('<br>'),
          'Running Phase 2 will overwrite these results.'],
-        ()=>_doRunPhase2(encut,kmesh,kmesh_dos)
+        ()=>_doRunPhase2(encut,kmesh_density,kmesh)
       );
       return;
     }
   }catch(e){/* proceed */}
-  _doRunPhase2(encut,kmesh,kmesh_dos);
+  _doRunPhase2(encut,kmesh_density,kmesh);
 }
-async function _doRunPhase2(encut,kmesh,kmesh_dos){
-  const r=await post('/api/run_phase2',{project:PROJECT,encut,kmesh,kmesh_dos});
+async function _doRunPhase2(encut,kmesh_density,kmesh){
+  const r=await post('/api/run_phase2',{project:PROJECT,encut,kmesh_density,kmesh});
   if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'Run failed ('+r.status+')');return;}
   const d=await r.json();
   showLog('phase2'); stream(d.job_key,'phase2');

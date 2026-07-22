@@ -404,11 +404,11 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS
-        kpoints_content = self._generate_kpoints_auto(density='medium')
+        # KPOINTS — coarse mesh; relaxation doesn't need a dense grid
+        kpoints_content = self._generate_kpoints_auto(density='coarse')
         with open(f"{output_dir}/KPOINTS", 'w') as f:
             f.write(kpoints_content)
-        
+
         # Copy POSCAR
         os.system(f"cp {self.poscar} {output_dir}/POSCAR")
         
@@ -494,11 +494,12 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS
-        kpoints_content = self._generate_kpoints_auto(density='high')
+        # KPOINTS — user-selected density (default fine = 5000 kpra)
+        _kd = self.instructions.get('kmesh_density', 'fine')
+        kpoints_content = self._generate_kpoints_auto(density=_kd)
         with open(f"{output_dir}/KPOINTS", 'w') as f:
             f.write(kpoints_content)
-        
+
         # POSCAR: copy the input structure as a placeholder.
         # At runtime, run.sh will overwrite it with CONTCAR from 01_relax
         # if that directory exists and the relaxation completed.
@@ -586,8 +587,8 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS - denser mesh
-        kpoints_content = self._generate_kpoints_auto(density='very_high')
+        # KPOINTS — fine mesh for DOS (5000 kpra)
+        kpoints_content = self._generate_kpoints_auto(density='fine')
         with open(f"{output_dir}/KPOINTS", 'w') as f:
             f.write(kpoints_content)
         
@@ -625,9 +626,10 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
 
-        # Same k-mesh density as the SCF.
+        # Same k-mesh as SCF (user-selected density).
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(density='high'))
+            f.write(self._generate_kpoints_auto(
+                density=self.instructions.get('kmesh_density', 'fine')))
 
         # Editable lobsterin (run.sh uses it as-is if present). Energy window is
         # Fermi-referenced (E_F = 0); edit it or COHPStartEnergy for deep states.
@@ -668,19 +670,22 @@ class VASPInputGenerator:
         num_wann  = wannier_info.get('num_wann') or 8
         num_bands = max(num_wann + 8, num_wann * 2)   # sensible default; user should edit
 
-        # k-mesh: use same density as SCF ('high' = 14 in-plane)
-        is_2d  = self.instructions.get('is_2d', False)
-        n_xy   = 14
-        n_z    = 1 if is_2d else n_xy
-
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_wannier(num_bands))
 
+        _kd = self.instructions.get('kmesh_density', 'fine')
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(density='high'))
+            f.write(self._generate_kpoints_auto(density=_kd))
+
+        # Resolve the actual mesh integers so wannier90.win mp_grid matches KPOINTS.
+        _kmesh = self.instructions.get('kmesh')
+        if _kmesh:
+            nx, ny, nz = _kmesh
+        else:
+            nx, ny, nz = self._kpoints_from_kpra({'coarse': 1000, 'fine': 5000}.get(_kd, 5000))
 
         with open(f"{output_dir}/wannier90.win", 'w') as f:
-            f.write(self._generate_wannier90_win(num_wann, num_bands, n_xy, n_z, wannier_info))
+            f.write(self._generate_wannier90_win(num_wann, num_bands, nx, ny, nz, wannier_info))
 
         rel_scf = os.path.relpath(from_scf, output_dir)
         with open(f"{output_dir}/copy_from_scf.sh", 'w') as f:
@@ -765,23 +770,23 @@ class VASPInputGenerator:
         out.append(f'end {tag}')
         return '\n'.join(out) + '\n'
 
-    def _kpoints_block_for_wannier(self, n_xy: int, n_z: int) -> str:
+    def _kpoints_block_for_wannier(self, nx: int, ny: int, nz: int) -> str:
         """Generate begin kpoints ... end kpoints block for wannier90.win.
 
-        Lists all k-points of the Gamma-centered Monkhorst-Pack mesh explicitly.
-        This is required by wannier90.x -pp (VASP 5 file-based workflow).
+        Lists all k-points of the Gamma-centred Monkhorst-Pack mesh explicitly.
+        Required by wannier90.x -pp (VASP 5 file-based workflow).
         The ordering (k3 fastest) matches VASP's internal k-point ordering.
         """
         kpts = []
-        for i in range(n_xy):
-            for j in range(n_xy):
-                for k in range(n_z):
-                    kpts.append(f'  {i/n_xy:.8f}  {j/n_xy:.8f}  {k/n_z if n_z > 1 else 0.0:.8f}')
-        lines = ['\nbegin kpoints'] + kpts + ['end kpoints']
-        return '\n'.join(lines)
+        for i in range(nx):
+            for j in range(ny):
+                for k in range(nz):
+                    kpts.append(
+                        f'  {i/nx:.8f}  {j/ny:.8f}  {k/nz if nz > 1 else 0.0:.8f}')
+        return '\n'.join(['\nbegin kpoints'] + kpts + ['end kpoints'])
 
     def _generate_wannier90_win(self, num_wann: int, num_bands: int,
-                                 n_xy: int, n_z: int,
+                                 nx: int, ny: int, nz: int,
                                  wannier_info: dict) -> str:
         """Generate wannier90.win for VASP 5 file-based interface.
 
@@ -804,7 +809,7 @@ class VASPInputGenerator:
             f'num_bands = {num_bands}   ! must equal NBANDS in INCAR',
             '',
             '! K-point mesh — must match the KPOINTS file',
-            f'mp_grid : {n_xy} {n_xy} {n_z}',
+            f'mp_grid : {nx} {ny} {nz}',
             '',
             '! Energy windows (eV, relative to Fermi level)',
         ]
@@ -840,7 +845,7 @@ class VASPInputGenerator:
             lines.append(f'\n! WARNING: could not read geometry from POSCAR: {e}')
             lines.append('! Add unit_cell_cart and atoms_frac blocks manually before running -pp')
 
-        lines.append(self._kpoints_block_for_wannier(n_xy, n_z))
+        lines.append(self._kpoints_block_for_wannier(nx, ny, nz))
 
         return '\n'.join(lines) + '\n'
 
@@ -919,8 +924,11 @@ fi
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_dfpt())
 
+        # Same k-mesh as SCF (user-selected density) — DFPT Born/dielectric
+        # results converge with the same mesh used for the charge density.
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(density='high'))
+            f.write(self._generate_kpoints_auto(
+                density=self.instructions.get('kmesh_density', 'fine')))
 
         rel_scf = os.path.relpath(from_scf, output_dir)
         with open(f"{output_dir}/copy_from_scf.sh", 'w') as f:
@@ -1254,9 +1262,10 @@ echo "DFPT done. See born_charges.txt and BORN (phonopy NAC format)."
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_phonons())
 
-        # Low k-mesh — supercells are large, Gamma-only is often sufficient
+        # Coarse k-mesh — force-constant supercells are large; 1000 kpra is
+        # generous for a supercell and Gamma-only is often sufficient.
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(density='low'))
+            f.write(self._generate_kpoints_auto(density='coarse'))
 
         # POSCAR copied from SCF (primitive cell for phonopy)
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -1952,52 +1961,60 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines = self._apply_incar_overrides(lines, 'lobster')
         return '\n'.join(lines) + '\n'
 
-    def _generate_kpoints_auto(self, density: str = 'medium') -> str:
+    def _kpoints_from_kpra(self, kpra: int) -> tuple:
+        """(Nx, Ny, Nz) Gamma mesh for the given k-points-per-reciprocal-atom target.
+
+        Subdivisions are proportional to the reciprocal lattice vector magnitudes
+        |b1*|, |b2*|, |b3*|.  For orthogonal cells this reduces to 1/a : 1/b : 1/c
+        (satisfying Nx*a = Ny*b = Nz*c); for monoclinic and triclinic cells the
+        reciprocal-vector lengths are the correct generalisation.
+        All meshes are Gamma-centred.  For 2-D slabs, Nz is forced to 1.
+        """
+        try:
+            with open(self.poscar) as f:
+                lines = f.readlines()
+            scale = float(lines[1].strip())
+            vecs  = [np.array([float(x) * scale for x in lines[i].split()[:3]])
+                     for i in range(2, 5)]
+            A = np.array(vecs)                          # rows = a1, a2, a3
+            B = 2 * np.pi * np.linalg.inv(A).T         # rows = b1*, b2*, b3*
+            b = np.linalg.norm(B, axis=1)              # |b1*|, |b2*|, |b3*|
+            n_atoms = sum(int(x) for x in lines[6].split())
+        except Exception:
+            return (6, 6, 6)
+
+        n_k   = max(1, kpra // max(n_atoms, 1))
+        alpha = (n_k / max(b[0] * b[1] * b[2], 1e-12)) ** (1 / 3)
+        nx = max(1, round(alpha * b[0]))
+        ny = max(1, round(alpha * b[1]))
+        nz = 1 if self.instructions.get('is_2d', False) else max(1, round(alpha * b[2]))
+        return nx, ny, nz
+
+    def _generate_kpoints_auto(self, density: str = 'fine') -> str:
         """Generate automatic Gamma-centred KPOINTS file.
 
-        The VASP format after the 'Gamma' keyword requires three integers
-        (N1 N2 N3) for the mesh subdivisions along each reciprocal lattice
-        vector, followed by a shift line (S1 S2 S3).  A single integer is
-        not a valid specification and VASP will reject or misinterpret it.
-
-        For 2-D slab calculations (e.g. MoS2 monolayer) the out-of-plane
-        direction is already sampled by a single k-point, so kz = 1.
-        Adjust is_2d via the instructions dict if needed.
-
-        An explicit KMESH in the instructions (parsed to a 3-int list) overrides
-        the tiered density for every automatic mesh in the workflow.
+        density is either 'coarse' (1000 kpra) or 'fine' (5000 kpra), where
+        kpra = Nkx*Nky*Nkz * N_atoms.  The three subdivisions are set
+        inversely proportional to the unit-cell dimensions via the reciprocal
+        lattice vector magnitudes, so Nx*a ≈ Ny*b ≈ Nz*c for orthorhombic
+        and higher symmetry; the reciprocal-vector formulation is correct for
+        any crystal system.  An explicit KMESH in the instructions overrides
+        the density tier for every automatic mesh in the workflow.
         """
-        # Explicit user override (KMESH in instructions) wins over the tier.
         kmesh = self.instructions.get('kmesh')
         if kmesh:
             nx, ny, nz = kmesh
-            return (
-                f"Automatic Gamma mesh (user KMESH)\n"
-                f"0\n"
-                f"Gamma\n"
-                f"  {nx}  {ny}  {nz}\n"
-                f"  0    0    0\n"
-            )
-
-        # In-plane mesh density for each tier
-        density_map = {
-            'low':       6,
-            'medium':   10,
-            'high':     14,
-            'very_high': 18,
-        }
-
-        n_xy = density_map.get(density, 10)
-
-        # Detect 2-D slab: long c-axis (vacuum layer) → kz = 1
-        is_2d = self.instructions.get('is_2d', False)
-        n_z = 1 if is_2d else n_xy
-
+            comment = "Automatic Gamma mesh (explicit KMESH override)"
+        else:
+            kpra_map = {'coarse': 1000, 'fine': 5000}
+            kpra = kpra_map.get(density, 5000)
+            nx, ny, nz = self._kpoints_from_kpra(kpra)
+            comment = f"Automatic Gamma mesh ({density}, {kpra} kpra)"
         return (
-            f"Automatic Gamma mesh\n"
+            f"{comment}\n"
             f"0\n"
             f"Gamma\n"
-            f"  {n_xy}  {n_xy}  {n_z}\n"
+            f"  {nx}  {ny}  {nz}\n"
             f"  0    0    0\n"
         )
     

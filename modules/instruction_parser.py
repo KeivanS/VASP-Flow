@@ -94,6 +94,8 @@ class InstructionParser:
             # Band structure resolution
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
+            # k-mesh density tier: 'coarse' (1000 kpra) | 'fine' (5000 kpra)
+            'kmesh_density':  self._extract_kmesh_density(content),
             # Explicit auto-mesh override, e.g. "KMESH: 8 8 8" or "KMESH: 12"
             'kmesh':          self._extract_kmesh(content),
             # Constant-pressure relaxation (ISIF=3, IBRION=2, PSTRESS)
@@ -358,6 +360,17 @@ class InstructionParser:
                                             default=0.01),
             'nac':  not nac_false,
         }
+
+    def _extract_kmesh_density(self, content: str) -> str:
+        """Parse k-mesh density tier: 'coarse' (1000 kpra) or 'fine' (5000 kpra).
+
+        Recognised forms (case-insensitive):
+            KMESH_DENSITY: coarse    KMESH_DENSITY = fine
+        Returns 'fine' by default.
+        """
+        m = re.search(r'\bKMESH_DENSITY\s*[:=]\s*(coarse|fine)\b',
+                      content, re.IGNORECASE)
+        return m.group(1).lower() if m else 'fine'
 
     def _extract_kmesh(self, content: str):
         """Extract an explicit Gamma-mesh override for the automatic KPOINTS.
