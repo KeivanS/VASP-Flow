@@ -444,6 +444,52 @@ Two-phase workflow when convergence tests are requested:
 ./submit_calculations.sh    # STEP 2 -- prompts ENCUT/k-mesh, submits
 \end{lstlisting}
 
+\subsection{Remote / headless setup (no GUI access)}
+\label{sec:remote-setup}
+
+When running on a remote supercomputer where the browser GUI is not
+available, executable paths and MPI settings must be configured
+directly in \texttt{profiles/slurm.json} (for the SLURM agent) or
+\texttt{profiles/workstation.json} (for the workstation agent).
+
+\begin{lstlisting}[language=bash]
+# On the cluster, after cloning VASP-Flow:
+nano profiles/slurm.json
+\end{lstlisting}
+
+The relevant keys are:
+
+\begin{lstlisting}[language=json, basicstyle=\ttfamily\small]
+{
+  "vasp_std":   "/path/to/vasp_std",
+  "vasp_ncl":   "/path/to/vasp_ncl",
+  "vasp_gam":   "/path/to/vasp_gam",
+  "wannier90_x": "wannier90.x",
+  "lobster_x":  "/path/to/lobster",
+  "mpi_cmd":    "srun",
+  "mpi_np":     128,
+  "modules":    ["intel/2023", "vasp/6.4"],
+  "slurm": {
+    "partition": "standard",
+    "nodes":      2,
+    "ntasks_per_node": 64,
+    "time":       "12:00:00",
+    "account":    "your-project"
+  }
+}
+\end{lstlisting}
+
+\noindent The \texttt{modules} list is prepended as \texttt{module load \ldots}
+lines in every generated \texttt{run.sh}.  Alternatively, all path keys can be
+set as environment variables in your \texttt{.bashrc}
+(\texttt{VASP\_STD}, \texttt{LOBSTER\_X}, etc.)\ and the profile values left
+as empty strings to inherit them.
+
+\noindent\textbf{Note:} \texttt{profiles/slurm.json} is auto-regenerated
+whenever you click \emph{Save Settings} in the GUI, so the authoritative
+source for GUI users is the System Setup page.  On a headless cluster, edit
+the JSON file directly and leave it in place.
+
 \subsection{Generated directory structure}
 
 \begin{lstlisting}
