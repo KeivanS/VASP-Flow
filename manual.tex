@@ -200,12 +200,18 @@ pip install flask sumo
 # 3. Optional: phonons and Wannier support
 conda install -c conda-forge phonopy wannier90
 
-# 4. First-time configuration (creates site.env from template)
+# 4. First-time configuration (creates default_paths from template)
 make setup
-nano site.env     # set VASP paths, POTCAR directory, MPI command
+nano default_paths     # set VASP paths, POTCAR directory, MPI command
 \end{lstlisting}
 
-\subsection{site.env --- platform configuration}
+\subsection{default\_paths --- platform configuration}
+
+The file \texttt{default\_paths} (Makefile key=value syntax) is read at
+startup and its variables are exported as environment variables that the
+GUI uses as initial defaults.  Settings saved via the GUI \emph{System
+Setup} page take precedence; \texttt{default\_paths} acts as the
+fallback for new installs or CLI-only use.
 
 \begin{lstlisting}
 PYTHON          = python3
@@ -216,7 +222,21 @@ VASP_POTCAR_DIR = /path/to/potpaw_PBE
 MPI_LAUNCH      = mpirun -np              # or: srun
 MPI_NP          = 16
 WANNIER90_X     = wannier90.x
+LOBSTER_X       = lobster                 # lobster binary or full path
+VISUALIZER_X    = ~/bin/jmol             # Jmol, VESTA, OVITO, ...
 \end{lstlisting}
+
+\noindent\textbf{Three-layer configuration precedence} (highest wins):
+\begin{enumerate}
+  \item GUI System Setup page $\to$ saved to \texttt{settings.json};
+        also auto-synced to \texttt{profiles/slurm.json} for SLURM agents.
+  \item \texttt{default\_paths} $\to$ Makefile bootstrap, read on every
+        \texttt{make run}.
+  \item Built-in code defaults.
+\end{enumerate}
+\texttt{profiles/workstation.json} is used only when running
+\texttt{vasp-agent.py~-{}-profile~workstation} directly from the
+command line without the GUI.
 
 % ============================================================
 \section{Browser GUI}
@@ -263,7 +283,10 @@ Regenerate} re-opens Setup with all settings pre-filled.
 \thead
 Field & Description \\ \midrule
 Project name & Folder created in the working directory. \\
-POSCAR & Paste the crystal structure, or click \emph{Load file}. \\
+POSCAR & Paste the crystal structure, or click \emph{Load file}.
+  Click \emph{Visualize} to convert the current POSCAR to XYZ and open
+  it in the structure viewer configured under System Setup
+  (Jmol, VESTA, OVITO, \ldots). \\
 POTCAR directory & Path to your PAW library.
   If an element has multiple variants (\texttt{Ga} vs \texttt{Ga\_d})
   a chooser appears. \\
@@ -1518,6 +1541,7 @@ Band plot empty or not shown &
     all-zero \texttt{ELFCAR} that VASP writes for non-collinear / spin-orbit
     runs and reports it instead of emitting a blank plot.
   \item[\textcolor{mainblue}{v1.9} (2026-07-22)]
+    \textit{K-mesh and GGA+U.}
     Physics-based cell-aware k-mesh generation replacing fixed uniform grids.
     Two density tiers: \textbf{coarse} (1000 k-points per reciprocal atom,
     kpra) for convergence tests and relaxations; \textbf{fine} (5000~kpra) for
@@ -1530,6 +1554,32 @@ Band plot empty or not shown &
     GGA+U anion gate extended to all chalcogenides and halides
     (O, F, S, Se, Te, Cl, Br, I); Hubbard lookup table now covers sulfides
     such as AgCrP$_2$S$_6$.
+
+    \textit{Plot improvements.}
+    ELF bond-profile and LOBSTER (COHP/COBI/COOP) plot legends and statistics
+    boxes moved outside the axes area so they never obscure curves.
+    Shared plotting module \texttt{modules/cohp\_plot.py} used by both the
+    GUI and the CLI agents; COHP, COBI, and COOP plots are now generated
+    automatically in \texttt{analyze.sh} for both the workstation and SLURM
+    agents, matching GUI behaviour.
+
+    \textit{Structure visualizer.}
+    New \emph{Visualize} button in the POSCAR card: converts the current
+    POSCAR to XYZ via \texttt{modules/poscar2xyz.py} and opens it in
+    Jmol, VESTA, or any other viewer.  The viewer path is set under
+    System Setup $\to$ \emph{Structure visualizer} (or \texttt{VISUALIZER\_X}
+    in \texttt{default\_paths}).
+
+    \textit{Configuration.}
+    \texttt{LOBSTER\_X} and \texttt{VISUALIZER\_X} are now exposed in the
+    GUI System Setup page and propagated to the agent subprocess environment.
+    Platform config file renamed from \texttt{site.env} to
+    \texttt{default\_paths} for clarity; three-layer precedence
+    (default\_paths $<$ GUI settings $<$ profile JSON) documented.
+    Auxiliary Python scripts (\texttt{band\_plot.py}, \texttt{dos\_plot.py},
+    \texttt{elf\_bonds.py}, \texttt{lobster\_postprocess.py},
+    \texttt{conv\_choose.py}, \texttt{poscar2xyz.py}) consolidated into
+    \texttt{modules/}.
 \end{description}
 
 % ============================================================
