@@ -378,23 +378,38 @@ class VASPWorkflowAgent:
             f.write('    ENCUT=${ENCUT:-$DEF_ENCUT}\n')
             f.write('    read -p "Enter converged k-mesh for relax/SCF${DEF_KMESH:+ [auto: $DEF_KMESH]}: " KMESH\n')
             f.write('    KMESH=${KMESH:-$DEF_KMESH}\n')
-            f.write('    read -p "Enter denser k-mesh for DOS [default: same as SCF]: " KMESH_DOS\n')
-            f.write('    if [ -z "$KMESH_DOS" ]; then KMESH_DOS=$KMESH; fi\n')
+            f.write('    read -p "Enter denser k-mesh for DOS [Enter = 2x SCF]: " KMESH_DOS\n')
             f.write('else\n')
-            f.write('    ENCUT=$DEF_ENCUT; KMESH=$DEF_KMESH; KMESH_DOS=$KMESH\n')
+            f.write('    ENCUT=$DEF_ENCUT; KMESH=$DEF_KMESH; KMESH_DOS=""\n')
             f.write('    echo "Non-interactive run: using auto-selected ENCUT=$ENCUT, k-mesh=$KMESH"\n')
             f.write('fi\n')
             f.write('[ -z "$ENCUT" ] && echo "NOTE: no converged ENCUT available — keeping the generated ENCUT."\n')
             f.write('[ -z "$KMESH" ] && echo "NOTE: no converged k-mesh available — keeping the generated KPOINTS."\n\n')
 
-            # parse both meshes
+            # parse the SCF mesh, then derive the NSCF meshes from it
             f.write('if [ -n "$KMESH" ]; then\n')
-            for var, mesh_var in [('NX', 'KMESH'), ('NX_DOS', 'KMESH_DOS')]:
-                prefix = '' if mesh_var == 'KMESH' else '_DOS'
-                f.write(f'    NX{prefix}=$(echo "${mesh_var}" | cut -dx -f1)\n')
-                f.write(f'    NY{prefix}=$(echo "${mesh_var}" | cut -dx -f2)\n')
-                f.write(f'    NZ{prefix}=$(echo "${mesh_var}" | cut -dx -f3)\n')
-                f.write(f'    if [ -z "$NZ{prefix}" ]; then NZ{prefix}=$NY{prefix}; fi\n')
+            f.write('    NX=$(echo "$KMESH" | cut -dx -f1)\n')
+            f.write('    NY=$(echo "$KMESH" | cut -dx -f2)\n')
+            f.write('    NZ=$(echo "$KMESH" | cut -dx -f3)\n')
+            f.write('    if [ -z "$NZ" ]; then NZ=$NY; fi\n')
+            # DOS and LOBSTER NSCFs: 2x the SCF mesh in every direction. The SCF
+            # mesh already has Ni proportional to |b_i*| (~1/a_i), so doubling
+            # preserves that ratio exactly and is always >= 2x -- unlike
+            # re-deriving from a larger kpra, which re-rounds each Ni
+            # independently and can land short of 2x. A 2D slab (NZ=1) stays
+            # Gamma-only out of plane.
+            f.write('    NX_2X=$((NX * 2)); NY_2X=$((NY * 2))\n')
+            f.write('    if [ "$NZ" -le 1 ]; then NZ_2X=$NZ; else NZ_2X=$((NZ * 2)); fi\n')
+            f.write('    NX_LOB=$NX_2X; NY_LOB=$NY_2X; NZ_LOB=$NZ_2X\n')
+            # An explicit DOS mesh typed at the prompt still wins.
+            f.write('    if [ -n "$KMESH_DOS" ]; then\n')
+            f.write('        NX_DOS=$(echo "$KMESH_DOS" | cut -dx -f1)\n')
+            f.write('        NY_DOS=$(echo "$KMESH_DOS" | cut -dx -f2)\n')
+            f.write('        NZ_DOS=$(echo "$KMESH_DOS" | cut -dx -f3)\n')
+            f.write('        if [ -z "$NZ_DOS" ]; then NZ_DOS=$NY_DOS; fi\n')
+            f.write('    else\n')
+            f.write('        NX_DOS=$NX_2X; NY_DOS=$NY_2X; NZ_DOS=$NZ_2X\n')
+            f.write('    fi\n')
             f.write('fi\n\n')
 
             # ── patch ENCUT in all INCAR files ───────────────────────────
@@ -410,19 +425,26 @@ class VASPWorkflowAgent:
             # ── patch KPOINTS: relax and scf use KMESH ───────────────────
             f.write('if [ -n "$KMESH" ]; then\n')
             for key in ordered_keys:
-                if key in ('bands', 'dos'):
+                if key in ('bands', 'dos', 'lobster'):
                     continue
                 dirname = os.path.basename(calc_dirs[key])
                 f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
                 f.write(f'        $NX $NY $NZ > "$HERE/{dirname}/KPOINTS"\n')
                 f.write(f'    echo "  {dirname}/KPOINTS  →  $KMESH"\n')
 
+            # ── patch KPOINTS: lobster NSCF uses 2× the SCF mesh ──────────
+            if 'lobster' in calc_dirs:
+                dirname = os.path.basename(calc_dirs['lobster'])
+                f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
+                f.write(f'        $NX_LOB $NY_LOB $NZ_LOB > "$HERE/{dirname}/KPOINTS"\n')
+                f.write(f'    echo "  {dirname}/KPOINTS  →  ${{NX_LOB}}x${{NY_LOB}}x${{NZ_LOB}}  (2x SCF, LOBSTER)"\n')
+
             # ── patch KPOINTS: dos uses KMESH_DOS ────────────────────────
             if 'dos' in calc_dirs:
                 dirname = os.path.basename(calc_dirs['dos'])
                 f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
                 f.write(f'        $NX_DOS $NY_DOS $NZ_DOS > "$HERE/{dirname}/KPOINTS"\n')
-                f.write(f'    echo "  {dirname}/KPOINTS  →  $KMESH_DOS  (denser for DOS)"\n')
+                f.write(f'    echo "  {dirname}/KPOINTS  →  ${{NX_DOS}}x${{NY_DOS}}x${{NZ_DOS}}  (2x SCF, DOS)"\n')
             f.write('fi\n')
 
             f.write('\necho ""\n')

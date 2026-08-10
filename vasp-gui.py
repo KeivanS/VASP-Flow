@@ -538,16 +538,19 @@ def api_run_phase2():
     if os.path.exists(poscar_path) and os.path.exists(instr_path):
         instr_obj = InstructionParser(instr_path).instructions
         gen = VASPInputGenerator(poscar_path, instr_obj)
-        density_map_step = {
-            '01_relax': 'coarse',
-            '04_dos':   'fine',
-        }
+        # DOS and LOBSTER are NSCF steps off the SCF charge density: both run
+        # at 2× the SCF mesh in every direction (SCF ratios preserved).
+        x2_steps = {'04_dos': 'DOS', '08_lobster': 'LOBSTER'}
         for step in _steps(slug):
             if step in ('03_bands', '00_convergence'): continue
             kp = os.path.join(pd_path, step, 'KPOINTS')
             if not os.path.exists(kp): continue
-            step_density = density_map_step.get(step, kmesh_density)
-            Path(kp).write_text(gen._generate_kpoints_auto(density=step_density))
+            if step in x2_steps:
+                Path(kp).write_text(gen._generate_kpoints_x2(
+                    density=kmesh_density, label=x2_steps[step]))
+            else:
+                step_density = 'coarse' if step == '01_relax' else kmesh_density
+                Path(kp).write_text(gen._generate_kpoints_auto(density=step_density))
 
     prod = [s for s in _steps(slug) if not s.startswith('00')]
     tmp  = os.path.join(pd_path, '_phase2.sh')
@@ -2023,7 +2026,8 @@ def api_summary(slug):
 
 # Files shown in the modal. Editable inputs vs read-only outputs/logs.
 INPUT_FILES    = ['INCAR', 'KPOINTS', 'POSCAR']
-LOBSTER_INPUTS = ['INCAR', 'lobsterin']   # INCAR = the ISYM=0 NSCF for LOBSTER
+# INCAR/KPOINTS = the ISYM=0 NSCF for LOBSTER (KPOINTS defaults to 2x the SCF mesh)
+LOBSTER_INPUTS = ['INCAR', 'KPOINTS', 'lobsterin']
 LOBSTER_OUTPUTS = ['lobster_summary.csv', 'ICOHPLIST.lobster', 'ICOBILIST.lobster',
                    'ICOOPLIST.lobster', 'lobsterout', 'lobster.out']
 READONLY_FILES = {'OUTCAR', 'OSZICAR', 'vasp.out', 'lobsterout', 'lobster.out'}
@@ -2631,7 +2635,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
           <input id="lobster_isym" placeholder="0"></div>
       </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
+        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. The NSCF k-mesh defaults to 2&times; the SCF mesh in every direction, keeping the SCF ratios (SCF 3&times;4&times;5 &rarr; 6&times;8&times;10); edit <code>08_lobster/KPOINTS</code> on the Workflow page to override. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
       </div>
     </div>
   </div>
@@ -2741,6 +2745,7 @@ const STEP_FILES = [
 // 08_lobster shows only the lobster-relevant files (INCAR = the ISYM=0 NSCF).
 const LOBSTER_STEP_FILES = [
   { name: 'INCAR',                icon: '✏'  },
+  { name: 'KPOINTS',              icon: '✏'  },   // 2x the SCF mesh by default
   { name: 'lobsterin',            icon: '✏'  },
   { name: 'lobster_summary.csv',  icon: '📊' },   // ICOHP/ICOBI/ICOOP + B/AB + fAB
   { name: 'ICOHPLIST.lobster',    icon: '📈' },

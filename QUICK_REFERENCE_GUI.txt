@@ -112,7 +112,7 @@
 │   coarse  1000 kpra   relaxation; convergence test starting point            │
 │   fine    5000 kpra   SCF, DOS, DFPT, LOBSTER, Wannier90 (default)           │
 │ kpra = Nx×Ny×Nz × N_atoms; subdivisions Ni ∝ |b_i*| (all even)              │
-│ DOS mesh: always 2Nx × 2Ny × 2Nz                                             │
+│ DOS and LOBSTER meshes: always 2Nx × 2Ny × 2Nz (SCF ratios kept; 2D Nz=1)    │
 │ Hexagonal (a=b, γ=120°): Nx=Ny=6/12 fixed; Nz from |b3*|/|b1*|             │
 │ Use Manual override (KMESH: N1 N2 N3) to bypass automatic density            │
 └───────────────────────────────────────────────────────────────────────────────┘

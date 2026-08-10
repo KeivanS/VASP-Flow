@@ -588,13 +588,9 @@ class VASPInputGenerator:
             f.write(incar_content)
         
         # KPOINTS — 2× the SCF mesh in every direction for better DOS resolution.
-        _kd = self.instructions.get('kmesh_density', 'fine')
-        nx, ny, nz = self._compute_mesh(_kd)
-        nx2, ny2 = nx * 2, ny * 2
-        nz2 = 1 if self.instructions.get('is_2d') else nz * 2
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(f"Automatic Gamma mesh (DOS, 2× SCF: {nx2}×{ny2}×{nz2})\n"
-                    f"0\nGamma\n  {nx2}  {ny2}  {nz2}\n  0    0    0\n")
+            f.write(self._generate_kpoints_x2(
+                density=self.instructions.get('kmesh_density', 'fine'), label='DOS'))
         
         # Copy from SCF at runtime (relative path)
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -620,6 +616,7 @@ class VASPInputGenerator:
         A symmetry-off (ISYM=0) NSCF that reads 02_scf's CHGCAR and writes a
         WAVECAR LOBSTER can consume, followed by a LOBSTER run. NBANDS is set
         >= the number of LOBSTER basis functions and LMAXMIX from the elements.
+        The k-mesh is 2× the SCF mesh in every direction (ratios preserved).
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -630,10 +627,13 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
 
-        # Same k-mesh as SCF (user-selected density).
+        # KPOINTS — 2× the SCF mesh in every direction (same ratios). The NSCF
+        # is cheap compared with the SCF, and COHP/COBI integrate over the BZ,
+        # so a denser mesh smooths the bonding curves at little extra cost.
         with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(
-                density=self.instructions.get('kmesh_density', 'fine')))
+            f.write(self._generate_kpoints_x2(
+                density=self.instructions.get('kmesh_density', 'fine'),
+                label='LOBSTER'))
 
         # Editable lobsterin (run.sh uses it as-is if present). Energy window is
         # Fermi-referenced (E_F = 0); edit it or COHPStartEnergy for deep states.
@@ -2073,7 +2073,25 @@ echo "      Data:  band.yaml  FORCE_SETS"
             kpra = {'coarse': 1000, 'fine': 5000}.get(density, 5000)
             comment = f"Automatic Gamma mesh ({density}, {kpra} kpra)"
         return f"{comment}\n0\nGamma\n  {nx}  {ny}  {nz}\n  0    0    0\n"
-    
+
+    def _mesh_x2(self, density: str = 'fine') -> tuple:
+        """SCF mesh doubled in every direction, keeping the SCF ratios.
+
+        An SCF mesh of 3×4×5 becomes 6×8×10.  Used by the DOS and LOBSTER
+        NSCF steps, which read the SCF charge density and so cost far less
+        than the SCF itself.  A 2D slab keeps nz = 1 (Gamma-only out of plane).
+        """
+        nx, ny, nz = self._compute_mesh(density)
+        nz2 = 1 if self.instructions.get('is_2d') else nz * 2
+        return nx * 2, ny * 2, nz2
+
+    def _generate_kpoints_x2(self, density: str = 'fine', label: str = 'NSCF') -> str:
+        """KPOINTS file at 2× the SCF mesh (see _mesh_x2)."""
+        nx, ny, nz = self._mesh_x2(density)
+        return (f"Automatic Gamma mesh ({label}, 2× SCF: {nx}×{ny}×{nz})\n"
+                f"0\nGamma\n  {nx}  {ny}  {nz}\n  0    0    0\n")
+
+
     def _spglib_kpath(self):
         """Spglib/Setyawan-Curtarolo high-symmetry k-path for the POSCAR.
 

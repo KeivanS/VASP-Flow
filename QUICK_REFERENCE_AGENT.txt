@@ -374,6 +374,9 @@
 │ unusable COHP/ICOHP (wrong sign, |Δ| > 100%). With SOC on, ISYM=-1 is set     │
 │ instead (spin-orbit breaks time reversal). NBANDS is auto-set to >= the       │
 │ LOBSTER basis-function count; LMAXMIX from the elements (6 f / 4 d / 2 sp).   │
+│ The NSCF k-mesh defaults to 2x the SCF mesh in every direction, keeping the   │
+│ SCF ratios (SCF 3x4x5 -> 6x8x10); edit 08_lobster/KPOINTS to override. With   │
+│ ISYM=0 there is no symmetry reduction, so 2x in 3D is ~8x the k-points.       │
 │ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX; ~ in site.env is expanded). │
 │ lobsterin cohp/cobiGenerator range is structure-aware: it reaches every       │
 │ atom's 2nd-neighbour shell (+10%, floor 4 Å, cap 6 Å), so 1st AND 2nd shell  │
