@@ -377,6 +377,15 @@ class VASPInputGenerator:
         if modules:
             lines.append('')
 
+        # Pure MPI: one thread per rank. vasp_std is not the OpenMP build, so a
+        # threaded BLAS inside each rank buys nothing and, with a login shell
+        # that exports OMP_NUM_THREADS=N, silently launches ranks x N threads --
+        # e.g. 16 x 8 = 128 threads on 16 cores, which spends most of its time
+        # in the scheduler. Set here (not in the user's profile) so other codes
+        # on the same machine keep their own threading.
+        lines.append('export OMP_NUM_THREADS=${VASP_OMP_NUM_THREADS:-1}')
+        lines.append('')
+
         return '\n'.join(lines) + ('\n' if lines else '')
 
     @staticmethod
@@ -1447,15 +1456,114 @@ echo "      Data:  band.yaml  FORCE_SETS"
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _estimate_nkpts(self, calc_type: str = 'scf') -> int:
+        """Irreducible k-point count this step will end up running.
+
+        Uses spglib to reduce the Gamma mesh by the crystal symmetry, which is
+        what VASP reports as NKPTS.  Falls back to half the full mesh (a rough
+        stand-in for time-reversal alone) when spglib is unavailable, and to
+        the full mesh for the LOBSTER NSCF, which runs ISYM=0 and therefore
+        gets no reduction at all.  Band structure is line-mode: the count is
+        the path length, not a mesh.
+        """
+        density = self.instructions.get('kmesh_density', 'fine')
+        if calc_type == 'bands':
+            npts = self.instructions.get('nkpts_bands') or self.instructions.get('nkpts') or 40
+            return max(1, int(npts) * 4)          # ~4 segments on a typical path
+        if calc_type in ('dos', 'lobster'):
+            mesh = self._mesh_x2(density)
+        elif calc_type in ('relax', 'phonons'):
+            mesh = self._compute_mesh('coarse')
+        else:
+            mesh = self._compute_mesh(density)
+        full = max(1, mesh[0] * mesh[1] * mesh[2])
+        if calc_type == 'lobster':
+            return full                            # ISYM=0: no reduction
+        try:
+            import spglib
+            from pymatgen.core import Structure
+            st = Structure.from_file(self.poscar)
+            cell = (st.lattice.matrix, st.frac_coords,
+                    [s.specie.Z for s in st])
+            mapping, _ = spglib.get_ir_reciprocal_mesh(mesh, cell, is_shift=[0, 0, 0])
+            return max(1, len(set(mapping)))
+        except Exception:
+            return max(1, full // 2)
+
+    def _estimate_nbands(self) -> int:
+        """Approximate NBANDS VASP will choose, for parallel-layout purposes.
+
+        VASP's default is roughly NELECT/2 + NIONS/2 (doubled for
+        noncollinear/SOC).  NELECT comes from the POTCAR ZVALs when pymatgen
+        and a POTCAR are available; otherwise a deliberately low estimate is
+        used -- underestimating only makes the layout more conservative
+        (larger NCORE, fewer band groups), never invalid.
+        """
+        n_atoms = max(1, self._read_atom_count())
+        soc = self.instructions.get('soc', False)
+        for cand in ('POTCAR',
+                     os.path.join(os.path.dirname(os.path.abspath(self.poscar)), 'POTCAR')):
+            try:
+                if not os.path.isfile(cand):
+                    continue
+                from pymatgen.core import Structure
+                from pymatgen.io.vasp.inputs import Potcar
+                st = Structure.from_file(self.poscar)
+                zval = {p.symbol.split('_')[0]: float(p.zval)
+                        for p in Potcar.from_file(cand)}
+                nelect = sum(zval[s.specie.symbol] for s in st
+                             if s.specie.symbol in zval)
+                if nelect > 0:
+                    nb = nelect + n_atoms / 2 if soc else nelect / 2 + n_atoms / 2
+                    return max(1, int(nb))
+            except Exception:
+                continue
+        return max(1, 2 * n_atoms)                 # conservative fallback
+
+    @staticmethod
+    def _auto_kpar_ncore(np_ranks: int, n_k: int, n_bands: int) -> tuple:
+        """(KPAR, NCORE) for n_k k-points and n_bands bands on np_ranks ranks.
+
+        KPAR splits k-points across groups -- near-linear scaling and little
+        communication -- so it is maximised first, subject to two limits: a
+        group needs at least one k-point, and the ranks left inside a group
+        must not outnumber the bands they divide.  KPAR must divide np_ranks
+        or VASP leaves ranks idle.
+
+        NCORE then splits each band over the ranks left inside a group.  Only
+        divisors that leave no idle band group are eligible; among those the
+        target is 1 for narrow groups (maximum band parallelism) but ~sqrt(rpg)
+        once a group is wide, since NCORE=1 there makes every band FFT a
+        group-wide communication.
+        """
+        import math
+        divisors = [d for d in range(1, np_ranks + 1) if np_ranks % d == 0]
+        n_k, n_bands = max(1, n_k), max(1, n_bands)
+        kpar = 1
+        for d in divisors:                          # ascending -> keeps largest valid
+            if d <= n_k and (np_ranks // d) <= n_bands:
+                kpar = d
+        rpg = max(1, np_ranks // kpar)              # ranks per k-group
+        target = 1 if rpg <= 4 else int(round(math.sqrt(rpg)))
+        eligible = [d for d in range(1, rpg + 1)
+                    if rpg % d == 0 and (rpg // d) <= n_bands]
+        ncore = min(eligible, key=lambda d: (abs(d - target), d)) if eligible else rpg
+        return kpar, ncore
+
     def _get_parallel_lines(self, calc_type: str = 'scf') -> list:
         """Return INCAR lines for MPI parallelization.
 
         Smart defaults scale with mpi_np (N = total MPI tasks):
 
-          relax / scf / dos  →  KPAR = floor(sqrt(N)), NCORE = N // KPAR
-          bands              →  KPAR = 1  (line-mode k-points), NCORE = N
-          phonons            →  KPAR = 1, NCORE = floor(sqrt(N))
+        The layout is derived per step from the work it actually has: the
+        irreducible k-point count of that step's mesh (_estimate_nkpts) and the
+        band count (_estimate_nbands), against N ranks -- see
+        _auto_kpar_ncore.  A k-point-heavy step on a small cell therefore ends
+        up near KPAR = N / NCORE = 1, while a large cell with few k-points
+        keeps KPAR small and puts the ranks into NCORE.
 
+        phonons is pinned to KPAR = 1: the supercell displacements are already
+        run as independent jobs, so k-group replication only costs memory.
         The DFPT step never uses this: linear response / PEAD supports
         neither KPAR nor NCORE, so _generate_incar_dfpt() hard-codes 1/1.
 
@@ -1469,24 +1577,17 @@ echo "      Data:  band.yaml  FORCE_SETS"
             return []
 
         soc = self.instructions.get('soc', False)
-        kpar_sqrt = max(1, int(math.floor(math.sqrt(np))))
-
-        # Per-type auto defaults
-        defaults = {
-            'relax':   (kpar_sqrt,  max(1, np // kpar_sqrt)),
-            'scf':     (kpar_sqrt,  max(1, np // kpar_sqrt)),
-            'bands':   (1,          np),
-            'dos':     (kpar_sqrt,  max(1, np // kpar_sqrt)),
-            'phonons': (1,          max(1, int(math.floor(math.sqrt(np))))),
-        }
+        n_k     = self._estimate_nkpts(calc_type)
+        n_bands = self._estimate_nbands()
         if soc:
-            # NCL doubles memory per band — cap NCORE to avoid OOM
-            for k in defaults:
-                kd, nd = defaults[k]
-                defaults[k] = (kd, max(1, nd // 2))
-            defaults['bands'] = (1, max(1, np // 2))
+            # NCL doubles memory per band; halve the k-group replication.
+            n_k = max(1, n_k // 2)
 
-        kpar_def, ncore_def = defaults.get(calc_type, (kpar_sqrt, max(1, np // kpar_sqrt)))
+        if calc_type == 'phonons':
+            kpar_def = 1
+            ncore_def = max(1, int(math.floor(math.sqrt(np))))
+        else:
+            kpar_def, ncore_def = self._auto_kpar_ncore(np, n_k, n_bands)
 
         # Priority: per-task key > global key > auto default
         kpar  = (self.instructions.get(f'{calc_type}_kpar')
@@ -1782,8 +1883,16 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines = self._apply_incar_overrides(lines, 'relax')
         return '\n'.join(lines) + '\n'
 
-    def _generate_incar_scf(self, nbands: int = None) -> str:
-        """Generate INCAR for SCF calculation."""
+    def _generate_incar_scf(self, nbands: int = None,
+                            for_convergence: bool = False) -> str:
+        """Generate INCAR for SCF calculation.
+
+        for_convergence trims the run to what a convergence test actually
+        consumes -- the total energy in OUTCAR.  The production output tags
+        (LWAVE/LCHARG/LORBIT/LELF) are dropped, which besides the obvious I/O
+        saving also releases KPAR: LELF forces KPAR=1, and a k-point sweep with
+        no k-point parallelism is the slowest way to run one.
+        """
         encut = self._encut()
         lines = [
             "# Self-consistent field calculation",
@@ -1817,7 +1926,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
 
         # Electron localization function (ELFCAR): on by default; VASP does not
         # compute ELF for SOC/non-collinear runs, and LELF requires KPAR=1.
-        elf = self.instructions.get('elf', True) and not self.instructions.get('soc', False)
+        elf = (self.instructions.get('elf', True)
+               and not self.instructions.get('soc', False)
+               and not for_convergence)
 
         par_lines = self._get_parallel_lines('scf')
         if elf:
@@ -1825,9 +1936,13 @@ echo "      Data:  band.yaml  FORCE_SETS"
                           if l.strip().startswith('KPAR') else l) for l in par_lines]
         lines.extend(par_lines)
 
-        out = ["# Output", "LWAVE = .TRUE.", "LCHARG = .TRUE.", "LORBIT = 11"]
-        if elf:
-            out.append("LELF = .TRUE.   # electron localization function -> ELFCAR")
+        if for_convergence:
+            out = ["# Output — a convergence test reads only the total energy",
+                   "LWAVE = .FALSE.", "LCHARG = .FALSE."]
+        else:
+            out = ["# Output", "LWAVE = .TRUE.", "LCHARG = .TRUE.", "LORBIT = 11"]
+            if elf:
+                out.append("LELF = .TRUE.   # electron localization function -> ELFCAR")
         lines.extend(out)
         lines = self._apply_incar_overrides(lines, 'scf')
         return '\n'.join(lines) + '\n'

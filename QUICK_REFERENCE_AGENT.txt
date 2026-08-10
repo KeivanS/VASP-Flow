@@ -251,6 +251,15 @@
 │ Explicit list:                                                                │
 │   Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9                       │
 │                                                                               │
+│ ENCUT accepts any of these (step defaults to 50 eV):                          │
+│   Test ENCUT 350-650    Test ENCUT 350 650    Test ENCUT 350 to 650          │
+│   Test ENCUT 350,650    Test ENCUT 350:50:650  <- start:step:stop            │
+│ A convergence line that cannot be parsed now prints a [warn] instead of      │
+│ silently generating no tests.                                                 │
+│                                                                               │
+│ Convergence INCARs drop LWAVE/LCHARG/LORBIT/LELF (only the total energy is   │
+│ read from OUTCAR) — this also frees KPAR, which LELF would pin to 1.         │
+│                                                                               │
 │ Generated directories: 00_convergence/kpoints/  and  00_convergence/encut/   │
 │ Run:  ./run_convergence.sh   (workstation)                                    │
 │       ./submit_convergence.sh (SLURM)                                        │
@@ -281,12 +290,20 @@
 │   SCF_NCORE: 8       BANDS_NCORE: 16     DOS_NCORE: 8                        │
 │   RELAX_NCORE: 8     PHONONS_NCORE: 8                                         │
 │                                                                               │
-│ Auto-defaults when not specified (N = total MPI tasks):                      │
-│   SCF / DOS / relax  →  KPAR = floor(√N),  NCORE = N / KPAR                 │
-│   bands              →  KPAR = 1,           NCORE = N                        │
+│ Auto-defaults when not specified: derived PER STEP from that step's own      │
+│ irreducible k-point count (spglib-reduced; full mesh for the ISYM=0 LOBSTER  │
+│ NSCF) and its band count (POTCAR ZVALs), against N = total MPI tasks:        │
+│   KPAR  = largest divisor of N with KPAR <= n_k and N/KPAR <= n_bands        │
+│           (k-point parallelism scales best, so it is maximised first)        │
+│   NCORE = divisor of the remaining ranks-per-group leaving no idle band      │
+│           group; target 1 for narrow groups, ~sqrt for wide ones             │
+│ So a small cell with many k-points lands near KPAR=N / NCORE=1, while a      │
+│ large cell with few k-points keeps KPAR low and puts ranks into NCORE.       │
 │   DFPT               →  KPAR = 1, NCORE = 1  (forced: linear response/PEAD  │
 │                          supports neither; overrides are ignored)            │
 │   phonons            →  KPAR = 1,           NCORE = floor(√N)               │
+│   ELF (LELF=.TRUE.)  →  forces KPAR = 1 on that step. Turn ELF off if you    │
+│                          need k-point parallelism in the production SCF.     │
 │                                                                               │
 │ Rule: KPAR × NCORE must divide N evenly. Agent enforces this automatically.  │
 └───────────────────────────────────────────────────────────────────────────────┘
@@ -378,6 +395,9 @@
 │ SCF ratios (SCF 3x4x5 -> 6x8x10); edit 08_lobster/KPOINTS to override. With   │
 │ ISYM=0 there is no symmetry reduction, so 2x in 3D is ~8x the k-points.       │
 │ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX; ~ in site.env is expanded). │
+│ analyze.sh also writes analysis/*_lobster_dos.{png,pdf}: LOBSTER projected    │
+│ DOS stacked as in 04_dos, with the projection-free 04_dos total overlaid in   │
+│ solid black (the gap is the charge spilling). Only the GUI displays it.       │
 │ lobsterin cohp/cobiGenerator range is structure-aware: it reaches every       │
 │ atom's 2nd-neighbour shell (+10%, floor 4 Å, cap 6 Å), so 1st AND 2nd shell  │
 │ bonds (e.g. metal-metal in rocksalt) are computed and plotted (dashed = 2nd). │

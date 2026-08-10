@@ -992,6 +992,21 @@ def _cohp_cobi_plot(lobster_dir, out_png, project_label, which='cohp',
                           which=which, emin=emin, emax=emax)
 
 
+@_plot_locked
+def _lobster_dos_plot(lobster_dir, out_png, project_label, dos_dir=None,
+                      emin=None, emax=None):
+    """LOBSTER projected DOS + VASP total overlay — wraps lobster_dos_plot.py.
+
+    Unlike the COHP plots the energy window is left to the module (it uses the
+    full non-zero range of the LOBSTER DOS, matching the 04_dos plots) unless
+    the user asked for a zoom.
+    """
+    from lobster_dos_plot import plot_lobster_dos
+    out_stem = os.path.splitext(out_png)[0]
+    return plot_lobster_dos(lobster_dir, out_stem, project_label,
+                            dos_dir=dos_dir, emin=emin, emax=emax)
+
+
 # ── spin-resolved band structure plot ─────────────────────────────────────────
 
 def _fmt_hs_label(s):
@@ -1345,6 +1360,20 @@ def api_plot(slug, ptype):
             return send_file(out, mimetype='image/png')
         return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
 
+    # ── LOBSTER projected DOS + VASP total overlay (from 08_lobster) ─────────
+    if ptype == 'lobster_dos':
+        out = os.path.join(ana, f'{base}_lobster_dos.png')
+        for ld in (os.path.join(pd_, '08_lobster'), os.path.join(pd_, '02_scf')):
+            if os.path.isfile(os.path.join(ld, 'DOSCAR.lobster')):
+                if (_lobster_dos_plot(ld, out, slug, os.path.join(pd_, '04_dos'),
+                                      emin=zmin, emax=zmax)
+                        and os.path.exists(out)):
+                    return send_file(out, mimetype='image/png')
+                break
+        if os.path.exists(out):
+            return send_file(out, mimetype='image/png')
+        return jsonify(error='LOBSTER DOS not available — run the 08_lobster step first'), 404
+
     if ptype == 'fatbands':
         candidates = [os.path.join(ana, f'{base}_fatbands.png')]
     elif ptype == 'bands':
@@ -1541,6 +1570,18 @@ def api_plot_pdf(slug, ptype):
             return send_file(out, mimetype='application/pdf', as_attachment=True,
                              download_name=os.path.basename(out))
         return jsonify(error=f'{ptype.upper()} not available — run the 08_lobster step first'), 404
+    if ptype == 'lobster_dos':
+        os.makedirs(ana, exist_ok=True)
+        out = os.path.join(ana, f'{base}_lobster_dos.pdf')
+        for ld in (os.path.join(pd_, '08_lobster'), os.path.join(pd_, '02_scf')):
+            if os.path.isfile(os.path.join(ld, 'DOSCAR.lobster')):
+                _lobster_dos_plot(ld, out, slug, os.path.join(pd_, '04_dos'),
+                                  emin=zmin, emax=zmax)
+                break
+        if os.path.exists(out):
+            return send_file(out, mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(out))
+        return jsonify(error='LOBSTER DOS not available — run the 08_lobster step first'), 404
     if ptype in ('bands', 'fatbands'):
         stem = 'fatbands' if ptype == 'fatbands' else 'band'
         gen_base = f'{base}_zoom' if zoomed else base
@@ -3507,7 +3548,7 @@ function buildWorkflow(steps,hasConv){
 
 // ── energy-window zoom: re-render plots server-side with ?emin=&emax= ──────
 const EWIN_GROUPS={bands:['bands','fatbands'],dos:['dos_total','dos_proj'],
-                   lobster:['cohp','cobi','coop']};
+                   lobster:['cohp','cobi','coop','lobster_dos']};
 function ewinBar(group){
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--sub);margin-bottom:8px;">
     <span>Energy window (eV):</span>
@@ -3856,6 +3897,7 @@ async function buildResults(){
       <a id="pdf-cohp" href="/api/plot_pdf/${PROJECT}/cohp" class="btn btn-ghost btn-sm" download title="Download COHP PDF">⬇ COHP PDF</a>
       <a id="pdf-cobi" href="/api/plot_pdf/${PROJECT}/cobi" class="btn btn-ghost btn-sm" download title="Download COBI PDF">⬇ COBI PDF</a>
       <a id="pdf-coop" href="/api/plot_pdf/${PROJECT}/coop" class="btn btn-ghost btn-sm" download title="Download COOP PDF">⬇ COOP PDF</a>
+      <a id="pdf-lobster_dos" href="/api/plot_pdf/${PROJECT}/lobster_dos" class="btn btn-ghost btn-sm" download title="Download LOBSTER projected DOS PDF">⬇ pDOS PDF</a>
     </div>
     ${ewinBar('lobster')}
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start;">
@@ -3877,6 +3919,19 @@ async function buildResults(){
              onclick="window.open(this.src)"
              onerror="this.parentElement.innerHTML='<h4>COOP(E)</h4><div class=no-plot>Not available — run 08_lobster</div>'">
       </div>
+    </div>
+    <div class="plot-grid" style="margin-top:10px;">
+      <div class="plot-card">
+        <h4>LOBSTER projected DOS <span style="font-weight:400;color:var(--sub);font-size:11px;">(04_dos total overlaid in solid black)</span></h4>
+        <img id="img-lobster_dos" src="/api/plot/${PROJECT}/lobster_dos?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>LOBSTER projected DOS</h4><div class=no-plot>Not available — run 08_lobster</div>'">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--sub);margin-top:6px;">
+      Stacked areas are LOBSTER's LCAO projection (Mulliken), which sums exactly to its own total (dashed grey).
+      The solid black curve is the projection-free VASP total from <code>04_dos</code> (tetrahedron); the gap
+      between the two is the charge spilling. Note the two use different broadening — see the legend.
     </div>
   </div>`;
 
@@ -3960,12 +4015,12 @@ function replotLobster(){
   if(!PROJECT) return;
   // If any image element was destroyed by a previous onerror, rebuild the
   // whole Results page so the <img> tags come back.
-  if(['cohp','cobi','coop'].some(w=>!document.getElementById('img-'+w))){
+  if(['cohp','cobi','coop','lobster_dos'].some(w=>!document.getElementById('img-'+w))){
     buildResults();
     return;
   }
   const ts=Date.now();
-  ['cohp','cobi','coop'].forEach(w=>{
+  ['cohp','cobi','coop','lobster_dos'].forEach(w=>{
     const img=document.getElementById('img-'+w);
     if(img) img.src=`/api/plot/${PROJECT}/${w}?t=${ts}`;
   });

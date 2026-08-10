@@ -5,6 +5,7 @@ Parses plain text instruction files for VASP workflow agent
 """
 
 import re
+import sys
 from typing import Dict, List, Any
 
 class InstructionParser:
@@ -259,7 +260,7 @@ class InstructionParser:
         """
         conv_info = {
             'kpoints': {'enabled': False, 'meshes': [], 'range': []},
-            'encut':   {'enabled': False, 'range': []}
+            'encut':   {'enabled': False, 'range': [], 'step': 50}
         }
 
         # ── explicit mesh list: "6x6x3, 12x12x6, 18x18x9" ──────────────
@@ -291,11 +292,38 @@ class InstructionParser:
                 conv_info['kpoints']['range'] = [start, end]
 
         # ── ENCUT ─────────────────────────────────────────────────────────
-        encut_match = re.search(r'ENCUT\s+(\d+)\s*[-–]\s*(\d+)', content, re.IGNORECASE)
-        if encut_match:
+        # Accepted forms (step defaults to 50 eV unless given explicitly):
+        #     Test ENCUT 350-650      Test ENCUT 350 650
+        #     Test ENCUT 350 to 650   Test ENCUT 350,650
+        #     Test ENCUT 350:50:650   <- start:step:stop, sets the step too
+        # The triple must be tried first: the pair pattern would otherwise
+        # match "350" and "50" and silently halve the range.
+        triple = re.search(r'ENCUT\s+(\d+)\s*:\s*(\d+)\s*:\s*(\d+)',
+                           content, re.IGNORECASE)
+        pair = re.search(r'ENCUT\s+(\d+)\s*(?:[-–,]|to|)\s*(\d+)',
+                         content, re.IGNORECASE)
+        if triple:
+            lo, step, hi = (int(triple.group(1)), int(triple.group(2)),
+                            int(triple.group(3)))
             conv_info['encut']['enabled'] = True
-            conv_info['encut']['range'] = [int(encut_match.group(1)),
-                                           int(encut_match.group(2))]
+            conv_info['encut']['range'] = [min(lo, hi), max(lo, hi)]
+            conv_info['encut']['step'] = max(1, step)
+        elif pair:
+            lo, hi = int(pair.group(1)), int(pair.group(2))
+            conv_info['encut']['enabled'] = True
+            conv_info['encut']['range'] = [min(lo, hi), max(lo, hi)]
+
+        # ── warn when a convergence line was written but parsed to nothing ──
+        # Without this a typo'd range silently produces no tests at all.
+        for key, pat in (('kpoints', r'k-?points?\s+\S'), ('encut', r'ENCUT\s+\S')):
+            if not conv_info[key]['enabled'] and re.search(pat, content, re.IGNORECASE):
+                hint = ("'Test k-points 6x6x3, 12x12x6' or "
+                        "'Test k-points from 6x6 to 18x18'" if key == 'kpoints'
+                        else "'Test ENCUT 350-650' or 'Test ENCUT 350 650'")
+                sys.stderr.write(
+                    f"[warn] found a '{key}' line in the instructions but could "
+                    f"not parse a convergence range from it — NO {key} tests "
+                    f"will be generated. Expected e.g. {hint}\n")
 
         return conv_info
     

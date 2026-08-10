@@ -173,6 +173,12 @@
 │                 antibonding fraction fAB, and the B→AB crossing nearest EF.  │
 │                 Overlays show the 1st AND 2nd bond shell per element pair    │
 │                 (dashed = 2nd); lobsterin bond range auto-reaches 2nd shell. │
+│ LOBSTER pDOS    Same card, below COHP/COBI/COOP: LOBSTER projected DOS in    │
+│                 the 04_dos stacked format. Areas = LCAO/Mulliken channels,   │
+│                 summing exactly to LOBSTER's total (dashed grey). Solid      │
+│                 black = projection-free 04_dos total (tetrahedron); the gap  │
+│                 is the charge spilling. Differing broadening is in the       │
+│                 legend. Shares the LOBSTER energy-window zoom; own PDF.      │
 │ Fat bands       Orbital-weighted bands from 03_bands/PROCAR (LORBIT=11 is    │
 │                 always set): thin gray bands + colored markers per element   │
 │                 and l-channel, marker size ∝ projection weight. Shown next   │

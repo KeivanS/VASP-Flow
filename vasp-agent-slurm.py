@@ -461,7 +461,7 @@ fi'''
             # tests ONLY — production steps use the unshifted POSCAR.
             write_shifted_poscar(self.poscar_file, os.path.join(d, 'POSCAR'))
 
-            incar_text = self.generator._generate_incar_scf()
+            incar_text = self.generator._generate_incar_scf(for_convergence=True)
             if 'ISIF' not in incar_text:
                 incar_text += '\nISIF = 2\n'
             with open(os.path.join(d, 'INCAR'), 'w') as f:
@@ -472,23 +472,33 @@ fi'''
             with open(script, 'w') as f:
                 f.write(self._sbatch_header(f"{proj}_kconv",
                                             time_override=self.slurm_time))
-                f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n\n')
+                f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+                # Pure MPI: see _run_sh_preamble. A login shell exporting
+                # OMP_NUM_THREADS=N would otherwise give ranks x N threads.
+                f.write('export OMP_NUM_THREADS=${VASP_OMP_NUM_THREADS:-1}\n\n')
 
                 explicit = kp.get('meshes', [])
+                f.write('vf_done() { [ -f "$1/OUTCAR" ] && '
+                        'grep -q "General timing and accounting" "$1/OUTCAR"; }\n')
+                f.write(': > "$HERE/kpoint_convergence.dat"\n\n')
                 if explicit:
                     f.write("# K-point convergence — explicit meshes\n\n")
                     for mesh in explicit:
                         nx, ny, nz = mesh
                         label = f"{nx}x{ny}x{nz}"
-                        f.write(f'echo "  {label} ..."\n')
-                        f.write(f'mkdir -p "{label}"\n')
-                        f.write(f'cp INCAR POSCAR POTCAR "{label}/"\n')
-                        f.write(f'printf "Automatic Gamma mesh\\n0\\nGamma\\n  {nx}  {ny}  {nz}\\n  0  0  0\\n" > "{label}/KPOINTS"\n')
-                        f.write(f'cd "{label}"\n')
-                        f.write(f'{vasp} > vasp.out 2>&1\n')
-                        f.write(f'E=$(grep "energy  without" OUTCAR | tail -1 | awk \'{{print $7}}\')\n')
-                        f.write(f'echo "{label}  $E" >> "$HERE/kpoint_convergence.dat"\n')
-                        f.write(f'cd "$HERE"\n\n')
+                        f.write(f'if vf_done "{label}"; then\n')
+                        f.write(f'    echo "  {label} — already complete, skipping"\n')
+                        f.write(f'else\n')
+                        f.write(f'    echo "  {label} ..."\n')
+                        f.write(f'    mkdir -p "{label}"\n')
+                        f.write(f'    cp INCAR POSCAR POTCAR "{label}/"\n')
+                        f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  {nx}  {ny}  {nz}\\n  0  0  0\\n" > "{label}/KPOINTS"\n')
+                        f.write(f'    cd "{label}"\n')
+                        f.write(f'    {vasp} > vasp.out 2>&1\n')
+                        f.write(f'    cd "$HERE"\n')
+                        f.write(f'fi\n')
+                        f.write(f'E=$(grep "energy  without" "{label}/OUTCAR" | tail -1 | awk \'{{print $7}}\')\n')
+                        f.write(f'echo "{label}  $E" >> "$HERE/kpoint_convergence.dat"\n\n')
                 else:
                     start, end = kp['range']
                     k0x, k0y, k0z = start
@@ -504,15 +514,19 @@ fi'''
                     else:
                         f.write('    NZ=1\n')
                     f.write('    LABEL="${NX}x${NX}x${NZ}"\n')
-                    f.write('    mkdir -p "$LABEL"\n')
-                    f.write('    cp INCAR POSCAR POTCAR "$LABEL/"\n')
-                    f.write('    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" $NX $NX $NZ > "$LABEL/KPOINTS"\n')
-                    f.write('    cd "$LABEL"\n')
-                    f.write(f'    echo "  $LABEL ..."\n')
-                    f.write(f'    {vasp} > vasp.out 2>&1\n')
-                    f.write("    E=$(grep \"energy  without\" OUTCAR | tail -1 | awk '{print $7}')\n")
+                    f.write('    if vf_done "$LABEL"; then\n')
+                    f.write('        echo "  $LABEL — already complete, skipping"\n')
+                    f.write('    else\n')
+                    f.write('        mkdir -p "$LABEL"\n')
+                    f.write('        cp INCAR POSCAR POTCAR "$LABEL/"\n')
+                    f.write('        printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" $NX $NX $NZ > "$LABEL/KPOINTS"\n')
+                    f.write('        cd "$LABEL"\n')
+                    f.write(f'        echo "  $LABEL ..."\n')
+                    f.write(f'        {vasp} > vasp.out 2>&1\n')
+                    f.write('        cd "$HERE"\n')
+                    f.write('    fi\n')
+                    f.write("    E=$(grep \"energy  without\" \"$LABEL/OUTCAR\" | tail -1 | awk '{print $7}')\n")
                     f.write('    echo "$LABEL  $E" >> "$HERE/kpoint_convergence.dat"\n')
-                    f.write('    cd "$HERE"\n')
                     f.write("done\n\n")
 
                 f.write('echo "Results → kpoint_convergence.dat"\n')
@@ -521,6 +535,7 @@ fi'''
         ec = conv.get('encut', {})
         if ec.get('enabled') and ec.get('range'):
             e0, e1 = ec['range']
+            estep = ec.get('step', 50) or 50
             d = os.path.join(pd, '00_convergence', 'encut')
             os.makedirs(d, exist_ok=True)
             link_potcar(d, potcar_path)
@@ -528,7 +543,7 @@ fi'''
             write_shifted_poscar(self.poscar_file, os.path.join(d, 'POSCAR'))
             with open(os.path.join(d, 'KPOINTS'), 'w') as f:
                 f.write(self.generator._generate_kpoints_auto('coarse'))
-            incar_text = self.generator._generate_incar_scf()
+            incar_text = self.generator._generate_incar_scf(for_convergence=True)
             if 'ISIF' not in incar_text:
                 incar_text += '\nISIF = 2\n'
             with open(os.path.join(d, 'INCAR'), 'w') as f:
@@ -539,19 +554,29 @@ fi'''
             with open(script, 'w') as f:
                 f.write(self._sbatch_header(f"{proj}_econv",
                                             time_override=self.slurm_time))
-                f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n\n')
-                f.write(f"# ENCUT convergence: {e0} → {e1} eV\n")
-                f.write(f"for EC in $(seq {e0} 50 {e1}); do\n")
+                f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+                # Pure MPI: see _run_sh_preamble. A login shell exporting
+                # OMP_NUM_THREADS=N would otherwise give ranks x N threads.
+                f.write('export OMP_NUM_THREADS=${VASP_OMP_NUM_THREADS:-1}\n\n')
+                f.write(f"# ENCUT convergence: {e0} → {e1} eV, step {estep}\n")
+                f.write('vf_done() { [ -f "$1/OUTCAR" ] && '
+                        'grep -q "General timing and accounting" "$1/OUTCAR"; }\n')
+                f.write(': > "$HERE/encut_convergence.dat"\n\n')
+                f.write(f"for EC in $(seq {e0} {estep} {e1}); do\n")
                 f.write('    DIR="encut_${EC}"\n')
-                f.write('    mkdir -p "$DIR"\n')
-                f.write('    cp POSCAR POTCAR KPOINTS "$DIR/"\n')
-                f.write('    sed "s/ENCUT.*/ENCUT = $EC/" INCAR > "$DIR/INCAR"\n')
-                f.write('    cd "$DIR"\n')
-                f.write('    echo "  ENCUT=$EC ..."\n')
-                f.write(f'    {vasp} > vasp.out 2>&1\n')
-                f.write("    E=$(grep \"energy  without\" OUTCAR | tail -1 | awk '{print $7}')\n")
+                f.write('    if vf_done "$DIR"; then\n')
+                f.write('        echo "  ENCUT=$EC — already complete, skipping"\n')
+                f.write('    else\n')
+                f.write('        mkdir -p "$DIR"\n')
+                f.write('        cp POSCAR POTCAR KPOINTS "$DIR/"\n')
+                f.write('        sed "s/ENCUT.*/ENCUT = $EC/" INCAR > "$DIR/INCAR"\n')
+                f.write('        cd "$DIR"\n')
+                f.write('        echo "  ENCUT=$EC ..."\n')
+                f.write(f'        {vasp} > vasp.out 2>&1\n')
+                f.write('        cd "$HERE"\n')
+                f.write('    fi\n')
+                f.write("    E=$(grep \"energy  without\" \"$DIR/OUTCAR\" | tail -1 | awk '{print $7}')\n")
                 f.write('    echo "$EC  $E" >> "$HERE/encut_convergence.dat"\n')
-                f.write('    cd "$HERE"\n')
                 f.write("done\n\n")
                 f.write('echo "Results → encut_convergence.dat"\n')
             chmod_x(script)
@@ -1204,6 +1229,11 @@ fi'''
         """Copy modules/cohp_plot.py -> analysis/plot_cohp.py."""
         return self._copy_util(ana_dir, 'cohp_plot.py', 'plot_cohp.py')
 
+    def _gen_lobster_dos_script(self, ana_dir):
+        """Copy modules/lobster_dos_plot.py -> analysis/plot_lobster_dos.py."""
+        return self._copy_util(ana_dir, 'lobster_dos_plot.py',
+                               'plot_lobster_dos.py')
+
     def _gen_analysis(self, calc_dirs):
         """Generate analyze.sh and analysis/plot_results.py.
         These run locally after the cluster jobs complete."""
@@ -1315,6 +1345,19 @@ fi'''
                 f.write('        fi\n')
                 f.write('    done\n')
                 f.write('    echo "  Saved: analysis/*_cohp.* *_cobi.* *_coop.*"\n')
+                f.write('fi\n\n')
+
+            # ── LOBSTER projected DOS, with the 04_dos total overlaid ────────
+            if has_lobster and self._gen_lobster_dos_script(ana):
+                f.write('if [ -f "$HERE/08_lobster/DOSCAR.lobster" ]; then\n')
+                f.write('    echo "=== LOBSTER projected DOS (04_dos total overlaid) ==="\n')
+                # --dos-dir is passed unconditionally; the module falls back to
+                # the LOBSTER NSCF's own DOSCAR when 04_dos was not run.
+                f.write('    ( cd "$HERE/analysis" && python3 plot_lobster_dos.py \\\n')
+                f.write('        "$HERE/08_lobster" \\\n')
+                f.write('        "$HERE/analysis/${BASE}_lobster_dos" \\\n')
+                f.write('        "$BASE" --dos-dir "$HERE/04_dos" ) 2>&1\n')
+                f.write('    echo "  Saved: analysis/*_lobster_dos.*"\n')
                 f.write('fi\n\n')
 
             f.write('echo "Done. Results in analysis/"\n')
