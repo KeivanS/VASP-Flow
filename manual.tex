@@ -119,7 +119,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v1.9 $\cdot$ July 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v2.0 $\cdot$ September 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -631,8 +631,11 @@ order is flexible.
 \thead
 Keyword & Meaning \\ \midrule
 \texttt{Project:} & Project name; becomes the output folder. \\
-\texttt{MAGMOM:} & Initial moment in $\mu_{\mathrm{B}}$/atom (collinear only).
-  Written as \texttt{MAGMOM = N*value}. Default 2.0. \\
+\texttt{MAGMOM:} & Initial magnetic moments in $\mu_{\mathrm{B}}$: one number
+  for all atoms (\texttt{4.0}, \texttt{-3.0}), per element
+  (\texttt{Fe=4.0, O=0.6}) or a per-atom list (\texttt{2*4.0 2*-4.0}).
+  Any \texttt{MAGMOM} line switches spin polarisation on; default 2.0 when only
+  ``collinear magnetization'' is given (Section~\ref{sec:magnetic}). \\
 \texttt{ISIF:} & Relaxation type: 3=full, 2=ions only, 4=fixed volume. \\
 \texttt{NSW:} & Max ionic steps. Default 100. \\
 \texttt{EDIFFG:} & Force criterion in eV/\AA. Default $-0.01$. \\
@@ -644,7 +647,12 @@ Keyword & Meaning \\ \midrule
   (1000~kpra, default for relaxation and convergence tests) or \texttt{fine}
   (5000~kpra, default for SCF/DOS/spectroscopic steps).  kpra $= N_k \times
   N_\mathrm{atoms}$ where $N_k = N_x N_y N_z$; subdivisions scale as
-  $N_i \propto |\mathbf{b}_i^*|$.  Overridden by explicit \texttt{KMESH}. \\
+  $N_i \propto |\mathbf{b}_i^*|$.  An integer is taken as the kpra target
+  itself (also \texttt{KPRA:}, \texttt{KPOINTS\_DENSITY:}).  Overridden by
+  explicit \texttt{KMESH} and by \texttt{KPOINTS} blocks. \\
+\texttt{RELAX\_KMESH\_DENSITY:} & Density of the relaxation mesh
+  (\texttt{coarse}, \texttt{fine} or an integer); default \texttt{coarse}
+  whatever the SCF uses. \\
 \texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
   \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
   \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
@@ -710,7 +718,18 @@ MAGMOM: 4.0
 \end{lstlisting}
 
 Sets \texttt{ISPIN = 2} and \texttt{MAGMOM = N * value} in every INCAR,
-where $N$ is the atom count from the POSCAR.
+where $N$ is the atom count from the POSCAR.  Three forms of the
+\texttt{MAGMOM:} line are understood (any of them switches spin polarisation
+on, with or without the words ``collinear magnetization''):
+
+\begin{lstlisting}
+MAGMOM: 4.0              # uniform; negative values keep their sign
+MAGMOM: Fe=4.0, O=0.6    # per element (unlisted elements start at 0)
+MAGMOM: 2*4.0 2*-4.0     # per atom in POSCAR order, n*value shorthand
+\end{lstlisting}
+
+A per-atom list must have exactly $N$ entries; the agent stops with an
+explanatory message rather than silently falling back to a default.
 
 \begin{tipbox}
 Typical starting moments: Fe, Co $\approx$ 4--5~$\mu_{\mathrm{B}}$;
@@ -719,11 +738,14 @@ rare earths $\approx$ 7~$\mu_{\mathrm{B}}$.
 VASP converges the self-consistent value automatically.
 \end{tipbox}
 
-\textbf{Antiferromagnets} --- after generation, edit INCAR to alternate
-signs:
-\begin{lstlisting}
-MAGMOM = 4.0 -4.0 4.0 -4.0    ! alternating per sublattice
-\end{lstlisting}
+\textbf{Antiferromagnets} --- give the alternating signs directly, e.g.\
+\texttt{MAGMOM: 4.0 -4.0 4.0 -4.0}.
+
+\textbf{With SOC} (\texttt{Methods: SOC with magnetization in x-direction})
+the moments are $3N$ components in the non-collinear \texttt{MAGMOM}; the
+same \texttt{MAGMOM:} values are rotated onto the requested direction
+(without this VASP would start every moment along its default $(1,1,1)$).
+A list of exactly $3N$ numbers is used as the raw $x,y,z$ components.
 
 \textbf{Spin-resolved plots} produced automatically after DOS/bands run:
 
@@ -793,12 +815,18 @@ Given a target kpra and the reciprocal lattice vectors $\mathbf{b}_i^*$
   \quad N_k = \mathrm{kpra}/N_\mathrm{atoms}.
 \]
 
-Each $N_i$ is rounded to the nearest even integer so that BZ boundary points
-($k = 1/2$) are always included.  For 2-D slabs $N_z$ is fixed to 1.
-
-\textbf{Hexagonal cells} ($a = b$, $\gamma = 120°$): in-plane subdivisions
-are fixed at 6 (coarse) or 12 (fine); $N_z$ is still computed from
-$|\mathbf{b}_3^*|/|\mathbf{b}_1^*|$ to maintain uniform sampling.
+Every $N_i$ is an \emph{even} integer so that BZ boundary points ($k = 1/2$)
+are always included.  Even rounding is done by trying the two nearest even
+integers on each axis and keeping the combination whose total k-point count is
+closest to the target, so the mesh reflects the requested kpra (rounding every
+axis up used to overshoot by up to ${\sim}50\,\%$).  Axes whose $|\mathbf{b}_i^*|$
+agree (cubic, tetragonal, hexagonal cells) always receive the same $N_i$, so
+the mesh never breaks the crystal symmetry.  This holds for every cell type,
+hexagonal included.  For hexagonal lattices ($a=b$, $\gamma=120^\circ$, detected from the POSCAR) the in-plane $N$ is a multiple of 6 ($6,12,18,\dots$) so that $K$ and $M$ lie on the mesh.  Spacing uniformity $|\mathbf{b}_i^*|/N_i$ is preferred first, the kpra target second.  For 2-D slabs $N_z = 1$ and the in-plane mesh carries the
+whole target.  The first line of each generated KPOINTS reports the mesh and
+the kpra actually reached.  Any integer may be given instead of
+\texttt{coarse}/\texttt{fine} (\texttt{KMESH\_DENSITY: 3000}); the relaxation
+has its own density (\texttt{RELAX\_KMESH\_DENSITY}, default coarse).
 
 \textbf{DOS and LOBSTER meshes}: always $2N_x \times 2N_y \times 2N_z$ (the
 SCF ratios are preserved; a 2-D slab keeps $N_z = 1$), ensuring denser
@@ -809,7 +837,8 @@ reduction, so doubling in 3-D multiplies its k-point count by ${\sim}8$; edit
 to match the SCF mesh exactly.
 
 An explicit \texttt{KMESH: N1 N2 N3} entry overrides the automatic density
-for all steps.
+for all steps, and a \texttt{KPOINTS} block (Section~\ref{sec:kpoints-block})
+overrides everything for the step it names.
 
 % ============================================================
 \section{Advanced INCAR Control}
@@ -867,6 +896,50 @@ set tags the parser has no dedicated keyword for (e.g.\ \texttt{LMAXMIX},
 Full-line \texttt{\#} comments in the instructions file are ignored by
 the parser, so a task keyword inside a comment does not enable that task.
 \end{notebox}
+
+\subsection{Explicit KPOINTS blocks}
+\label{sec:kpoints-block}
+
+The same block syntax writes a complete KPOINTS file, \emph{unchanged}, for
+a step:
+
+\begin{lstlisting}
+KPOINTS scf:            # or KPOINTS_SCF:
+   my SCF mesh          # first line = KPOINTS comment
+   0
+   Gamma
+   9 9 5
+   0 0 0
+END_KPOINTS
+\end{lstlisting}
+
+Steps: \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
+\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}; an
+unnamed \texttt{KPOINTS:} block applies to every step except the band path.
+Explicit blocks (INCAR and KPOINTS alike) \textbf{override every other
+setting}: keywords, \texttt{KMESH}, the density tier and the automatic
+\texttt{KPAR}/\texttt{NCORE}.  Steps derived from the SCF mesh --- DOS and
+LOBSTER ($2\times$), DFPT and Wannier90 ($1\times$) --- follow an explicit
+SCF block.  A marker file \texttt{.explicit\_kpoints} is left beside such a
+KPOINTS so that the convergence phase-2 k-mesh patching never overwrites
+it.  \texttt{KPAR} and \texttt{NCORE} written in an INCAR block also steer the
+companion value (e.g.\ \texttt{KPAR = 2} on 16 ranks gives \texttt{NCORE = 2}).
+In the GUI both block kinds are entered under
+\emph{Setup $\to$ Advanced --- explicit INCAR / KPOINTS}.
+
+\subsection{Relaxation $\to$ SCF hand-off}
+\label{sec:handoff}
+
+The relaxation starts from scratch (\texttt{ISTART = 0}, \texttt{ICHARG = 2})
+and writes \texttt{WAVECAR} and \texttt{CHGCAR}.  \texttt{02\_scf/copy\_from\_relax.sh}
+copies the relaxed geometry and the CHGCAR; if the SCF k-mesh, spin and cutoff
+equal the relaxation's it also copies the WAVECAR and the SCF starts from both
+(\texttt{ISTART = 1}, \texttt{ICHARG = 1}), otherwise it starts from the CHGCAR
+alone (\texttt{ISTART = 0}, \texttt{ICHARG = 1}) because wavefunctions on
+different k-meshes are not interchangeable.  The decision is made at run time,
+so k-meshes edited or patched after generation are handled.  Putting
+\texttt{ISTART} or \texttt{ICHARG} in an \texttt{INCAR scf:} block disables the
+mechanism.
 
 \subsection{Command-line INCAR overrides (\texttt{--incar})}
 \label{sec:incar-cli}
@@ -1707,6 +1780,25 @@ Band plot empty or not shown &
     \texttt{elf\_bonds.py}, \texttt{lobster\_postprocess.py},
     \texttt{conv\_choose.py}, \texttt{poscar2xyz.py}) consolidated into
     \texttt{modules/}.
+  \item[\textcolor{mainblue}{v2.0} (2026-09-28)]
+    \textit{Input-consistency release.}
+    \texttt{MAGMOM:} now honours negative values, per-element
+    (\texttt{Fe=4.0, O=0.6}) and per-atom lists, switches ISPIN on by itself,
+    and initialises SOC runs along the requested x/y/z direction.
+    K-mesh density is reflected in every KPOINTS file: coarse/fine/integer
+    kpra, even $N_i \propto |\mathbf{b}_i^*|$ chosen for uniform spacing and
+    closeness to the target, hexagonal in-plane meshes in multiples of 6,
+    \texttt{RELAX\_KMESH\_DENSITY}; one generator routine
+    (\texttt{kpoints\_text}) serves both agents and the GUI.
+    KPAR/NCORE: ELF-pinned KPAR=1 re-derives NCORE, and values given in
+    INCAR blocks steer the companion value.
+    Relaxation starts from scratch and writes WAVECAR/CHGCAR; the SCF reads
+    CHGCAR, and WAVECAR too when the k-mesh matches.
+    Explicit \texttt{INCAR <step>:} and new \texttt{KPOINTS <step>:} blocks
+    override everything (GUI: Setup $\to$ Advanced).
+    New \texttt{check\_agent\_consistency.py} compares GUI, workstation and
+    SLURM outputs.  New \texttt{ht-semimetals.py} builds the
+    \texttt{highthroughput\_*} SCF/bands/DFPT/LOBSTER screening sets from list files.
 \end{description}
 
 % ============================================================

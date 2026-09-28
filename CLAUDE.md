@@ -86,6 +86,16 @@ Regex-based extraction from natural language instruction files. Supported parame
 
 **Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
 
+**MAGMOM:** `MAGMOM:` takes a uniform number (negative allowed), per-element values (`Fe=4.0, O=0.6`, unlisted elements 0) or a per-atom list (`2*4.0 2*-4.0`); any `MAGMOM` line turns spin polarisation on. Parsed into `magmom` ({kind, value/values}); resolved to one number per atom by `VASPInputGenerator._magmom_values()` (raises ValueError on a length/element mismatch). With SOC the values are rotated onto the requested x/y/z direction (3N `MAGMOM` components); `ISPIN` is not written.
+
+**k-mesh density:** `KMESH_DENSITY`/`KPOINTS_DENSITY`/`KPRA` = `coarse` (1000) | `fine` (5000) | integer kpra; `RELAX_KMESH_DENSITY` (default coarse). `_kpoints_from_kpra()` tries the two nearest even N per axis (equal-|b*| axes share one N), preferring the most uniform spacing |b*|/N and, among those, the mesh whose N1·N2·N3·N_atoms is closest to the target; hexagonal lattices (geometric test `_is_hex_lattice()`, not the GUI flag) use in-plane N that are multiples of 6; 2-D slabs get Nz=1. `kpoints_text(step)` is the single source of truth for every step's KPOINTS (relax own density; DOS/LOBSTER = 2× SCF; DFPT/Wannier = SCF; phonons coarse) and is what the GUI's phase-2 regeneration calls.
+
+**Explicit blocks:** `INCAR [step]: … END_INCAR` and `KPOINTS [step]: … END_KPOINTS` (also `INCAR_SCF:`), steps relax/scf/bands/dos/wannier/dfpt/phonons/lobster, unnamed = all (KPOINTS: all but bands). They override everything else. KPOINTS blocks are written verbatim and marked with `<step>/.explicit_kpoints` so convergence phase-2 patching (both agents, GUI) skips them; derived steps follow an explicit SCF mesh. KPAR/NCORE in an INCAR block steer the companion value. The parser blanks the blocks before scanning keywords, so tags inside a block never leak into global settings.
+
+**Relax → SCF:** relax INCAR has `ISTART=0`, `ICHARG=2`, `LWAVE/LCHARG=.TRUE.`. `02_scf/copy_from_relax.sh` (run at RUN time by both run.sh flavours) copies CONTCAR (if newer) and CHGCAR; WAVECAR too and `ISTART=1, ICHARG=1` when KPOINTS (mesh), ISPIN, LSORBIT and ENCUT match the relax, else `ISTART=0, ICHARG=1`. `ISTART`/`ICHARG` in an `INCAR scf:` block disable it.
+
+**KPAR/NCORE:** `_auto_kpar_ncore(np, n_k, n_bands, kpar=None, ncore=None)` derives the missing value for the given one; ELF (`LELF`) pins KPAR=1 and NCORE is re-derived for the single k-group.
+
 **Raw INCAR passthrough:** an `INCAR: … END_INCAR` block in the instructions file injects literal INCAR tags into the generated INCAR(s). Per-step blocks use `INCAR <step>:` (relax/scf/bands/dos/wannier/dfpt/phonons); an unqualified block applies to all steps. Parsed into `incar_raw` ({'all'|step: ['TAG = val', …]}); merged by `VASPInputGenerator._apply_incar_overrides()`, which overwrites matching generated tags in place and appends the rest under a "User INCAR overrides" comment.
 
 ## vasp_input_generator.py
@@ -98,4 +108,4 @@ Regex-based extraction from natural language instruction files. Supported parame
 
 ## Testing
 
-No formal test suite. Sample project directories: `GaAs_test/`, `AgCrPS3/`, `GaAs-phonons/`, `gaAs_wan/`, `GaAs_wannier2/`. Manual testing via browser GUI or CLI agent.
+`python3 check_agent_consistency.py` generates a set of cases (MAGMOM forms, densities, explicit blocks, KPAR/NCORE, relax→SCF) through the GUI (Flask test client), `vasp-agent.py` and `vasp-agent-slurm.py` with a stub POTCAR library and requires identical INCAR/KPOINTS/copy scripts plus the expected values. Otherwise no formal test suite. Sample project directories: `GaAs_test/`, `AgCrPS3/`, `GaAs-phonons/`, `gaAs_wan/`, `GaAs_wannier2/`. Manual testing via browser GUI or CLI agent.

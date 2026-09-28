@@ -1,0 +1,2 @@
+# Smoke test: single material (mp-8)
+mp-8

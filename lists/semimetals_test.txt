@@ -1,0 +1,4 @@
+# Test set: 3 materials spanning the tiers (standard/24h, standard/72h, parallel/72h)
+mp-8
+mp-208
+mp-14785

@@ -413,10 +413,9 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS — coarse mesh; relaxation doesn't need a dense grid
-        kpoints_content = self._generate_kpoints_auto(density='coarse')
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(kpoints_content)
+        # KPOINTS — coarse mesh by default (RELAX_KMESH_DENSITY to change);
+        # relaxation doesn't need a dense grid.  An explicit KPOINTS block wins.
+        self._write_kpoints(output_dir, 'relax')
 
         # Copy POSCAR
         os.system(f"cp {self.poscar} {output_dir}/POSCAR")
@@ -427,10 +426,17 @@ class VASPInputGenerator:
             f.write(job_script)
         os.chmod(f"{output_dir}/run.sh", 0o755)
     
-    def _ncore_for(self, step: str) -> int:
+    def _scf_force_kpar(self):
+        """1 when the production SCF runs LELF (ELF needs KPAR = 1), else None."""
+        elf = (self.instructions.get('elf', True)
+               and not self.instructions.get('soc', False))
+        return 1 if elf else None
+
+    def _ncore_for(self, step: str, force_kpar: int = None, incar_step: str = None) -> int:
         """Parse the NCORE value the parallel block would emit for `step`."""
         import re
-        for ln in self._get_parallel_lines(step):
+        for ln in self._get_parallel_lines(step, force_kpar=force_kpar,
+                                           incar_step=incar_step):
             m = re.match(r'\s*NCORE\s*=\s*(\d+)', ln)
             if m:
                 return int(m.group(1))
@@ -498,23 +504,23 @@ class VASPInputGenerator:
         # INCAR — set NBANDS up front so the WAVECAR is LOBSTER-ready.
         # The project POTCAR is built one level up before steps are generated.
         potcar_path = os.path.join(os.path.dirname(os.path.abspath(output_dir)), 'POTCAR')
-        nbands = self._lobster_nbands(potcar_path, self._ncore_for('scf'))
+        nbands = self._lobster_nbands(
+            potcar_path, self._ncore_for('scf', force_kpar=self._scf_force_kpar()))
         incar_content = self._generate_incar_scf(nbands=nbands)
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS — user-selected density (default fine = 5000 kpra)
-        _kd = self.instructions.get('kmesh_density', 'fine')
-        kpoints_content = self._generate_kpoints_auto(density=_kd)
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(kpoints_content)
+        # KPOINTS — user-selected density (default fine = 5000 kpra), KMESH
+        # override, or an explicit `KPOINTS scf:` block (which wins).
+        self._write_kpoints(output_dir, 'scf')
 
         # POSCAR: copy the input structure as a placeholder.
         # At runtime, run.sh will overwrite it with CONTCAR from 01_relax
         # if that directory exists and the relaxation completed.
         shutil.copy(self.poscar, f"{output_dir}/POSCAR")
 
-        # Runtime copy script: pulls relaxed geometry from 01_relax
+        # Runtime copy script: relaxed geometry + electronic starting point
+        # (CHGCAR, and WAVECAR when it is usable) from 01_relax.
         if from_relax:
             rel_relax = os.path.relpath(from_relax, output_dir)
             with open(f"{output_dir}/copy_from_relax.sh", 'w') as f:
@@ -522,6 +528,7 @@ class VASPInputGenerator:
                 f.write(f'HERE="$(cd "$(dirname "$0")" && pwd)"\n')
                 f.write(f'RELAX_DIR="$HERE/{rel_relax}"\n')
                 self._write_copy_if_newer(f, '$RELAX_DIR', 'CONTCAR', 'POSCAR', '01_relax')
+                f.write(self._relax_restart_snippet())
             os.chmod(f"{output_dir}/copy_from_relax.sh", 0o755)
         
         # Job script
@@ -530,6 +537,59 @@ class VASPInputGenerator:
             f.write(job_script)
         os.chmod(f"{output_dir}/run.sh", 0o755)
     
+    # Bash appended to copy_from_relax.sh.  Decided at RUN time (not generation
+    # time) so that k-meshes patched or edited after generation are honoured.
+    _RELAX_RESTART_SH = r'''
+# ── Electronic starting point from the relaxation ────────────────────────────
+# CHGCAR is always usable as a starting density.  WAVECAR is only valid if the
+# SCF is the same problem on the same k-mesh (k-points, spin, cutoff), so it is
+# read only then; otherwise the SCF starts from the relaxed CHGCAR alone.
+USER_SET_START=@USER_SET_START@   # 1: ISTART/ICHARG given explicitly in the instructions
+
+norm_kp() {   # KPOINTS without the comment line: whitespace/case/number-format neutral
+    tail -n +2 "$1" 2>/dev/null | sed 's/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//' \
+        | tr 'A-Z' 'a-z' | sed '/^$/d' | sed '2s/^\(.\).*/\1/' \
+        | awk '{for(i=1;i<=NF;i++) if ($i ~ /^[-+]?[0-9.]+$/) $i=$i+0; print}'
+}
+incar_tag() { # file TAG -> value (upper-cased, blanks removed, comments dropped)
+    sed 's/[!#].*//' "$1" 2>/dev/null | awk -F= -v t="$2" \
+        'toupper($1) ~ "^[ \t]*" t "[ \t]*$" {gsub(/[ \t]/,"",$2); v=toupper($2)} END{print v}'
+}
+set_incar_tag() { # file TAG value  (replace any existing line, then append)
+    sed -i.bak -E "/^[[:space:]]*$2[[:space:]]*=/d" "$1" && rm -f "$1.bak"
+    printf '%s = %s\n' "$2" "$3" >> "$1"
+}
+
+if [ "$USER_SET_START" = "1" ]; then
+    echo "  ISTART/ICHARG set explicitly in the instructions: leaving them, nothing read from 01_relax"
+elif [ ! -s "$RELAX_DIR/CHGCAR" ]; then
+    echo "  WARNING: 01_relax/CHGCAR not found; SCF starts from scratch"
+else
+    cp "$RELAX_DIR/CHGCAR" "$HERE/CHGCAR" && echo "  CHGCAR copied from 01_relax"
+    same=1
+    [ "$(norm_kp "$RELAX_DIR/KPOINTS")" = "$(norm_kp "$HERE/KPOINTS")" ] || same=0
+    for t in ISPIN LSORBIT ENCUT; do
+        [ "$(incar_tag "$RELAX_DIR/INCAR" $t)" = "$(incar_tag "$HERE/INCAR" $t)" ] || same=0
+    done
+    if [ "$same" = "1" ] && [ -s "$RELAX_DIR/WAVECAR" ]; then
+        cp "$RELAX_DIR/WAVECAR" "$HERE/WAVECAR" && echo "  WAVECAR copied from 01_relax"
+        set_incar_tag "$HERE/INCAR" ISTART 1
+        set_incar_tag "$HERE/INCAR" ICHARG 1
+        echo "  same k-mesh as 01_relax: SCF starts from WAVECAR + CHGCAR (ISTART=1, ICHARG=1)"
+    else
+        set_incar_tag "$HERE/INCAR" ISTART 0
+        set_incar_tag "$HERE/INCAR" ICHARG 1
+        echo "  k-mesh (or spin/cutoff) differs from 01_relax: SCF reads CHGCAR only (ISTART=0, ICHARG=1)"
+    fi
+fi
+'''
+
+    def _relax_restart_snippet(self) -> str:
+        raw = self.instructions.get('incar_raw', {}) or {}
+        tags = {self._incar_tag_name(l) for l in list(raw.get('all', [])) + list(raw.get('scf', []))}
+        user = 1 if tags & {'ISTART', 'ICHARG'} else 0
+        return self._RELAX_RESTART_SH.replace('@USER_SET_START@', str(user))
+
     def generate_bands_input(self, output_dir: str, from_scf: str):
         """Generate input files for band structure calculation"""
         os.makedirs(output_dir, exist_ok=True)
@@ -539,11 +599,9 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS — None triggers auto-detection from structure
-        kpath = self.instructions.get('kpath')   # None if not specified
-        kpoints_content = self._generate_kpoints_linemode(kpath)
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(kpoints_content)
+        # KPOINTS — line mode; kpath None triggers auto-detection from the
+        # structure.  An explicit `KPOINTS bands:` block wins.
+        self._write_kpoints(output_dir, 'bands')
         
         # Copy CHGCAR and POSCAR from SCF at runtime (relative path)
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -596,10 +654,9 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS — 2× the SCF mesh in every direction for better DOS resolution.
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_x2(
-                density=self.instructions.get('kmesh_density', 'fine'), label='DOS'))
+        # KPOINTS — 2× the SCF mesh in every direction for better DOS resolution
+        # (unless an explicit `KPOINTS dos:` block is given).
+        self._write_kpoints(output_dir, 'dos')
         
         # Copy from SCF at runtime (relative path)
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -631,7 +688,7 @@ class VASPInputGenerator:
 
         # NBANDS from the project-level POTCAR (built one level up before steps).
         potcar_path = os.path.join(os.path.dirname(os.path.abspath(output_dir)), 'POTCAR')
-        nbands = self._lobster_nbands(potcar_path, self._ncore_for('scf'))
+        nbands = self._lobster_nbands(potcar_path, self._ncore_for('scf', incar_step='lobster'))
 
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
@@ -639,10 +696,7 @@ class VASPInputGenerator:
         # KPOINTS — 2× the SCF mesh in every direction (same ratios). The NSCF
         # is cheap compared with the SCF, and COHP/COBI integrate over the BZ,
         # so a denser mesh smooths the bonding curves at little extra cost.
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_x2(
-                density=self.instructions.get('kmesh_density', 'fine'),
-                label='LOBSTER'))
+        self._write_kpoints(output_dir, 'lobster')
 
         # Editable lobsterin (run.sh uses it as-is if present). Energy window is
         # Fermi-referenced (E_F = 0); edit it or COHPStartEnergy for deep states.
@@ -686,12 +740,14 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_wannier(num_bands))
 
-        _kd = self.instructions.get('kmesh_density', 'fine')
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(density=_kd))
+        kp_text = self._write_kpoints(output_dir, 'wannier')
 
         # Resolve the actual mesh integers so wannier90.win mp_grid matches KPOINTS.
-        nx, ny, nz = self._compute_mesh(_kd)
+        kind, val = self._parse_kpoints_text(kp_text)
+        if kind != 'mesh':
+            raise ValueError("Wannier90 needs an automatic Gamma mesh: give the "
+                             "`KPOINTS wannier:` block in mesh form (0 / Gamma / n1 n2 n3).")
+        nx, ny, nz = val
 
         with open(f"{output_dir}/wannier90.win", 'w') as f:
             f.write(self._generate_wannier90_win(num_wann, num_bands, nx, ny, nz, wannier_info))
@@ -744,7 +800,7 @@ class VASPInputGenerator:
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('bands'))  # KPAR=1 for Wannier
+        lines.extend(self._get_parallel_lines('bands', incar_step='wannier'))  # KPAR=1 for Wannier
         lines.extend(["# Output", "LWAVE = .FALSE.", "LCHARG = .FALSE.", "LORBIT = 11"])
         lines = self._apply_incar_overrides(lines, 'wannier')
         return '\n'.join(lines) + '\n'
@@ -933,11 +989,10 @@ fi
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_dfpt())
 
-        # Same k-mesh as SCF (user-selected density) — DFPT Born/dielectric
-        # results converge with the same mesh used for the charge density.
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(
-                density=self.instructions.get('kmesh_density', 'fine')))
+        # Same k-mesh as SCF (user-selected density, or the explicit SCF block)
+        # — DFPT Born/dielectric results converge with the same mesh used for
+        # the charge density.  A `KPOINTS dfpt:` block wins.
+        self._write_kpoints(output_dir, 'dfpt')
 
         rel_scf = os.path.relpath(from_scf, output_dir)
         with open(f"{output_dir}/copy_from_scf.sh", 'w') as f:
@@ -1273,8 +1328,7 @@ echo "DFPT done. See born_charges.txt and BORN (phonopy NAC format)."
 
         # Coarse k-mesh — force-constant supercells are large; 1000 kpra is
         # generous for a supercell and Gamma-only is often sufficient.
-        with open(f"{output_dir}/KPOINTS", 'w') as f:
-            f.write(self._generate_kpoints_auto(density='coarse'))
+        self._write_kpoints(output_dir, 'phonons')
 
         # POSCAR copied from SCF (primitive cell for phonopy)
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -1322,7 +1376,7 @@ echo "DFPT done. See born_charges.txt and BORN (phonopy NAC format)."
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('scf'))
+        lines.extend(self._get_parallel_lines('scf', incar_step='phonons'))
         lines.extend(["LWAVE  = .FALSE.", "LCHARG = .FALSE."])
         lines = self._apply_incar_overrides(lines, 'phonons')
         return '\n'.join(lines) + '\n'
@@ -1466,16 +1520,27 @@ echo "      Data:  band.yaml  FORCE_SETS"
         gets no reduction at all.  Band structure is line-mode: the count is
         the path length, not a mesh.
         """
-        density = self.instructions.get('kmesh_density', 'fine')
+        # An explicit KPOINTS block fixes the count outright.
+        text = self._explicit_kpoints(calc_type)
+        if text:
+            kind, val = self._parse_kpoints_text(text)
+            if kind == 'list':
+                return max(1, int(val))
+            if kind == 'line':
+                return max(1, int(val) * 4)       # ~4 segments on a typical path
         if calc_type == 'bands':
             npts = self.instructions.get('nkpts_bands') or self.instructions.get('nkpts') or 40
             return max(1, int(npts) * 4)          # ~4 segments on a typical path
-        if calc_type in ('dos', 'lobster'):
-            mesh = self._mesh_x2(density)
-        elif calc_type in ('relax', 'phonons'):
+        if text:                                  # explicit automatic mesh
+            mesh = self._parse_kpoints_text(text)[1]
+        elif calc_type in ('dos', 'lobster'):
+            mesh = self._mesh_x2()
+        elif calc_type == 'relax':
+            mesh = self._relax_mesh()
+        elif calc_type == 'phonons':
             mesh = self._compute_mesh('coarse')
         else:
-            mesh = self._compute_mesh(density)
+            mesh = self._scf_mesh()
         full = max(1, mesh[0] * mesh[1] * mesh[2])
         if calc_type == 'lobster':
             return full                            # ISYM=0: no reduction
@@ -1521,7 +1586,8 @@ echo "      Data:  band.yaml  FORCE_SETS"
         return max(1, 2 * n_atoms)                 # conservative fallback
 
     @staticmethod
-    def _auto_kpar_ncore(np_ranks: int, n_k: int, n_bands: int) -> tuple:
+    def _auto_kpar_ncore(np_ranks: int, n_k: int, n_bands: int,
+                         kpar: int = None, ncore: int = None) -> tuple:
         """(KPAR, NCORE) for n_k k-points and n_bands bands on np_ranks ranks.
 
         KPAR splits k-points across groups -- near-linear scaling and little
@@ -1535,22 +1601,43 @@ echo "      Data:  band.yaml  FORCE_SETS"
         target is 1 for narrow groups (maximum band parallelism) but ~sqrt(rpg)
         once a group is wide, since NCORE=1 there makes every band FFT a
         group-wide communication.
+
+        *kpar* / *ncore*, when given (user instruction, or KPAR pinned to 1 by
+        an ELF run), are respected and the other value is derived FOR THAT
+        choice: NCORE is chosen for the ranks-per-group that the fixed KPAR
+        leaves, and KPAR for the ranks-per-group that a fixed NCORE needs.
+        Requested values are snapped down to a divisor of the rank count.
         """
         import math
-        divisors = [d for d in range(1, np_ranks + 1) if np_ranks % d == 0]
         n_k, n_bands = max(1, n_k), max(1, n_bands)
-        kpar = 1
-        for d in divisors:                          # ascending -> keeps largest valid
-            if d <= n_k and (np_ranks // d) <= n_bands:
-                kpar = d
+        divisors = [d for d in range(1, np_ranks + 1) if np_ranks % d == 0]
+
+        if kpar:
+            kpar = max([d for d in divisors if d <= kpar] or [1])
+        elif ncore:
+            ncore = max([d for d in divisors if d <= ncore] or [1])
+            ok = [d for d in divisors                # each k-group must hold whole NCORE blocks
+                  if (np_ranks // d) % ncore == 0 and d <= n_k]
+            kpar = max(ok or [1])
+        else:
+            kpar = 1
+            for d in divisors:                      # ascending -> keeps largest valid
+                if d <= n_k and (np_ranks // d) <= n_bands:
+                    kpar = d
+
         rpg = max(1, np_ranks // kpar)              # ranks per k-group
-        target = 1 if rpg <= 4 else int(round(math.sqrt(rpg)))
-        eligible = [d for d in range(1, rpg + 1)
-                    if rpg % d == 0 and (rpg // d) <= n_bands]
-        ncore = min(eligible, key=lambda d: (abs(d - target), d)) if eligible else rpg
+        if ncore:
+            ncore = max([d for d in range(1, rpg + 1)
+                         if rpg % d == 0 and d <= ncore] or [1])
+        else:
+            target = 1 if rpg <= 4 else int(round(math.sqrt(rpg)))
+            eligible = [d for d in range(1, rpg + 1)
+                        if rpg % d == 0 and (rpg // d) <= n_bands]
+            ncore = min(eligible, key=lambda d: (abs(d - target), d)) if eligible else rpg
         return kpar, ncore
 
-    def _get_parallel_lines(self, calc_type: str = 'scf') -> list:
+    def _get_parallel_lines(self, calc_type: str = 'scf', force_kpar: int = None,
+                            incar_step: str = None) -> list:
         """Return INCAR lines for MPI parallelization.
 
         Smart defaults scale with mpi_np (N = total MPI tasks):
@@ -1569,7 +1656,17 @@ echo "      Data:  band.yaml  FORCE_SETS"
 
         Per-task overrides in instructions.txt (e.g. SCF_KPAR, DOS_NCORE)
         take priority over the global KPAR / NCORE keys, which in turn
-        take priority over the computed defaults.
+        take priority over the computed defaults.  When only one of the two is
+        given, the other is derived to suit it (not left at the value that
+        was optimal for a different layout).
+
+        force_kpar pins KPAR (ELF/LELF runs need KPAR = 1); NCORE is then
+        re-derived for the ranks that remain in the single k-group instead of
+        keeping the value chosen for the unconstrained layout.
+
+        KPAR / NCORE written by the user in an `INCAR` block (global or for
+        *incar_step*, default = calc_type) count as user choices too, so the
+        companion value is derived to suit them.
         """
         import math
         np = self.instructions.get('mpi_np', 1) or 1
@@ -1583,23 +1680,24 @@ echo "      Data:  band.yaml  FORCE_SETS"
             # NCL doubles memory per band; halve the k-group replication.
             n_k = max(1, n_k // 2)
 
-        if calc_type == 'phonons':
-            kpar_def = 1
-            ncore_def = max(1, int(math.floor(math.sqrt(np))))
+        blk = self._incar_block_ints(incar_step or calc_type, ('KPAR', 'NCORE'))
+        u_ncore = (blk.get('NCORE')
+                   or self.instructions.get(f'{calc_type}_ncore')
+                   or self.instructions.get('ncore'))
+        if force_kpar:
+            u_kpar = force_kpar
         else:
-            kpar_def, ncore_def = self._auto_kpar_ncore(np, n_k, n_bands)
+            u_kpar = (blk.get('KPAR')
+                      or self.instructions.get(f'{calc_type}_kpar')
+                      or self.instructions.get('kpar'))
 
-        # Priority: per-task key > global key > auto default
-        kpar  = (self.instructions.get(f'{calc_type}_kpar')
-                 or self.instructions.get('kpar')
-                 or kpar_def)
-        ncore = (self.instructions.get(f'{calc_type}_ncore')
-                 or self.instructions.get('ncore')
-                 or ncore_def)
-
-        # Safety: KPAR * NCORE must not exceed np
-        kpar  = max(1, min(kpar,  np))
-        ncore = max(1, min(ncore, np // kpar))
+        if calc_type == 'phonons':
+            kpar, ncore = self._auto_kpar_ncore(
+                np, 1, n_bands, kpar=u_kpar or 1,
+                ncore=u_ncore or max(1, int(math.floor(math.sqrt(np)))))
+        else:
+            kpar, ncore = self._auto_kpar_ncore(np, n_k, n_bands,
+                                                kpar=u_kpar, ncore=u_ncore)
 
         return [
             "",
@@ -1607,6 +1705,21 @@ echo "      Data:  band.yaml  FORCE_SETS"
             f"KPAR  = {kpar}",
             f"NCORE = {ncore}",
         ]
+
+    def _incar_block_ints(self, step: str, tags) -> dict:
+        """Integer values of *tags* set in the INCAR blocks that apply to
+        *step* (the step block wins over the unnamed one)."""
+        raw = self.instructions.get('incar_raw', {}) or {}
+        out = {}
+        for line in list(raw.get('all', [])) + list(raw.get(step, [])):
+            tag = self._incar_tag_name(line)
+            if tag in tags:
+                try:
+                    out[tag] = int(float(line.split('=', 1)[1].split('!')[0]
+                                         .split('#')[0].strip().split()[0]))
+                except (ValueError, IndexError):
+                    pass
+        return out
 
     def _encut(self) -> int:
         """Return ENCUT: instruction-specified value, or 500 default."""
@@ -1649,11 +1762,16 @@ echo "      Data:  band.yaml  FORCE_SETS"
             ov_map[tag] = o.strip()
 
         used, new_lines = set(), []
+        skip_cont = False          # inside the "\"-continued tail of a replaced tag
         for line in lines:
+            if skip_cont:
+                skip_cont = line.rstrip().endswith('\\')
+                continue
             tag = self._incar_tag_name(line)
             if tag and tag in ov_map:
                 new_lines.append(ov_map[tag])
                 used.add(tag)
+                skip_cont = line.rstrip().endswith('\\')
             else:
                 new_lines.append(line)
 
@@ -1758,14 +1876,102 @@ echo "      Data:  band.yaml  FORCE_SETS"
         except Exception:
             return max(len(self.elements), 1)
 
+    def _species_counts(self) -> list:
+        """[(element, count), ...] in POSCAR order ([] if not readable)."""
+        try:
+            with open(self.poscar) as f:
+                lines = f.readlines()
+            counts = [int(x) for x in lines[6].split()]
+            if self.elements and len(self.elements) == len(counts):
+                return list(zip(self.elements, counts))
+        except Exception:
+            pass
+        return []
+
+    def _magmom_values(self):
+        """Resolve the MAGMOM instruction to numbers.
+
+        Returns (values, is_vector): one float per atom (POSCAR order), or —
+        for a non-collinear run given 3N numbers — the raw x,y,z components.
+        Raises ValueError with a clear message if the spec does not fit the
+        structure (never silently falls back to a default).
+        """
+        n    = self._read_atom_count()
+        soc  = self.instructions.get('soc', False)
+        spec = self.instructions.get('magmom')
+        if not spec:                                   # keyword only: uniform default
+            return [float(self.instructions.get('mag_moment', 2.0))] * n, False
+        kind = spec['kind']
+        if kind == 'uniform':
+            return [float(spec['value'])] * n, False
+        if kind == 'elements':
+            sc = self._species_counts()
+            names = {el for el, _ in sc}
+            unknown = set(spec['values']) - names
+            if not sc or unknown:
+                raise ValueError(
+                    f"MAGMOM names element(s) {sorted(unknown) or '?'} that are not "
+                    f"in the POSCAR (elements: {sorted(names) or 'unreadable'}).")
+            vals = []
+            for el, cnt in sc:
+                vals += [float(spec['values'].get(el, 0.0))] * cnt
+            return vals, False
+        vals = [float(v) for v in spec['values']]      # explicit list
+        if len(vals) == n:
+            return vals, False
+        if soc and len(vals) == 3 * n:
+            return vals, True
+        raise ValueError(
+            f"MAGMOM lists {len(vals)} value(s) but the POSCAR has {n} atom(s)"
+            f"{f' (or {3*n} components for SOC)' if soc else ''}: {spec['raw']!r}")
+
+    @staticmethod
+    def _magmom_tag(values: list) -> list:
+        """`MAGMOM = ...` INCAR line(s), consecutive equal values as n*val.
+        Very long lists are split with VASP's trailing-backslash continuation."""
+        toks, i = [], 0
+        while i < len(values):
+            j = i
+            while j + 1 < len(values) and values[j + 1] == values[i]:
+                j += 1
+            run, v = j - i + 1, f"{(values[i] or 0.0):g}"     # avoid "-0"
+            if '.' not in v and 'e' not in v:
+                v += '.0'
+            toks.append(f"{run}*{v}" if run > 1 else v)
+            i = j + 1
+        line = "MAGMOM = " + ' '.join(toks)
+        if len(line) <= 800:
+            return [line]
+        out, cur = [], "MAGMOM ="
+        for t in toks:
+            if len(cur) + len(t) + 1 > 700:
+                out.append(cur + " \\")
+                cur = "  "
+            cur += " " + t
+        return out + [cur]
+
     def _mag_lines(self) -> list:
+        """ISPIN / MAGMOM lines honouring the `MAGMOM:` instruction.
+
+        Collinear: ISPIN = 2 and one moment per atom (uniform value, per
+        element, or an explicit list; negative values allowed).  SOC
+        (non-collinear): the moments are 3N components, so a scalar per atom
+        is rotated onto the requested magnetization direction (x, y or z) —
+        without this VASP would start from its default (1,1,1) direction.
+        """
         mag = self.instructions.get('magnetization', {})
-        if not mag.get('enabled') or self.instructions.get('soc', False):
+        if not mag.get('enabled'):
             return []
-        n      = self._read_atom_count()
-        moment = self.instructions.get('mag_moment', 2.0)
-        return ["# Collinear magnetization", "ISPIN = 2",
-                f"MAGMOM = {n}*{moment}", ""]
+        values, is_vec = self._magmom_values()
+        if not self.instructions.get('soc', False):
+            return (["# Collinear magnetization", "ISPIN = 2"]
+                    + self._magmom_tag(values) + [""])
+        if not is_vec:
+            d = {'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}.get(
+                mag.get('direction') or 'z', (0, 0, 1))
+            values = [m * c for m in values for c in d]
+        return (["# Non-collinear initial moments (x y z per atom)"]
+                + self._magmom_tag(values) + [""])
 
     def _u_lines(self) -> list:
         """Generate GGA+U INCAR lines.
@@ -1871,6 +2077,11 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "ISMEAR = 0",
             "SIGMA = 0.05",
             "",
+            "# Start from scratch (ignore any stale WAVECAR/CHGCAR in this directory);",
+            "# WAVECAR and CHGCAR are written for the SCF step to pick up.",
+            "ISTART = 0",
+            "ICHARG = 2",
+            "",
         ]
 
         fl = self._functional_lines()
@@ -1930,7 +2141,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
                and not self.instructions.get('soc', False)
                and not for_convergence)
 
-        par_lines = self._get_parallel_lines('scf')
+        # LELF needs KPAR = 1: pin it and let NCORE be derived for the single
+        # k-group of all ranks (not left at the value that suited KPAR > 1).
+        par_lines = self._get_parallel_lines('scf', force_kpar=1 if elf else None)
         if elf:
             par_lines = [('KPAR  = 1   # forced to 1: ELF (LELF) needs KPAR=1'
                           if l.strip().startswith('KPAR') else l) for l in par_lines]
@@ -2065,7 +2278,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('scf'))
+        lines.extend(self._get_parallel_lines('scf', incar_step='lobster'))
         lines.extend([
             "# Output (WAVECAR is read by LOBSTER; dense DOSCAR for the energy window)",
             "LORBIT = 11",
@@ -2076,13 +2289,108 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines = self._apply_incar_overrides(lines, 'lobster')
         return '\n'.join(lines) + '\n'
 
+    # ── k-point meshes ────────────────────────────────────────────────────────
+    # Density vocabulary: 'coarse' = 1000 kpra, 'fine' = 5000 kpra, or an
+    # integer kpra.  kpra = (N1*N2*N3) * N_atoms  (k-points per reciprocal atom).
+    #
+    # Precedence, highest first (applied per step by kpoints_text()):
+    #   1. an explicit `KPOINTS <step>:` / `KPOINTS:` block (written verbatim)
+    #   2. the explicit `KMESH: n1 n2 n3` override
+    #   3. the density (KMESH_DENSITY / RELAX_KMESH_DENSITY, default fine / coarse)
+    # Steps derived from the SCF (DOS, LOBSTER = 2x; DFPT, Wannier = 1x) follow
+    # the SCF mesh actually in force, including an explicit SCF block.
+
+    @staticmethod
+    def _kpra_of(density) -> int:
+        """k-points-per-reciprocal-atom target for a density value."""
+        if isinstance(density, (int, float)) and not isinstance(density, bool):
+            return max(1, int(density))
+        s = str(density).strip().lower()
+        if s.isdigit():
+            return max(1, int(s))
+        return {'coarse': 1000, 'fine': 5000}.get(s, 5000)
+
+    def _density_label(self, density) -> str:
+        s = str(density).strip().lower()
+        kpra = self._kpra_of(density)
+        return f"{s}, {kpra} kpra" if s in ('coarse', 'fine') else f"{kpra} kpra"
+
+    def _relax_density(self):
+        return self.instructions.get('relax_kmesh_density') or 'coarse'
+
+    def _explicit_kpoints(self, step: str):
+        """Verbatim KPOINTS text the user supplied for *step*, or None.
+        A step block wins over the unnamed (all-steps) block, which never
+        applies to the line-mode band-structure path."""
+        raw = self.instructions.get('kpoints_raw') or {}
+        if step in raw:
+            return raw[step]
+        if step != 'bands' and 'all' in raw:
+            return raw['all']
+        return None
+
+    @staticmethod
+    def _parse_kpoints_text(text: str):
+        """Classify a KPOINTS file: ('mesh', (n1,n2,n3)) for an automatic
+        Gamma/Monkhorst-Pack mesh, ('list', n) / ('line', n) for explicit
+        points, or (None, None) if unreadable."""
+        try:
+            L = [l.strip() for l in text.splitlines()]
+            nk = int(L[1].split()[0])
+            mode = L[2][:1].upper()
+            if nk == 0 and mode in ('G', 'M'):
+                n = [int(float(x)) for x in L[3].split()[:3]]
+                if len(n) == 1:
+                    n = n * 3
+                return 'mesh', tuple(n)
+            if mode == 'L':
+                return 'line', nk
+            return 'list', nk
+        except Exception:
+            return None, None
+
+    def _kpra_atoms(self) -> int:
+        return max(1, self._read_atom_count())
+
+    def _relax_mesh(self) -> tuple:
+        text = self._explicit_kpoints('relax')
+        if text:
+            kind, val = self._parse_kpoints_text(text)
+            if kind == 'mesh':
+                return val
+        return self._compute_mesh(self._relax_density())
+
+    def _scf_mesh(self, density=None) -> tuple:
+        """The mesh the SCF step runs (explicit SCF block > KMESH > density)."""
+        text = self._explicit_kpoints('scf')
+        if text:
+            kind, val = self._parse_kpoints_text(text)
+            if kind == 'mesh':
+                return val
+        return self._compute_mesh(density if density is not None
+                                  else self.instructions.get('kmesh_density', 'fine'))
+
+    def _is_hex_lattice(self) -> bool:
+        """Geometric test only (ignores the GUI 'Hexagonal BZ' flag, which is
+        ticked by default): |a1| = |a2| and the in-plane angle 120 (or 60) deg,
+        a3 perpendicular to the plane."""
+        try:
+            with open(self.poscar) as f:
+                ls = f.readlines()
+            sc = float(ls[1].strip())
+            a1, a2, a3 = [np.array([float(x) * sc for x in ls[i].split()[:3]]) for i in (2, 3, 4)]
+            n1, n2 = np.linalg.norm(a1), np.linalg.norm(a2)
+            cos_g = abs(np.dot(a1, a2) / (n1 * n2))
+            perp  = max(abs(np.dot(a3, a1)) / (np.linalg.norm(a3) * n1),
+                        abs(np.dot(a3, a2)) / (np.linalg.norm(a3) * n2))
+            return abs(n1 - n2) / n1 < 0.01 and abs(cos_g - 0.5) < 0.02 and perp < 0.02
+        except Exception:
+            return False
+
     def _is_hexagonal_cell(self) -> bool:
         """True when the lattice is hexagonal/trigonal: a=b and γ≈120°.
-
-        Checked against the POSCAR geometry directly so it works even when
-        the user has not ticked the 'Hexagonal BZ' box in the GUI; the
-        instruction flag is an additional override.
-        """
+        Informational only (comments, k-path M point); the mesh itself follows
+        the kpra target for every cell type."""
         if self.instructions.get('is_hex'):
             return True
         try:
@@ -2097,114 +2405,185 @@ echo "      Data:  band.yaml  FORCE_SETS"
         except Exception:
             return False
 
-    def _compute_mesh(self, density: str) -> tuple:
-        """Central mesh resolver: returns (Nx, Ny, Nz) for a density tier.
+    def _compute_mesh(self, density) -> tuple:
+        """Central mesh resolver: (Nx, Ny, Nz) for a density.
 
-        Priority:
-          1. Explicit KMESH instruction (user override, any system).
-          2. Hexagonal/trigonal: fixed in-plane grids (coarse=6×6, fine=12×12)
-             with Nz scaled proportionally to |b3*|/|b1*|.
-          3. All other systems: kpra formula (coarse=1000, fine=5000).
-
-        Even parity is enforced by _kpoints_from_kpra for path 3 and
-        explicitly for path 2.  The 2D slab exception (nz=1) applies to
-        both hexagonal and general cells.
+        1. Explicit `KMESH: n1 n2 n3` instruction (any system).
+        2. Otherwise the kpra target (coarse=1000, fine=5000, or an integer):
+           subdivisions ∝ |b_i*|, even integers, chosen so N1*N2*N3*N_atoms
+           lands as close to the target as possible (see _kpoints_from_kpra).
         """
         kmesh = self.instructions.get('kmesh')
         if kmesh:
             return tuple(kmesh[:3])
-
-        if self._is_hexagonal_cell():
-            n_xy = 6 if density == 'coarse' else 12
-            if self.instructions.get('is_2d'):
-                return n_xy, n_xy, 1
-            try:
-                with open(self.poscar) as f:
-                    ls = f.readlines()
-                sc = float(ls[1].strip())
-                A  = np.array([[float(x) * sc for x in ls[i].split()[:3]]
-                               for i in range(2, 5)])
-                b  = np.linalg.norm(2 * np.pi * np.linalg.inv(A).T, axis=1)
-                nz = max(2, round(n_xy * b[2] / b[0]))
-                if nz % 2:
-                    nz += 1
-            except Exception:
-                nz = 2
-            return n_xy, n_xy, nz
-
-        kpra = {'coarse': 1000, 'fine': 5000}.get(density, 5000)
-        return self._kpoints_from_kpra(kpra)
+        return self._kpoints_from_kpra(self._kpra_of(density))
 
     def _kpoints_from_kpra(self, kpra: int) -> tuple:
-        """(Nx, Ny, Nz) Gamma mesh for the given k-points-per-reciprocal-atom target.
+        """(Nx, Ny, Nz) Gamma mesh whose k-point count best matches *kpra*.
 
-        Subdivisions are proportional to the reciprocal lattice vector magnitudes
-        |b1*|, |b2*|, |b3*|.  For orthogonal cells this reduces to 1/a : 1/b : 1/c
-        (satisfying Nx*a = Ny*b = Nz*c); for monoclinic and triclinic cells the
-        reciprocal-vector lengths are the correct generalisation.
-        All meshes are Gamma-centred.  For 2-D slabs, Nz is forced to 1.
+        Subdivisions are proportional to the reciprocal lattice vector
+        magnitudes |b1*|, |b2*|, |b3*| (Nx*a = Ny*b = Nz*c for orthogonal
+        cells; the right generalisation for monoclinic/triclinic/hexagonal
+        cells).  All N_i are EVEN so the BZ boundary (k = 1/2) is sampled.
+        Even rounding used to be applied as "round, then bump odd values up",
+        which overshoots the target by up to ~50 %; here every combination of
+        the two nearest even integers per axis is tried and the one whose
+        total k-point count is closest to kpra / N_atoms is kept.  For 2-D
+        slabs Nz = 1 and the in-plane mesh carries the whole target.
         """
         try:
             with open(self.poscar) as f:
                 lines = f.readlines()
             scale = float(lines[1].strip())
-            vecs  = [np.array([float(x) * scale for x in lines[i].split()[:3]])
-                     for i in range(2, 5)]
-            A = np.array(vecs)                          # rows = a1, a2, a3
-            B = 2 * np.pi * np.linalg.inv(A).T         # rows = b1*, b2*, b3*
-            b = np.linalg.norm(B, axis=1)              # |b1*|, |b2*|, |b3*|
-            n_atoms = sum(int(x) for x in lines[6].split())
+            A = np.array([[float(x) * scale for x in lines[i].split()[:3]]
+                          for i in range(2, 5)])
+            b = np.linalg.norm(2 * np.pi * np.linalg.inv(A).T, axis=1)
+            n_atoms = self._kpra_atoms()
         except Exception:
             return (6, 6, 6)
 
-        n_k   = max(1, kpra // max(n_atoms, 1))
-        alpha = (n_k / max(b[0] * b[1] * b[2], 1e-12)) ** (1 / 3)
-        nx = max(1, round(alpha * b[0]))
-        ny = max(1, round(alpha * b[1]))
-        nz = 1 if self.instructions.get('is_2d', False) else max(1, round(alpha * b[2]))
-        # Enforce even parity so BZ boundary points (k=1/2) are always sampled.
-        # 2D slab nz=1 is intentional (Gamma-only out-of-plane) and left as-is.
-        if nx % 2: nx += 1
-        if ny % 2: ny += 1
-        if nz > 1 and nz % 2: nz += 1
-        return nx, ny, nz
+        import itertools, math
+        n_k  = max(1.0, kpra / n_atoms)
+        flat = bool(self.instructions.get('is_2d', False))
+        if flat:
+            alpha  = math.sqrt(n_k / max(b[0] * b[1], 1e-12))
+            target = [alpha * b[0], alpha * b[1]]
+        else:
+            alpha  = (n_k / max(b[0] * b[1] * b[2], 1e-12)) ** (1.0 / 3.0)
+            target = [alpha * b[0], alpha * b[1], alpha * b[2]]
 
-    def _generate_kpoints_auto(self, density: str = 'fine') -> str:
-        """Generate automatic Gamma-centred KPOINTS file.
+        # Uniform k-space sampling: N_i must be proportional to |b_i*| so the
+        # spacing |b_i*|/N_i is the same along every axis.  Even integers cannot
+        # follow that exactly, so scan the scale s in N_i = nearest-even(s|b_i*|)
+        # and keep the mesh that is most uniform (spacing ratio max/min) while
+        # staying close to the kpra target.  Equal-|b_i*| axes automatically get
+        # equal N_i (same s|b_i*|, same rounding), which preserves symmetry.
+        bb = b[:2] if flat else b[:3]
 
-        Routes through _compute_mesh which applies, in priority order:
-          1. Explicit KMESH instruction override.
-          2. Hexagonal/trigonal: fixed grids (coarse 6×6, fine 12×12) with
-             Nz scaled from |b3*|/|b1*|.
-          3. General: kpra formula (coarse=1000, fine=5000 k·atom⁻¹).
-        All grids are Gamma-centred with even Ni; 2D slab keeps nz=1.
-        """
-        nx, ny, nz = self._compute_mesh(density)
+        # Hexagonal cells (a = b, gamma = 120 deg): the in-plane mesh is a
+        # multiple of 6 (6, 12, 18, ...) so the K and M points lie on the mesh
+        # and the 6-fold symmetry is kept; out of plane stays even.
+        hexa  = self._is_hex_lattice()
+        steps = [6 if (hexa and i < 2) else 2 for i in range(len(bb))]
+
+        def nearest_step(x, st):
+            return max(st, st * int(round(x / float(st))))
+
+        cands, seen = [], set()
+        for k in range(0, 901):
+            sc = alpha * math.exp(math.log(9.0) * (k / 900.0 - 0.5))   # alpha/3 .. 3 alpha
+            combo = tuple(nearest_step(sc * x, st) for x, st in zip(bb, steps))
+            if combo in seen:
+                continue
+            seen.add(combo)
+            spacing = [x / c for x, c in zip(bb, combo)]
+            ratio   = max(spacing) / min(spacing)                       # 1 = perfectly uniform
+            dev     = abs(math.log(float(np.prod(combo)) / n_k))
+            cands.append((ratio, dev, combo))
+        # Uniformity first: tighten-to-loosen tolerance on the spacing ratio,
+        # taking the first tier that has a mesh within 50 % of the kpra target,
+        # and inside it the mesh closest to the target.
+        best = None
+        for devtol in (1.5, 2.0, 3.0):         # multiples of 6 can force a wider miss
+            for tol in (1.05, 1.10, 1.20, 1.35, 1.6, 2.0, 1e9):
+                ok = [c for c in cands if c[0] <= tol and c[1] <= math.log(devtol)]
+                if ok:
+                    best = min(ok, key=lambda c: (c[1], c[0]))[2]
+                    break
+            if best:
+                break
+        if best is None:                       # nothing near the target: most uniform wins
+            best = min(cands, key=lambda c: (c[0], c[1]))[2]
+        return tuple(best) + ((1,) if flat else ())
+
+    def _spacing_note(self, mesh) -> str:
+        """', spacing 0.100-0.104 1/A' — |b_i*|/N_i range (uniformity check)."""
+        try:
+            with open(self.poscar) as f:
+                lines = f.readlines()
+            sc = float(lines[1].strip())
+            A = np.array([[float(x) * sc for x in lines[i].split()[:3]] for i in range(2, 5)])
+            b = np.linalg.norm(2 * np.pi * np.linalg.inv(A).T, axis=1)
+            sp = [b[i] / mesh[i] for i in range(3) if mesh[i] > 1]
+            return f", spacing {min(sp):.3f}-{max(sp):.3f} 1/A"
+        except Exception:
+            return ""
+
+    def _kpoints_auto_text(self, mesh: tuple, comment: str) -> str:
+        nx, ny, nz = mesh
+        actual = nx * ny * nz * self._kpra_atoms()
+        return (f"{comment}, {nx}x{ny}x{nz} = {actual} kpra{self._spacing_note(mesh)}\n"
+                f"0\nGamma\n  {nx}  {ny}  {nz}\n  0    0    0\n")
+
+    def _generate_kpoints_auto(self, density='fine') -> str:
+        """Automatic Gamma-centred KPOINTS text for a density (see _compute_mesh)."""
+        mesh = self._compute_mesh(density)
         if self.instructions.get('kmesh'):
             comment = "Automatic Gamma mesh (explicit KMESH override)"
-        elif self._is_hexagonal_cell():
-            comment = f"Automatic Gamma mesh ({density}, hexagonal {nx}×{ny}×{nz})"
         else:
-            kpra = {'coarse': 1000, 'fine': 5000}.get(density, 5000)
-            comment = f"Automatic Gamma mesh ({density}, {kpra} kpra)"
-        return f"{comment}\n0\nGamma\n  {nx}  {ny}  {nz}\n  0    0    0\n"
+            comment = f"Automatic Gamma mesh ({self._density_label(density)} target)"
+        return self._kpoints_auto_text(mesh, comment)
 
-    def _mesh_x2(self, density: str = 'fine') -> tuple:
+    def _mesh_x2(self, density=None) -> tuple:
         """SCF mesh doubled in every direction, keeping the SCF ratios.
 
         An SCF mesh of 3×4×5 becomes 6×8×10.  Used by the DOS and LOBSTER
         NSCF steps, which read the SCF charge density and so cost far less
         than the SCF itself.  A 2D slab keeps nz = 1 (Gamma-only out of plane).
+        Follows an explicit SCF KPOINTS block when one is given.
         """
-        nx, ny, nz = self._compute_mesh(density)
+        nx, ny, nz = self._scf_mesh(density)
         nz2 = 1 if self.instructions.get('is_2d') else nz * 2
         return nx * 2, ny * 2, nz2
 
-    def _generate_kpoints_x2(self, density: str = 'fine', label: str = 'NSCF') -> str:
+    def _generate_kpoints_x2(self, density=None, label: str = 'NSCF') -> str:
         """KPOINTS file at 2× the SCF mesh (see _mesh_x2)."""
         nx, ny, nz = self._mesh_x2(density)
-        return (f"Automatic Gamma mesh ({label}, 2× SCF: {nx}×{ny}×{nz})\n"
-                f"0\nGamma\n  {nx}  {ny}  {nz}\n  0    0    0\n")
+        return self._kpoints_auto_text((nx, ny, nz),
+                                       f"Automatic Gamma mesh ({label}, 2x SCF)")
+
+    def kpoints_text(self, step: str, density=None) -> str:
+        """KPOINTS file content for *step* — the single source of truth used
+        by every agent and by the GUI when it regenerates k-meshes.
+
+        step: relax | scf | bands | dos | dfpt | wannier | phonons | lobster.
+        An explicit KPOINTS block for the step always wins.  *density*, if
+        given, replaces the instruction's density for the mesh-based steps
+        (used by the GUI's second phase).
+        """
+        text = self._explicit_kpoints(step)
+        if text:
+            return text
+        if step == 'bands':
+            return self._generate_kpoints_linemode(self.instructions.get('kpath'))
+        d = density if density is not None else self.instructions.get('kmesh_density', 'fine')
+        if step == 'relax':
+            return self._generate_kpoints_auto(
+                density if density is not None else self._relax_density())
+        if step in ('dos', 'lobster'):
+            return self._generate_kpoints_x2(density, label=step.upper())
+        if step == 'phonons':
+            return self._generate_kpoints_auto('coarse')
+        # scf, dfpt, wannier: the SCF mesh (an explicit SCF block is followed too)
+        return self._kpoints_auto_text(
+            self._scf_mesh(d),
+            "Automatic Gamma mesh (explicit KMESH override)"
+            if self.instructions.get('kmesh') else
+            f"Automatic Gamma mesh ({self._density_label(d)} target)")
+
+    def _write_kpoints(self, output_dir: str, step: str, density=None) -> str:
+        """Write <output_dir>/KPOINTS for *step*; returns the text.  A marker
+        file `.explicit_kpoints` is left next to KPOINTS when the user's own
+        block was used, so later k-mesh patching (convergence phase 2) skips it."""
+        text   = self.kpoints_text(step, density)
+        marker = os.path.join(output_dir, '.explicit_kpoints')
+        with open(os.path.join(output_dir, 'KPOINTS'), 'w') as f:
+            f.write(text)
+        if self._explicit_kpoints(step):
+            open(marker, 'w').write('KPOINTS taken verbatim from the instructions file\n')
+        elif os.path.exists(marker):
+            os.remove(marker)
+        return text
 
 
     def _spglib_kpath(self):

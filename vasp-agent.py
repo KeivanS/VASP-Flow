@@ -428,23 +428,29 @@ class VASPWorkflowAgent:
                 if key in ('bands', 'dos', 'lobster'):
                     continue
                 dirname = os.path.basename(calc_dirs[key])
+                f.write(f'    if [ ! -f "$HERE/{dirname}/.explicit_kpoints" ]; then\n')
                 f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
                 f.write(f'        $NX $NY $NZ > "$HERE/{dirname}/KPOINTS"\n')
                 f.write(f'    echo "  {dirname}/KPOINTS  →  $KMESH"\n')
+                f.write('    fi\n')
 
             # ── patch KPOINTS: lobster NSCF uses 2× the SCF mesh ──────────
             if 'lobster' in calc_dirs:
                 dirname = os.path.basename(calc_dirs['lobster'])
+                f.write(f'    if [ ! -f "$HERE/{dirname}/.explicit_kpoints" ]; then\n')
                 f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
                 f.write(f'        $NX_LOB $NY_LOB $NZ_LOB > "$HERE/{dirname}/KPOINTS"\n')
                 f.write(f'    echo "  {dirname}/KPOINTS  →  ${{NX_LOB}}x${{NY_LOB}}x${{NZ_LOB}}  (2x SCF, LOBSTER)"\n')
+                f.write('    fi\n')
 
             # ── patch KPOINTS: dos uses KMESH_DOS ────────────────────────
             if 'dos' in calc_dirs:
                 dirname = os.path.basename(calc_dirs['dos'])
+                f.write(f'    if [ ! -f "$HERE/{dirname}/.explicit_kpoints" ]; then\n')
                 f.write(f'    printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" \\\n')
                 f.write(f'        $NX_DOS $NY_DOS $NZ_DOS > "$HERE/{dirname}/KPOINTS"\n')
                 f.write(f'    echo "  {dirname}/KPOINTS  →  ${{NX_DOS}}x${{NY_DOS}}x${{NZ_DOS}}  (2x SCF, DOS)"\n')
+                f.write('    fi\n')
             f.write('fi\n')
 
             f.write('\necho ""\n')

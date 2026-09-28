@@ -245,6 +245,32 @@ def api_visualize_poscar():
     return jsonify(ok=True)
 
 
+_BLOCK_STEP_ORDER = ('all', 'relax', 'scf', 'bands', 'dos', 'dfpt',
+                     'wannier', 'phonons', 'lobster')
+
+
+def _explicit_block_lines(blocks):
+    """Instruction-file lines for the Setup page's explicit INCAR/KPOINTS
+    editor.  *blocks* = {step: {'incar': text, 'kpoints': text}} with step in
+    all/relax/scf/bands/dos/dfpt/wannier/phonons/lobster ('all' = unnamed
+    block, applied to every step; KPOINTS 'all' skips the band path)."""
+    out = []
+    if not isinstance(blocks, dict):
+        return out
+    import textwrap
+    for step in _BLOCK_STEP_ORDER:
+        b = blocks.get(step) or {}
+        head = '' if step == 'all' else f' {step}'
+        incar = [l.rstrip() for l in str(b.get('incar', '') or '').splitlines()
+                 if l.strip()]
+        if incar:
+            out += ['', f'INCAR{head}:'] + ['    ' + l.strip() for l in incar] + ['END_INCAR']
+        kp = textwrap.dedent(str(b.get('kpoints', '') or '')).strip('\n').splitlines()
+        if any(l.strip() for l in kp):
+            out += ['', f'KPOINTS{head}:'] + ['    ' + l.rstrip() for l in kp] + ['END_KPOINTS']
+    return out
+
+
 @app.route('/api/generate', methods=['POST'])
 def api_generate():
     d = request.json or {}
@@ -255,7 +281,11 @@ def api_generate():
     # ── build instruction text ──────────────────────────────────────────
     functional = d.get('functional','PBEsol')
     spin_mode  = d.get('spin_mode','none')      # none | collinear | soc_z | soc_x | soc_y
-    mag_moment = float(d.get('mag_moment', 2.0) or 2.0)
+    try:
+        mag_moment = float(d.get('mag_moment', 2.0))
+    except (TypeError, ValueError):
+        mag_moment = 2.0
+    magmom_spec = str(d.get('magmom', '') or '').strip()   # per-element / per-atom spec
     use_u      = d.get('use_u', False)
     u_entries  = d.get('u_entries', [])         # [{element, orbital, U}]
 
@@ -327,7 +357,10 @@ def api_generate():
     if conv_lines: lines += ['Convergence: ' + '\n             '.join(conv_lines), '']
     lines += [f'ISIF: {isif}', f'NSW: {nsw}', f'EDIFFG: {ediffg}', f'NKPTS: {nkpts}']
     if mpi > 1: lines.append(f'MPI: {mpi}')
-    if spin_mode == 'collinear': lines.append(f'MAGMOM: {mag_moment}')
+    if spin_mode != 'none':
+        # An advanced spec (Fe=4.0, O=0.6 | 2*4.0 2*-4.0) wins over the uniform
+        # number; SOC runs take the same value and orient it along x/y/z.
+        lines.append(f'MAGMOM: {magmom_spec or mag_moment}')
 
     # ELF (ELFCAR) — on by default; emit explicit state so it round-trips
     lines.append('ELF: ' + ('ON' if d.get('elf', True) else 'OFF'))
@@ -363,12 +396,22 @@ def api_generate():
 
     # K-mesh density (coarse/fine) and optional explicit override
     kmesh_density = d.get('kmesh_density', 'fine')
+    kpra_custom   = str(d.get('kmesh_kpra', '') or '').strip()
+    if kpra_custom.isdigit() and int(kpra_custom) > 0:
+        kmesh_density = kpra_custom            # explicit kpra target
     lines.append(f'KMESH_DENSITY: {kmesh_density}')
+    relax_density = str(d.get('relax_kmesh_density', 'coarse') or 'coarse').strip()
+    if d.get('relax'):
+        lines.append(f'RELAX_KMESH_DENSITY: {relax_density}')
     if param_mode == 'manual':
         encut_m  = d.get('manual_encut', '').strip()
         kmesh_m  = d.get('manual_kmesh', '').strip()
         if encut_m: lines.append(f'ENCUT: {encut_m}')
         if kmesh_m: lines.append(f'KMESH: {kmesh_m}')
+
+    # Explicit INCAR / KPOINTS blocks (Setup -> Advanced): written verbatim in
+    # the instructions-file block syntax; they override everything else.
+    lines += _explicit_block_lines(d.get('explicit_blocks'))
 
     run_dir = CONFIG['projects_dir']
     os.makedirs(run_dir, exist_ok=True)
@@ -538,19 +581,21 @@ def api_run_phase2():
     if os.path.exists(poscar_path) and os.path.exists(instr_path):
         instr_obj = InstructionParser(instr_path).instructions
         gen = VASPInputGenerator(poscar_path, instr_obj)
-        # DOS and LOBSTER are NSCF steps off the SCF charge density: both run
-        # at 2× the SCF mesh in every direction (SCF ratios preserved).
-        x2_steps = {'04_dos': 'DOS', '08_lobster': 'LOBSTER'}
+        # The generator is the single source of truth for every step's mesh
+        # (relax coarse, SCF chosen density, DOS/LOBSTER 2x SCF, DFPT/Wannier
+        # = SCF, phonons coarse).  Steps whose KPOINTS came verbatim from an
+        # explicit `KPOINTS <step>:` block (marker file) are left alone.
+        step_key = {'01_relax': 'relax', '02_scf': 'scf', '04_dos': 'dos',
+                    '05_wannier': 'wannier', '06_dfpt': 'dfpt',
+                    '07_phonons': 'phonons', '08_lobster': 'lobster'}
+        dens = instr_obj.get('kmesh_density', kmesh_density)
         for step in _steps(slug):
-            if step in ('03_bands', '00_convergence'): continue
+            if step in ('03_bands', '00_convergence') or step not in step_key: continue
             kp = os.path.join(pd_path, step, 'KPOINTS')
             if not os.path.exists(kp): continue
-            if step in x2_steps:
-                Path(kp).write_text(gen._generate_kpoints_x2(
-                    density=kmesh_density, label=x2_steps[step]))
-            else:
-                step_density = 'coarse' if step == '01_relax' else kmesh_density
-                Path(kp).write_text(gen._generate_kpoints_auto(density=step_density))
+            if os.path.exists(os.path.join(pd_path, step, '.explicit_kpoints')): continue
+            Path(kp).write_text(gen.kpoints_text(step_key[step], density=(
+                None if step_key[step] in ('relax', 'phonons') else dens)))
 
     prod = [s for s in _steps(slug) if not s.startswith('00')]
     tmp  = os.path.join(pd_path, '_phase2.sh')
@@ -2523,8 +2568,12 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     </div>
     <div class="f" id="mag_moment_row" style="display:none">
       <label>Magnetic moment / atom (μ<sub>B</sub>)</label>
-      <input type="number" id="mag_moment" value="2.0" min="0" max="20" step="0.5"
-             style="width:100px" title="Initial MAGMOM per atom for ISPIN=2 (e.g. Fe≈4, Ni≈2, Cr≈3)">
+      <input type="number" id="mag_moment" value="2.0" min="-20" max="20" step="0.5"
+             style="width:100px" title="Uniform initial MAGMOM per atom (e.g. Fe≈4, Ni≈2, Cr≈3). Negative = antiparallel. For SOC it is oriented along the chosen direction.">
+    </div>
+    <div class="f" id="magmom_row" style="display:none">
+      <label title="Optional. Overrides the uniform number. Per element: Fe=4.0, O=0.6 (unlisted elements get 0). Per atom, POSCAR order: 2*4.0 2*-4.0 (n*value shorthand; 3N numbers for SOC).">MAGMOM (advanced)</label>
+      <input id="magmom" placeholder="Fe=4.0, Cr=-3.0, O=0.6   or   2*4.0 2*-4.0" style="min-width:260px">
     </div>
   </div>
   <div class="checks" style="margin-bottom:12px;">
@@ -2578,9 +2627,20 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <div class="f"><label title="Optional: overrides the density selector for all steps. Format: NxNxN or N N N">Explicit k-mesh override</label>
         <input id="manual_kmesh" placeholder="e.g. 8x8x4 — leave blank for auto"></div>
     </div>
+    <div class="g3" style="margin-top:8px;">
+      <div class="f"><label title="k-points per reciprocal atom for the relaxation mesh">Relaxation k-mesh density</label>
+        <select id="relax_kmesh_density">
+          <option value="coarse">Coarse — 1000 k·atom⁻¹ (default)</option>
+          <option value="fine">Fine — 5000 k·atom⁻¹</option>
+        </select></div>
+      <div class="f"><label title="Optional integer kpra target; replaces the Coarse/Fine selector above for SCF, DOS, DFPT, LOBSTER">Custom kpra target</label>
+        <input id="kmesh_kpra" type="number" min="1" step="100" placeholder="e.g. 3000 — blank uses the selector"></div>
+    </div>
     <div style="font-size:11px;color:var(--sub);margin-top:4px;">
-      Subdivisions are set inversely proportional to cell dimensions (Nx·a ≈ Ny·b ≈ Nz·c).
-      Relax always uses Coarse; DOS always Fine.
+      Subdivisions are even, proportional to the reciprocal cell lengths (Nx·a ≈ Ny·b ≈ Nz·c), and chosen so
+      N<sub>x</sub>N<sub>y</sub>N<sub>z</sub>·N<sub>atoms</sub> lands on the kpra target (Coarse 1000, Fine 5000).
+      The relaxation uses its own density (default Coarse); DOS and LOBSTER use 2× the SCF mesh; DFPT and Wannier use the SCF mesh.
+      The KPOINTS header of every step reports the mesh and the kpra actually reached.
     </div>
   </div>
 </div>
@@ -2748,6 +2808,41 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
   </div>
 
 </div><!-- end tasks card -->
+
+<!-- Advanced: explicit INCAR / KPOINTS overrides -->
+<div class="card">
+  <div class="card-title">Advanced — explicit INCAR / KPOINTS
+    <span style="font-weight:400;font-size:11px;color:var(--sub);margin-left:8px;">
+      optional · overrides every automatic setting for the chosen step</span></div>
+  <div class="g3">
+    <div class="f"><label>Step</label>
+      <select id="expl_step" onchange="explSwitch()">
+        <option value="all">All steps (INCAR) / all except bands (KPOINTS)</option>
+        <option value="relax">01_relax</option>
+        <option value="scf">02_scf</option>
+        <option value="bands">03_bands</option>
+        <option value="dos">04_dos</option>
+        <option value="wannier">05_wannier</option>
+        <option value="dfpt">06_dfpt</option>
+        <option value="phonons">07_phonons</option>
+        <option value="lobster">08_lobster</option>
+      </select></div>
+  </div>
+  <div class="g3" style="grid-template-columns:1fr 1fr;margin-top:8px;">
+    <div class="f"><label>INCAR tags (one <code>TAG = value</code> per line)</label>
+      <textarea id="expl_incar" rows="7" oninput="explStore()"
+        placeholder="SIGMA = 0.1&#10;NELM = 200&#10;KPAR = 4"></textarea></div>
+    <div class="f"><label>KPOINTS file (complete, first line = comment)</label>
+      <textarea id="expl_kpoints" rows="7" oninput="explStore()"
+        placeholder="my mesh&#10;0&#10;Gamma&#10;10 10 6&#10;0 0 0"></textarea></div>
+  </div>
+  <div style="font-size:11px;color:var(--sub);margin-top:6px;">
+    INCAR tags replace the generated value of the same tag (or are appended); a KPOINTS block is written unchanged and is
+    never touched by later k-mesh patching. Steps marked ● have content. DOS/LOBSTER/DFPT/Wannier follow an explicit SCF mesh.
+    The same thing can be written in instructions.txt as
+    <code>INCAR scf: … END_INCAR</code> and <code>KPOINTS scf: … END_KPOINTS</code>.
+  </div>
+</div>
 
 <button class="btn btn-primary" id="btn-gen" onclick="generate()" style="margin-top:4px;">
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -3022,6 +3117,7 @@ async function loadProjectSettings(){
     s('functional',   settings.functional);
     s('spin_mode',    settings.spin_mode);
     s('mag_moment',   settings.mag_moment ?? 2.0);
+    s('magmom',       settings.magmom || '');
     toggleMagMoment();
     c('hexagonal',    settings.hexagonal);
     c('is_2d',        settings.is_2d);
@@ -3043,6 +3139,9 @@ async function loadProjectSettings(){
     s('manual_encut',  settings.manual_encut);
     s('kmesh_density', settings.kmesh_density || 'fine');
     s('manual_kmesh',  settings.manual_kmesh);
+    s('relax_kmesh_density', settings.relax_kmesh_density || 'coarse');
+    s('kmesh_kpra',    settings.kmesh_kpra || '');
+    explSet(settings.explicit_blocks);
 
     // Task checkboxes + body visibility
     const tasks=['relax','scf','bands','dos','dfpt','phonons','wannier','lobster'];
@@ -3232,8 +3331,37 @@ function choosePotcar(elem,variant){
 
 // ── GGA+U rows ─────────────────────────────────────────────────────────────
 function toggleMagMoment(){
-  const show = document.getElementById('spin_mode').value === 'collinear';
+  const mode = document.getElementById('spin_mode').value;
+  const show = (mode === 'collinear' || mode.startsWith('soc'));
   document.getElementById('mag_moment_row').style.display = show ? '' : 'none';
+  document.getElementById('magmom_row').style.display    = show ? '' : 'none';
+}
+
+// ── explicit INCAR / KPOINTS editor (per-step buffers) ────────────────────
+let EXPL = {};                       // {step: {incar:'', kpoints:''}}
+function explStore(){
+  const st = document.getElementById('expl_step').value;
+  EXPL[st] = {incar: document.getElementById('expl_incar').value,
+              kpoints: document.getElementById('expl_kpoints').value};
+  explMarks();
+}
+function explSwitch(){
+  const st = document.getElementById('expl_step').value;
+  const b = EXPL[st] || {incar:'', kpoints:''};
+  document.getElementById('expl_incar').value = b.incar || '';
+  document.getElementById('expl_kpoints').value = b.kpoints || '';
+}
+function explMarks(){
+  document.querySelectorAll('#expl_step option').forEach(o=>{
+    const b = EXPL[o.value] || {};
+    const has = (b.incar||'').trim() || (b.kpoints||'').trim();
+    o.textContent = o.textContent.replace(/^● /,'') ;
+    if(has) o.textContent = '● ' + o.textContent;
+  });
+}
+function explSet(blocks){
+  EXPL = JSON.parse(JSON.stringify(blocks || {}));
+  explSwitch(); explMarks();
 }
 function toggleU(cb){
   document.getElementById('u-section').classList.toggle('hidden',!cb.checked);
@@ -3322,7 +3450,8 @@ async function saveProjectSettings(){
     potcar_choices: POTCAR_CHOICES,
     functional:     v('functional'),
     spin_mode:      v('spin_mode'),
-    mag_moment:     parseFloat(v('mag_moment')) || 2.0,
+    mag_moment:     isNaN(parseFloat(v('mag_moment'))) ? 2.0 : parseFloat(v('mag_moment')),
+    magmom:         v('magmom'),
     hexagonal:      chk('hexagonal'),
     is_2d:          chk('is_2d'),
     use_u:          chk('use_u'),
@@ -3334,6 +3463,9 @@ async function saveProjectSettings(){
     manual_encut:   v('manual_encut'),
     kmesh_density:  v('kmesh_density'),
     manual_kmesh:   v('manual_kmesh'),
+    relax_kmesh_density: v('relax_kmesh_density') || 'coarse',
+    kmesh_kpra:     v('kmesh_kpra'),
+    explicit_blocks: EXPL,
     relax:  chk('t_relax'), scf:  chk('t_scf'), elf: chk('t_elf'),
     bands:  chk('t_bands'), dos:  chk('t_dos'),
     dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
@@ -3391,7 +3523,8 @@ async function generate(){
     potcar_choices: POTCAR_CHOICES,
     functional:     v('functional'),
     spin_mode:    v('spin_mode'),
-    mag_moment:   parseFloat(v('mag_moment')) || 2.0,
+    mag_moment:   isNaN(parseFloat(v('mag_moment'))) ? 2.0 : parseFloat(v('mag_moment')),
+    magmom:       v('magmom'),
     hexagonal:    chk('hexagonal'),
     is_2d:        chk('is_2d'),
     use_u:        chk('use_u'),
@@ -3405,6 +3538,9 @@ async function generate(){
     manual_encut:  v('manual_encut'),
     kmesh_density: v('kmesh_density') || 'fine',
     manual_kmesh:  v('manual_kmesh'),
+    relax_kmesh_density: v('relax_kmesh_density') || 'coarse',
+    kmesh_kpra:    v('kmesh_kpra'),
+    explicit_blocks: EXPL,
     // tasks
     relax:        chk('t_relax'),
     scf:          chk('t_scf'),

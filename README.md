@@ -99,14 +99,19 @@ In the **Setup** tab:
 
 **Hubbard U** — GGA+U (Dudarev, LDAUTYPE=2) is applied **automatically** when the structure contains a d/f element with a tabulated U value *and* an electronegative anion (O, F, S, Se, Te, Cl, Br, I). This covers oxides, sulfides (e.g. AgCrP₂S₆), selenides, tellurides, and halides. The Dudarev parameter is U_eff = U − J; J is set to zero automatically so no separate entry is needed. Values and literature references live in [`hubbard_u_defaults.csv`](hubbard_u_defaults.csv) — edit that file to change the defaults. Uncheck *Default Hubbard U* in Setup (or put `GGA_U: OFF` in the instructions file) to disable; explicit per-element GGA+U entries always override the lookup.
 
-**K-mesh density** — all Gamma-centred meshes are generated automatically from the POSCAR geometry using a *k-points per reciprocal atom* (kpra) target. Two tiers are available via the *K-mesh density* selector (or `KMESH_DENSITY: coarse|fine` in the instructions file):
+**K-mesh density** — all Gamma-centred meshes are generated automatically from the POSCAR geometry using a *k-points per reciprocal atom* (kpra) target: `KMESH_DENSITY: coarse|fine|<integer>` in the instructions file, or the *K-mesh density* selector / *Custom kpra target* box in Setup.
 
 | Tier | kpra | Typical use |
 |---|---|---|
-| coarse | 1000 | Relaxation, convergence test starting point |
+| coarse | 1000 | Relaxation (default, `RELAX_KMESH_DENSITY`), convergence tests |
 | fine | 5000 | SCF, DOS, DFPT, spectroscopic steps (default) |
+| any integer | as given | custom target |
 
-Subdivisions Nᵢ scale with the reciprocal lattice vector magnitudes (Nᵢ ∝ |**b**ᵢ\*|) and are rounded to the nearest even integer. For hexagonal cells (a = b, γ = 120°) the in-plane values are fixed at 6 (coarse) or 12 (fine). The DOS mesh is always 2× the SCF mesh; the DFPT mesh is forced to match SCF exactly. Use `KMESH: N1 N2 N3` to override with an explicit grid.
+Subdivisions Nᵢ are proportional to the reciprocal lattice vector magnitudes (Nᵢ ∝ |**b**ᵢ\*|), all **even**, and picked so that N₁N₂N₃·N_atoms lands as close to the target as possible (axes of equal length — cubic, tetragonal, hexagonal — always get equal Nᵢ). Hexagonal lattices (a = b, γ = 120°, detected from the POSCAR) get an in-plane mesh that is a **multiple of 6** (6×6, 12×12, 18×18, …) so K and M lie on the mesh. This applies to every cell type, 2-D (Nz = 1) included. The KPOINTS comment line reports the mesh and the kpra reached. The DOS and LOBSTER meshes are 2× the SCF mesh; DFPT and Wannier use the SCF mesh; relaxation uses its own density. `KMESH: N1 N2 N3` overrides the automatic mesh for all steps, and a `KPOINTS <step>:` block (below) overrides everything for that step.
+
+**Initial magnetic moments** — `MAGMOM: 4.0` (uniform, negative allowed), `MAGMOM: Fe=4.0, O=0.6` (per element; unlisted elements get 0) or `MAGMOM: 2*4.0 2*-4.0` (per atom in POSCAR order). Any `MAGMOM` line switches spin polarisation on. With SOC the moments are oriented along the chosen x/y/z direction (3N components are written).
+
+**Relaxation → SCF hand-off** — the relaxation starts from scratch (`ISTART=0`, `ICHARG=2`) and writes WAVECAR and CHGCAR. `02_scf/copy_from_relax.sh` copies the relaxed geometry and the CHGCAR; when the SCF k-mesh, spin and cutoff are the same as in the relaxation it also copies the WAVECAR and starts from both (`ISTART=1, ICHARG=1`), otherwise it starts from the CHGCAR alone (`ISTART=0, ICHARG=1`). The decision is taken at run time, so k-meshes edited or patched after generation are handled. Set `ISTART`/`ICHARG` in an `INCAR scf:` block to take control yourself.
 
 **Tasks** — check the calculations you want to run:
 
@@ -166,6 +171,20 @@ INCAR scf:              # this step only (relax/scf/bands/dos/wannier/dfpt/phono
    NBANDS = 64
 END_INCAR
 ```
+
+**1b. Explicit KPOINTS** — the same block syntax writes a complete KPOINTS file, unchanged, for a step (or, unnamed, for every step except the band path):
+
+```
+KPOINTS scf:            # also KPOINTS_SCF:  — steps: relax/scf/bands/dos/wannier/dfpt/phonons/lobster
+   my SCF mesh          # first line is the KPOINTS comment
+   0
+   Gamma
+   9 9 5
+   0 0 0
+END_KPOINTS
+```
+
+Explicit blocks override every other setting (keywords, `KMESH`, the density tier, automatic KPAR/NCORE). DOS/LOBSTER (2×) and DFPT/Wannier (1×) follow an explicit SCF mesh. In the GUI both kinds of block are entered under *Setup → Advanced — explicit INCAR / KPOINTS*.
 
 **2. Agent command line** — the repeatable `--incar` option (both `vasp-agent.py` and `vasp-agent-slurm.py`):
 

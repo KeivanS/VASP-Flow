@@ -36,12 +36,13 @@
 │ Convergence: Test k-points 6x6x6 to 12x12x12                                 │
 │              ENCUT 400-600 eV                                                 │
 │                                                                               │
-│ MAGMOM: 4.0          initial moment per atom (μB), collinear only            │
+│ MAGMOM: 4.0          initial moment per atom (μB); also -4.0, Fe=4.0 O=0.6,  │
 │ ISIF: 3              relaxation type (3=full, 2=ions only, 4=fixed vol)      │
 │ NSW: 100             max ionic steps                                          │
 │ EDIFFG: -0.01        force convergence criterion (eV/Å)                      │
 │ ENCUT: 520           manual ENCUT override (eV)                              │
-│ KMESH_DENSITY: fine  automatic k-mesh tier (coarse=1000 kpra / fine=5000)   │
+│ KMESH_DENSITY: fine  k-mesh density: coarse=1000 / fine=5000 / any integer   │
+│ RELAX_KMESH_DENSITY: fine   relaxation mesh (default coarse)                 │
 │ KMESH: 8 8 8         explicit Gamma-mesh overriding KMESH_DENSITY            │
 │ NKPTS: 60            k-points per band segment                               │
 │ MPI: 128             total MPI tasks                                         │
@@ -49,16 +50,18 @@
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ AUTOMATIC K-MESH (kpra) ─────────────────────────────────────────────────────┐
-│ Two density tiers — select via KMESH_DENSITY: coarse | fine                  │
-│   coarse  1000 kpra   relaxation and convergence tests                        │
-│   fine    5000 kpra   SCF, DOS, DFPT, LOBSTER, Wannier90                     │
-│ kpra = Nx×Ny×Nz × N_atoms                                                    │
-│ Subdivisions: Ni ∝ |b_i*| (reciprocal lattice vector norms), all even        │
-│ DOS mesh: always 2Nx × 2Ny × 2Nz (twice the SCF mesh)                       │
-│ DFPT mesh: forced equal to SCF mesh                                           │
-│ Hexagonal cells (a=b, γ=120°): Nx=Ny=6 (coarse) or 12 (fine); Nz from |b3*| │
-│ 2-D slabs: Nz=1 always                                                       │
-│ Explicit KMESH overrides KMESH_DENSITY for all steps                         │
+│ Density (KMESH_DENSITY / KPOINTS_DENSITY / KPRA):  coarse | fine | <integer>  │
+│   coarse  1000 kpra   relaxation (RELAX_KMESH_DENSITY), convergence tests     │
+│   fine    5000 kpra   SCF, DOS, DFPT, LOBSTER, Wannier90  (default)           │
+│   3000    any integer is taken as the kpra target directly                    │
+│ kpra = Nx×Ny×Nz × N_atoms.  Ni ∝ |b_i*|, all EVEN, chosen so the k-point      │
+│ count lands as close to the target as possible (no round-up overshoot).       │
+│ Axes with equal |b_i*| (cubic, tetragonal, hexagonal) always get equal Ni.    │
+│ Applies to ALL cells, hexagonal included; 2-D slabs: Nz=1, in-plane mesh      │
+│ Hexagonal lattices (a=b, γ=120°): in-plane N = multiple of 6 (6, 12, 18…).    │
+│ carries the whole target.  Each KPOINTS header reports the kpra reached.      │
+│ DOS, LOBSTER: 2× the SCF mesh.  DFPT, Wannier: = SCF mesh.  Phonons: coarse.  │
+│ Precedence: KPOINTS <step>: block > KMESH: n1 n2 n3 > density tier            │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ DEFAULT HUBBARD U (automatic GGA+U) ─────────────────────────────────────────┐
@@ -95,10 +98,21 @@
 │      NELMIN = 6                                                                │
 │   END_INCAR                                                                    │
 │                                                                               │
-│   INCAR scf:             ← per-step block (relax/scf/bands/dos/wannier/       │
-│      EDIFF = 1E-8           dfpt/phonons/lobster)                              │
+│   INCAR scf:             ← per-step block (relax/scf/bands/dos/wannier/        │
+│      EDIFF = 1E-8           dfpt/phonons/lobster);  INCAR_SCF: also accepted   │
 │   END_INCAR                                                                    │
-│                                                                               │
+│                                                                                │
+│   KPOINTS scf:           ← a complete KPOINTS file, written UNCHANGED          │
+│      SCF mesh               (line 1 = comment; steps as above; the unnamed     │
+│      0                       block covers every step except bands)             │
+│      Gamma                                                                     │
+│      9 9 5                  DOS/LOBSTER (2×) and DFPT/Wannier (1×) follow an   │
+│      0 0 0                  explicit SCF mesh.  The file is never touched by   │
+│   END_KPOINTS               the convergence phase-2 k-mesh patching.           │
+│                                                                                │
+│   Blocks OVERRIDE everything else (keywords, KMESH, density, auto KPAR).       │
+│   KPAR/NCORE inside an INCAR block also steer the companion value.             │
+│                                                                                │
 │ 2) Command line (both agents; repeatable; ';' separates tags):                │
 │   --incar "TAG=VAL; TAG2=VAL"          all steps                              │
 │   --incar "scf:NBANDS=64"              one step only                          │
@@ -127,12 +141,17 @@
 │                                                                               │
 │   Generated INCAR:  ISPIN = 2  /  MAGMOM = N*4.0  /  LORBIT = 11            │
 │                                                                               │
-│   For antiferromagnets — edit INCAR manually after generation:               │
-│     MAGMOM = 4.0 -4.0 4.0 -4.0   (alternating per sublattice)               │
+│   MAGMOM forms (any of them switches ISPIN=2 on):                            │
+│     MAGMOM: 4.0 | -3.0        uniform, sign kept                             │
+│     MAGMOM: Fe=4.0, O=0.6     per element (unlisted elements get 0)          │
+│     MAGMOM: 2*4.0 2*-4.0      per atom, POSCAR order, n*value shorthand      │
+│   Antiferromagnets: use the per-atom list, e.g. MAGMOM: 4.0 -4.0 4.0 -4.0    │
 │                                                                               │
 │ Spin-orbit coupling (non-collinear, uses vasp_ncl):                          │
 │   Methods: SOC with magnetization in z-direction                              │
 │   Methods: SOC with magnetization in x-direction                              │
+│   MAGMOM as above is rotated onto that direction (x y z per atom); a list of │
+│   3N numbers is taken as the raw components.                                  │
 │                                                                               │
 │ Typical initial moments (μB):                                                 │
 │   Fe, Co: 4–5    Ni: 2    Cr, Mn: 3–4    rare earths: 7                     │

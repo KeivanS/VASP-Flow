@@ -118,3 +118,8 @@ manual.aux
 manual.log
 manual.out
 manual.toc
+
+# high-throughput sets and parked bundles (large, regenerable)
+highthroughput_*/
+highthroughput_*.tar.gz
+superseded_bundles/

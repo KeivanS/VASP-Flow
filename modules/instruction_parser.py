@@ -8,6 +8,28 @@ import re
 import sys
 from typing import Dict, List, Any
 
+# Steps that accept an explicit `INCAR <step>:` / `KPOINTS <step>:` block.
+BLOCK_STEPS = ('relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons',
+               'lobster')
+
+def _make_block_re(name: str):
+    """Regex for a block   NAME[ step]:  ...  END_NAME   (header/step optional).
+
+    Accepted headers:  `INCAR:`  `INCAR scf:`  `INCAR_SCF:`  (same for KPOINTS);
+    terminator: END_INCAR / END INCAR (END_KPOINTS / END KPOINTS).
+    """
+    return re.compile(
+        r'^[ \t]*' + name + r'(?:[ \t_]+([A-Za-z]+))?[ \t]*:[ \t]*\n'
+        r'(.*?)'
+        r'^[ \t]*END[ _]?' + name + r'[ \t]*$',
+        re.IGNORECASE | re.DOTALL | re.MULTILINE)
+
+_BLOCK_RES = {'INCAR': _make_block_re('INCAR'),
+              'KPOINTS': _make_block_re('KPOINTS')}
+
+_NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
+
+
 class InstructionParser:
     """Parse natural language instructions for VASP calculations"""
     
@@ -20,18 +42,34 @@ class InstructionParser:
         """Parse the instruction file"""
         with open(self.instruction_file, 'r') as f:
             raw = f.read()
+        # Explicit INCAR / KPOINTS blocks are pulled from the RAW text (a
+        # KPOINTS block may legitimately begin with a '#' comment line, which
+        # is line 1 of the file and must not be lost).
+        self._raw_text = raw
+        incar_raw   = self._extract_incar_raw(raw)
+        kpoints_raw = self._extract_kpoints_raw(raw)
+
         # Drop full-line comments BEFORE the regex scan: a task keyword inside
         # a comment (e.g. "# steps: relax, wannier, phonons") must not enable
-        # that task. INCAR blocks are unaffected (their comment lines carry no
-        # tag and are skipped by the override merge anyway).
+        # that task.
         content = '\n'.join(l for l in raw.splitlines()
                             if not l.lstrip().startswith('#'))
+        # Blank out the explicit blocks before scanning for keywords: a
+        # "KPAR = 4" or "ENCUT = 520" inside an `INCAR scf:` block belongs to
+        # that step only and must not leak into the global settings (and the
+        # words "Gamma"/"Monkhorst" in a KPOINTS block must not trigger
+        # geometry hints).  The blocks themselves are applied by the generator.
+        content = _BLOCK_RES['INCAR'].sub('', content)
+        content = _BLOCK_RES['KPOINTS'].sub('', content)
+        magmom = self._extract_magmom(content)
 
         self.instructions = {
             'project_name':   self._extract_project_name(content),
             'functional':     self._extract_functional(content),
             'soc':            self._extract_soc(content),
-            'magnetization':  self._extract_magnetization(content),
+            'magnetization':  self._extract_magnetization(content, magmom),
+            # Initial magnetic moments: None, or a spec dict (see _extract_magmom)
+            'magmom':         magmom,
             'gga_u':          self._extract_gga_u(content),
             'gga_u_auto':     self._extract_gga_u_auto(content),
             'tasks':          self._extract_tasks(content),
@@ -90,19 +128,25 @@ class InstructionParser:
             'ediffg':         self._extract_float_key(content, r'EDIFFG\s*[:,=]\s*([-\d.Ee]+)', default=None),
             # Direct ENCUT value (not a range — requires = or :)
             'encut_val':      self._extract_int_key(content, r'ENCUT\s*[:,=]\s*(\d+)', default=None),
-            # Collinear magnetization: default moment per atom (μB)
-            'mag_moment':     self._extract_float_key(content, r'MAGMOM\s*[:,=]\s*([\d.]+)', default=2.0),
+            # Uniform initial moment per atom (μB); 2.0 unless MAGMOM gives a
+            # single number.  (Per-element / per-atom specs live in 'magmom'.)
+            'mag_moment':     (magmom['value'] if magmom and magmom['kind'] == 'uniform'
+                               else 2.0),
             # Band structure resolution
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
-            # k-mesh density tier: 'coarse' (1000 kpra) | 'fine' (5000 kpra)
+            # k-mesh density: 'coarse' (1000 kpra) | 'fine' (5000 kpra) | int kpra
             'kmesh_density':  self._extract_kmesh_density(content),
+            # Relaxation mesh density (default: coarse, whatever the SCF uses)
+            'relax_kmesh_density': self._extract_relax_kmesh_density(content),
             # Explicit auto-mesh override, e.g. "KMESH: 8 8 8" or "KMESH: 12"
             'kmesh':          self._extract_kmesh(content),
             # Constant-pressure relaxation (ISIF=3, IBRION=2, PSTRESS)
             'pressure':       self._extract_pressure(content),
             # Raw INCAR tags passed straight through (global + per-step)
-            'incar_raw':      self._extract_incar_raw(content),
+            'incar_raw':      incar_raw,
+            # Verbatim KPOINTS files (global + per-step); override everything
+            'kpoints_raw':    kpoints_raw,
         }
 
     def _extract_str_key(self, content: str, pattern: str, default=None):
@@ -162,13 +206,70 @@ class InstructionParser:
         """Check if SOC is requested"""
         return bool(re.search(r'\bSOC\b', content, re.IGNORECASE))
     
-    def _extract_magnetization(self, content: str) -> Dict[str, Any]:
-        """Extract magnetization direction"""
+    def _extract_magmom(self, content: str):
+        """Parse the `MAGMOM:` line into a spec dict, or None if absent.
+
+        Accepted right-hand sides (VASP conventions; negative values allowed):
+
+            MAGMOM: 4.0                    -> uniform: every atom 4.0 μB
+            MAGMOM: -3.0                   -> uniform, antiparallel sign kept
+            MAGMOM: Fe=4.0, Cr=-3.0, O=0.6 -> per element (also `Fe:4.0`, `Fe 4.0`);
+                                              elements not listed get 0.0
+            MAGMOM: 2*4.0 2*-4.0 4*0.6     -> explicit per-atom list in POSCAR
+                                              order (`n*value` shorthand);
+                                              length must equal the atom count
+                                              (3 x atoms for SOC vectors)
+
+        Returns {'kind': 'uniform'|'elements'|'list', 'value'|'values': ..., 'raw': str}.
+        Any MAGMOM line also switches spin polarisation on.
+        """
+        m = re.search(r'\bMAGMOM\s*[:=]\s*([^\n]*)', content, re.IGNORECASE)
+        if not m:
+            return None
+        txt = re.split(r'[#!]', m.group(1))[0].strip()
+        if not txt:
+            return None
+        return self._parse_magmom(txt)
+
+    @staticmethod
+    def _parse_magmom(txt: str) -> Dict[str, Any]:
+        toks = [t for t in re.split(r'[,\s;]+', txt) if t]
+        num_tok = re.compile(r'^(?:\d+\*)?' + _NUM + r'$')
+        if toks and all(num_tok.match(t) for t in toks):
+            if len(toks) == 1 and '*' not in toks[0]:
+                return {'kind': 'uniform', 'value': float(toks[0]), 'raw': txt}
+            vals = []
+            for t in toks:
+                if '*' in t:
+                    n, v = t.split('*', 1)
+                    vals += [float(v)] * int(n)
+                else:
+                    vals.append(float(t))
+            return {'kind': 'list', 'values': vals, 'raw': txt}
+        pair = r'([A-Za-z]{1,2})\s*[=:]?\s*(' + _NUM + r')'
+        pairs = re.findall(pair, txt)
+        leftover = re.sub(pair, '', txt)
+        if pairs and not re.search(r'[A-Za-z0-9]', leftover):
+            return {'kind': 'elements',
+                    'values': {el.capitalize(): float(v) for el, v in pairs},
+                    'raw': txt}
+        raise ValueError(
+            f"Cannot parse MAGMOM specification {txt!r}.  Use a single number "
+            f"(MAGMOM: 4.0), per-element values (MAGMOM: Fe=4.0, O=0.6) or an "
+            f"explicit per-atom list (MAGMOM: 2*4.0 2*-4.0).")
+
+    def _extract_magnetization(self, content: str, magmom=None) -> Dict[str, Any]:
+        """Extract magnetization switch and direction.
+
+        Magnetism is on if the text mentions it ("collinear magnetization",
+        "SOC with magnetization in z-direction") OR a MAGMOM line is given —
+        a MAGMOM without spin polarisation would be meaningless.
+        """
         mag_info = {'enabled': False, 'direction': None}
-        
-        if re.search(r'magnet', content, re.IGNORECASE):
+
+        if re.search(r'magnet', content, re.IGNORECASE) or magmom:
             mag_info['enabled'] = True
-            
+
             # Check for direction
             if re.search(r'z-direction|magnetization\s+in\s+z', content, re.IGNORECASE):
                 mag_info['direction'] = 'z'
@@ -231,7 +332,11 @@ class InstructionParser:
                         'bonding analysis'],
         }
 
-        content_lower = content.lower()
+        # Per-step parameter keys (RELAX_KPAR, SCF_NCORE, DOS_KPAR,
+        # RELAX_KMESH_DENSITY, ...) name a step but do not request it.
+        content_lower = re.sub(
+            r'^[ \t]*(?:relax|scf|bands?|dos|dfpt|phonons?)_[a-z_]+[ \t]*[:=].*$',
+            '', content.lower(), flags=re.MULTILINE)
         for task, keywords in task_keywords.items():
             if any(kw in content_lower for kw in keywords):
                 tasks.append(task)
@@ -389,16 +494,38 @@ class InstructionParser:
             'nac':  not nac_false,
         }
 
-    def _extract_kmesh_density(self, content: str) -> str:
-        """Parse k-mesh density tier: 'coarse' (1000 kpra) or 'fine' (5000 kpra).
+    @staticmethod
+    def _density_value(s: str):
+        s = s.strip().lower()
+        return int(s) if s.isdigit() else s
 
-        Recognised forms (case-insensitive):
-            KMESH_DENSITY: coarse    KMESH_DENSITY = fine
-        Returns 'fine' by default.
+    def _extract_kmesh_density(self, content: str):
+        """Parse the automatic k-mesh density (k-points per reciprocal atom).
+
+        Recognised forms (case-insensitive), value = coarse | fine | <integer>:
+            KMESH_DENSITY: coarse      KMESH_DENSITY = fine
+            KPOINTS_DENSITY: 3000      KPRA: 3000
+            KPOINTS: fine              KMESH: coarse
+        coarse = 1000 kpra, fine = 5000 kpra, an integer is used as the kpra
+        target directly.  Returns 'fine' by default.  (`KMESH: 8 8 8` is the
+        separate explicit-mesh override, and a `KPOINTS <step>:` block is an
+        explicit file; neither is confused with this key.)
         """
-        m = re.search(r'\bKMESH_DENSITY\s*[:=]\s*(coarse|fine)\b',
+        m = re.search(r'\bK[-_ ]?(?:POINTS?|MESH)[-_ ]?DENSITY\s*[:=]\s*(coarse|fine|\d+)\b',
                       content, re.IGNORECASE)
-        return m.group(1).lower() if m else 'fine'
+        if not m:
+            m = re.search(r'(?<![\w])KPRA\s*[:=]\s*(\d+)\b', content, re.IGNORECASE)
+        if not m:
+            m = re.search(r'\bK(?:POINTS?|MESH)\s*[:=]\s*(coarse|fine)\b',
+                          content, re.IGNORECASE)
+        return self._density_value(m.group(1)) if m else 'fine'
+
+    def _extract_relax_kmesh_density(self, content: str):
+        """Density for the relaxation mesh: `RELAX_KMESH_DENSITY: coarse|fine|N`.
+        None (=> coarse, 1000 kpra) when not given."""
+        m = re.search(r'\bRELAX_(?:K(?:POINTS?|MESH)_)?DENSITY\s*[:=]\s*(coarse|fine|\d+)\b',
+                      content, re.IGNORECASE)
+        return self._density_value(m.group(1)) if m else None
 
     def _extract_kmesh(self, content: str):
         """Extract an explicit Gamma-mesh override for the automatic KPOINTS.
@@ -469,6 +596,49 @@ class InstructionParser:
                      'unit': unit_label, 'pstress_kbar': pstress})
         return info
 
+    def _extract_kpoints_raw(self, raw_text: str) -> dict:
+        """Extract explicit KPOINTS files written verbatim in the instructions.
+
+        Same block syntax as the INCAR blocks; the body is a normal VASP
+        KPOINTS file and is written unchanged (it OVERRIDES every automatic
+        mesh, KMESH and the density tier for that step):
+
+            KPOINTS scf:                # or  KPOINTS_SCF:
+                SCF mesh
+                0
+                Gamma
+                10 10 10
+                0 0 0
+            END_KPOINTS
+
+            KPOINTS:                    # no name = every step except bands
+                ...
+            END_KPOINTS
+
+        Steps: relax, scf, bands, dos, wannier, dfpt, phonons, lobster.
+        The first line of the body is the KPOINTS comment line; if it is
+        missing (the body starts with the "0" / count line) one is inserted.
+        Returns {'all'|<step>: 'file text'}.  A later block for the same step
+        replaces an earlier one.
+        """
+        import textwrap
+        out = {}
+        for m in _BLOCK_RES['KPOINTS'].finditer(raw_text):
+            name = (m.group(1) or 'all').lower()
+            if name != 'all' and name not in BLOCK_STEPS:
+                name = 'all'
+            lines = textwrap.dedent(m.group(2)).splitlines()
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if not lines:
+                continue
+            first = lines[0].strip()
+            if (re.fullmatch(r'\d+', first) and len(lines) > 1
+                    and re.match(r'[GgMmCcKkAa]', lines[1].strip() or ' ')):
+                lines.insert(0, 'Explicit KPOINTS (instructions file)')
+            out[name] = '\n'.join(l.rstrip() for l in lines) + '\n'
+        return out
+
     def _extract_incar_raw(self, content: str) -> dict:
         """Extract raw INCAR tag blocks written in normal VASP syntax.
 
@@ -486,23 +656,19 @@ class InstructionParser:
                 SIGMA = 0.1
             END_INCAR
 
-        Recognised step names: relax, scf, bands, dos, wannier, dfpt, phonons
-        (a block with no name, or named 'all', applies to all steps).
+        Recognised step names: relax, scf, bands, dos, wannier, dfpt, phonons,
+        lobster (a block with no name, or named 'all', applies to all steps).
+        `INCAR_SCF:` is accepted as well as `INCAR scf:`.  The tags in these
+        blocks OVERRIDE everything the generator or the other keywords set.
 
         Returns a dict mapping 'all'/<step> -> list of raw 'TAG = value' lines.
         Lines that don't look like INCAR assignments are ignored; inline
         comments (after the value) are preserved.
         """
-        valid_steps = {'relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons'}
+        valid_steps = set(BLOCK_STEPS)
         raw = {}
 
-        block_re = re.compile(
-            r'^[ \t]*INCAR(?:[ \t_]+([A-Za-z]+))?[ \t]*:[ \t]*\n'
-            r'(.*?)'
-            r'^[ \t]*END[ _]?INCAR[ \t]*$',
-            re.IGNORECASE | re.DOTALL | re.MULTILINE)
-
-        for m in block_re.finditer(content):
+        for m in _BLOCK_RES['INCAR'].finditer(content):
             name = (m.group(1) or 'all').lower()
             if name != 'all' and name not in valid_steps:
                 # unknown qualifier → treat as global so the tags aren't lost
