@@ -43,6 +43,8 @@ Typical use
     ./ht-semimetals.py --list lists/semimetals_test.txt  --out highthroughput_test
     ./ht-semimetals.py --list lists/semimetals_full.txt  --out highthroughput_full
 
+Add  --kpra 8000 --single-node  for the semimetal production settings
+(k-point density 8000, one 40-core node per material).
 The three runs are identical in every setting; only the --list file (the
 materials) differs.  To try a different subset, write a new list file rather
 than passing ad-hoc overrides, so the run stays reproducible from its list.
@@ -63,6 +65,7 @@ import sys
 import numpy as np
 
 REPO_DIR    = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(REPO_DIR, 'modules'))
 AGENT_SLURM = os.path.join(REPO_DIR, 'vasp-agent-slurm.py')
 
 # ── defaults ────────────────────────────────────────────────────────────────
@@ -232,7 +235,7 @@ def magmom_string(struct):
 
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
                        ntasks_per_node, walltime, partition, account,
-                       functional='PBE'):
+                       functional='PBE', kpra=None):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
 
     Task keywords are matched as substrings over the whole file by
@@ -249,9 +252,12 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "Tasks: SCF calculation, band structure, "
         "dielectric tensor and Born effective charges, LOBSTER COHP/COBI analysis",
         "",
-        "# Gamma-centred mesh with N_i proportional to |b_i*|, i.e. N_i * a_i is",
-        f"# constant across the three axes (k-spacing {KSPACING} A^-1).",
-        f"KMESH: {nx} {ny} {nz}",
+        *(["# k-point density: even N_i proportional to |b_i*| (uniform k-space",
+           f"# spacing), N1*N2*N3*N_atoms as close to {kpra} as possible.",
+           f"KMESH_DENSITY: {kpra}"] if kpra else
+          ["# Gamma-centred mesh with N_i proportional to |b_i*|, i.e. N_i * a_i is",
+           f"# constant across the three axes (k-spacing {KSPACING} A^-1).",
+           f"KMESH: {nx} {ny} {nz}"]),
         f"ENCUT: {encut}",
         "",
         "# ELF is on by default in this repo, and LELF forces KPAR = 1 -- which",
@@ -885,7 +891,11 @@ When it finishes, check:
     grep -A 20 "MACROSCOPIC STATIC DIELECTRIC TENSOR" 06_dfpt/OUTCAR
     head -30 08_lobster/ICOHPLIST.lobster
 
-## 5. Submit the screen
+## 5. Submit the screen (SLURM)
+
+Each material is one SLURM job (`materials/<id>/job.sbatch`); `submit_all.sh`
+calls `sbatch` on them, keeping at most MAX_QUEUED in the queue.  Single material:
+`cd materials/<id> && sbatch job.sbatch`.
 
     ./submit_all.sh              # throttled to MAX_QUEUED=50 concurrent jobs
     MAX_QUEUED=100 ./submit_all.sh
@@ -921,7 +931,7 @@ steps whose OUTCAR already carries the final timing block.
   coarser mesh for that step alone, which I can regenerate.
 
       grep "Elapsed time" materials/@FIRST@/0*/OUTCAR
-* **k-mesh.**  Fixed spacing of @KSPACING@ A^-1 per material, even subdivisions
+* **k-mesh.**  @KMESH_NOTE@ Even subdivisions
   so the BZ boundary is always sampled.  The LOBSTER NSCF is capped at 1x the
   SCF mesh because ISYM=0 means it pays for the full mesh, not the irreducible
   wedge.
@@ -1003,7 +1013,10 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
         'README_HPC.md': (README_HPC
                           .replace('@HTDIR@',   os.path.basename(htdir))
                           .replace('@FIRST@',    first_id)
-                          .replace('@KSPACING@', str(args.kspacing))),
+                          .replace('@KMESH_NOTE@',
+                                   (f'k-point density {args.kpra} k-points per reciprocal atom '
+                                    '(N_i proportional to |b_i*|, uniform spacing).') if args.kpra else
+                                   f'Fixed spacing of {args.kspacing} A^-1 per material.')),
     }
     for name, text in files.items():
         p = os.path.join(htdir, name)
@@ -1050,6 +1063,13 @@ def main():
     ap.add_argument('-o', '--out', required=True, help='highthroughput directory to create')
     ap.add_argument('--kspacing', type=float, default=KSPACING,
                     help=f'k-point spacing in A^-1 (default {KSPACING})')
+    ap.add_argument('--kpra', type=int, default=None,
+                    help='k-point density in k-points per reciprocal atom (e.g. 8000); '
+                         'replaces --kspacing.  Mesh rule: even N_i proportional to |b_i*|, '
+                         'in-plane multiples of 6 for hexagonal lattices.')
+    ap.add_argument('--single-node', action='store_true',
+                    help='every material runs on ONE node with --cores-per-node cores on '
+                         '--partition (walltime still tiered by size); no multi-node tier')
     ap.add_argument('--max-atoms', type=int, default=MAX_ATOMS,
                     help=f'skip primitive cells with more atoms (default {MAX_ATOMS})')
     ap.add_argument('--cores-per-node', type=int, default=CORES_PER_NODE)
@@ -1094,7 +1114,7 @@ def main():
     print(f"  account    : {args.account}   partition: {args.partition}\n")
 
     metas, ok, skipped, failed = {}, [], [], []
-    manifest = {'kspacing': args.kspacing, 'potcar_dir_local': potcar_dir,
+    manifest = {'kspacing': args.kspacing, 'kpra': args.kpra, 'potcar_dir_local': potcar_dir,
                 'materials': {}}
 
     for n, mp_id in enumerate(ids, 1):
@@ -1133,17 +1153,23 @@ def main():
             failed.append(mp_id)
             continue
 
-        mesh    = kmesh_from_lattice(struct['A'], args.kspacing)
+        if args.kpra:
+            from vasp_input_generator import VASPInputGenerator
+            mesh = tuple(VASPInputGenerator(poscar, {})._compute_mesh(args.kpra))
+        else:
+            mesh = kmesh_from_lattice(struct['A'], args.kspacing)
         nk_full = mesh[0] * mesh[1] * mesh[2]
+        tiers = ([(b, 1, args.cores_per_node, wt, args.partition)
+                  for b, _n, _c, wt, _p in TIERS] if args.single_node else None)
         nodes, ntpn, walltime, partition, W = size_job(
-            pinfo['nelect'], nk_full, max_nodes=args.max_nodes)
+            pinfo['nelect'], nk_full, tiers=tiers, max_nodes=args.max_nodes)
 
         formula = ''.join(f"{el}{cnt if cnt > 1 else ''}"
                           for el, cnt in zip(struct['species'], struct['counts']))
 
         write_instructions(os.path.join(stage, 'instructions.txt'), mp_id,
                            struct, mesh, pinfo['encut'], nodes, ntpn, walltime,
-                           partition, args.account, args.functional)
+                           partition, args.account, args.functional, kpra=args.kpra)
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
         env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir)
@@ -1178,6 +1204,12 @@ def main():
         }
         if not args.include_potcars:
             strip_potcars(proj)
+
+        # The agent also writes a per-material submit_all.sh chaining its own step
+        # scripts; job.sbatch (below) is the single entry point here, so drop it.
+        _sa = os.path.join(proj, 'submit_all.sh')
+        if os.path.exists(_sa):
+            os.remove(_sa)
 
         # Local copies so the cluster side is self-describing.
         shutil.copy(os.path.join(stage, 'instructions.txt'), proj)
