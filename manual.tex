@@ -586,7 +586,65 @@ Option & Meaning \\ \midrule
   the cell-aware coarse (1000~kpra) density is used.  Per-material overrides
   via the \texttt{KMESH} or \texttt{KMESH\_DENSITY} line in
   \texttt{instructions.txt}. \\
+\texttt{-{}-kpra} & k-point density instead of \texttt{-{}-kmesh}:
+  \texttt{coarse} (1000), \texttt{fine} (5000) or an integer
+  (e.g.\ \texttt{8000}). \\
+\texttt{-{}-ncore} & Force \texttt{NCORE} in the SCF INCAR.  \texttt{KPAR}
+  stays 1 because ELF (\texttt{LELF}) requires it. \\
+\texttt{-{}-nodes}, \texttt{-{}-ntasks-per-node}, \texttt{-{}-partition},
+  \texttt{-{}-walltime}, \texttt{-{}-account} & SLURM overrides written into
+  each \texttt{instructions.txt}. \\
 \texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM only; see below. \\
+\bottomrule
+\end{tabularx}
+
+\begin{lstlisting}[language=bash]
+# example: SLURM, 1 node x 40 cores, density 8000, NCORE=2
+./ht-mp-scf.py --agent slurm --nodes 1 --ntasks-per-node 40 \
+    --kpra 8000 --ncore 2 --walltime 12:00:00 --account elmgroup
+\end{lstlisting}
+
+\subsection{Semimetal screen: \texttt{ht-semimetals.py}}
+\label{sec:ht-semimetals}
+
+\texttt{ht-semimetals.py} builds a complete SLURM-ready
+\texttt{highthroughput\_*} directory (SCF $\to$ bands $\to$ DFPT $\to$
+LOBSTER, one \texttt{job.sbatch} per material) from a list file such as
+\texttt{lists/semimetals\_test.txt}.  It reuses \texttt{ht-mp-scf.py} and
+\texttt{modules/}, so run it from a clone of the repository (\texttt{git pull}
+first) on a machine with internet access, \texttt{pymatgen}, \texttt{mp-api},
+a Materials Project key and the POTCAR library:
+
+\begin{lstlisting}[language=bash]
+pip install pymatgen mp-api spglib
+export MP_API_KEY=...                  # real key (materialsproject.org/api)
+export VASP_POTCAR_DIR=/path/to/potpaw_PBE
+
+python3 ./ht-semimetals.py --list lists/semimetals_test.txt \
+    --out highthroughput_test --api-key "$MP_API_KEY" \
+    --kpra 8000 --single-node --kpar 20 --ncore 2
+
+cd highthroughput_test && ./submit_all.sh   # throttled sbatch of all jobs
+./status.sh                                 # progress
+./retune.sh --time 06:00:00                 # change walltime in place
+\end{lstlisting}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Option & Meaning \\ \midrule
+\texttt{-{}-list}, \texttt{-{}-out} & Input list (one mp-id per line) and
+  output directory. \\
+\texttt{-{}-kpra N} & k-points per reciprocal atom; overrides
+  \texttt{-{}-kspacing}. \\
+\texttt{-{}-single-node} & Every material on one node with
+  \texttt{-{}-cores-per-node} (default 40) ranks. \\
+\texttt{-{}-kpar}, \texttt{-{}-ncore} & Force \texttt{KPAR}/\texttt{NCORE} in
+  the SCF, bands and LOBSTER INCARs (default: automatic); DFPT always uses
+  KPAR = NCORE = 1. \\
+\texttt{-{}-max-atoms}, \texttt{-{}-max-nodes} & Size filters/limits. \\
+\texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-modules},
+  \texttt{-{}-vasp-std}, \texttt{-{}-lobster-bin},
+  \texttt{-{}-hpc-potcar-dir} & Cluster settings. \\
 \bottomrule
 \end{tabularx}
 

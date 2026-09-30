@@ -171,7 +171,7 @@ def write_poscar(structure, path):
 
 
 def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=None,
-                       lobster=True):
+                       lobster=True, kpra=None, ncore=None):
     """Write a minimal SCF+ELF instructions.txt for one material."""
     tasks = "SCF calculation" + (", LOBSTER COHP/COBI analysis" if lobster else "")
     lines = [
@@ -189,9 +189,14 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=No
         "",
         f"MPI: {mpi}",
     ]
-    if kmesh:
+    if kpra:
+        lines.append("# k-point density (kpra): N_i proportional to |b_i*|, uniform spacing")
+        lines.append(f"KMESH_DENSITY: {kpra}")
+    elif kmesh:
         lines.append("# Medium k-mesh by default; edit this line to change density")
         lines.append(f"KMESH: {kmesh}")
+    if ncore:
+        lines.append(f"NCORE: {ncore}")
     if encut:
         lines.append(f"ENCUT: {encut}")
     for key, val in (slurm_opts or {}).items():
@@ -353,6 +358,11 @@ def main():
                     help="SCF Gamma k-mesh, e.g. '8 8 8' or '12' (cubic). "
                          "Default: medium 10x10x10 grid. Edit per material in "
                          "_ht_inputs/<id>/instructions.txt, or override here.")
+    ap.add_argument('--kpra', default=None,
+                    help="k-point density instead of --kmesh: 'coarse' (1000), 'fine' "
+                         "(5000) or an integer k-points per reciprocal atom, e.g. 8000")
+    ap.add_argument('--ncore', type=int, default=None,
+                    help="force NCORE in the SCF INCAR (KPAR stays 1: ELF needs it)")
     ap.add_argument('--profile', default='slurm',
                     help="agent profile name (SLURM); default 'slurm'")
     ap.add_argument('--chain', dest='chain', action='store_true', default=True,
@@ -408,7 +418,8 @@ def main():
         write_poscar(structure, os.path.join(d, 'POSCAR'))
         write_instructions(os.path.join(d, 'instructions.txt'),
                            mp_id, args.functional, args.mpi, args.encut, slurm_opts,
-                           kmesh=args.kmesh, lobster=args.lobster)
+                           kmesh=args.kmesh, lobster=args.lobster,
+                           kpra=args.kpra, ncore=args.ncore)
         nat = len(structure)
         els = sorted({str(s) for s in structure.composition.elements},
                      key=lambda s: ELEMENT_Z.get(s, 999))

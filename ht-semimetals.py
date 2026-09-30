@@ -235,7 +235,7 @@ def magmom_string(struct):
 
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
                        ntasks_per_node, walltime, partition, account,
-                       functional='PBE', kpra=None):
+                       functional='PBE', kpra=None, kpar=None, ncore=None):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
 
     Task keywords are matched as substrings over the whole file by
@@ -265,6 +265,8 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "# Turn it back on only if ELFCAR is wanted, and expect a much slower SCF.",
         "ELF: off",
         "",
+        *([f"KPAR: {kpar}"] if kpar else []),
+        *([f"NCORE: {ncore}"] if ncore else []),
         f"NODES: {nodes}",
         f"NTASKS_PER_NODE: {ntasks_per_node}",
         f"WALLTIME: {walltime}",
@@ -1070,6 +1072,11 @@ def main():
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition (walltime still tiered by size); no multi-node tier')
+    ap.add_argument('--kpar', type=int, default=None,
+                    help='force KPAR in the SCF/bands/LOBSTER INCARs (default: auto; '
+                         'DFPT always uses KPAR=NCORE=1)')
+    ap.add_argument('--ncore', type=int, default=None,
+                    help='force NCORE (default: auto; the other value is derived)')
     ap.add_argument('--max-atoms', type=int, default=MAX_ATOMS,
                     help=f'skip primitive cells with more atoms (default {MAX_ATOMS})')
     ap.add_argument('--cores-per-node', type=int, default=CORES_PER_NODE)
@@ -1169,7 +1176,8 @@ def main():
 
         write_instructions(os.path.join(stage, 'instructions.txt'), mp_id,
                            struct, mesh, pinfo['encut'], nodes, ntpn, walltime,
-                           partition, args.account, args.functional, kpra=args.kpra)
+                           partition, args.account, args.functional, kpra=args.kpra,
+                           kpar=args.kpar, ncore=args.ncore)
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
         env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir)
