@@ -119,7 +119,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v2.1 $\cdot$ September 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v2.2 $\cdot$ September 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -1985,14 +1985,20 @@ Band plot empty or not shown &
     New \texttt{ELF: separate}: SCF at full KPAR, then a short KPAR = 1
     restart writes ELFCAR (default in \texttt{ht-mp-scf.py}, which also gains
     \texttt{-{}-kpra} (default coarse), \texttt{-{}-kpar}, \texttt{-{}-ncore}).
+    \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
+    built automatically.
+  \item[\textcolor{mainblue}{v2.2} (2026-09-30)]
+    \textit{Relax-first high throughput; results viewer.}
     \texttt{ht-mp-scf.py}: \texttt{01\_relax} (IBRION = 2, ISIF = 3) before
     the SCF by default (\texttt{-{}-no-relax}, \texttt{-{}-relax-kpra}); SLURM
     chaining now submits every step of a material, not only the SCF.
-    \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
-    built automatically, DFPT step removed; each job runs \texttt{analyze.sh}
-    at the end (\texttt{ANALYSIS\_PYTHON} in \texttt{env.sh}), plus
-    \texttt{analyze\_all.sh}.  GUI: \textbf{Open results folder} views jobs run elsewhere and draws
-    missing plots; \texttt{collect\_results.sh} keeps the per-step layout.
+    \texttt{ht-semimetals.py}: DFPT step removed; each job runs
+    \texttt{analyze.sh} at the end (\texttt{ANALYSIS\_PYTHON} in
+    \texttt{env.sh}), plus \texttt{analyze\_all.sh}; \texttt{collect\_results.sh}
+    keeps the per-step layout.  GUI: \textbf{Open results folder} views jobs
+    run elsewhere and draws missing plots; SCF/NSCF steps show as done when
+    VASP finished.  NumPy~2 fix (\texttt{np.trapz} $\to$ \texttt{np.trapezoid})
+    in the COHP plot and LOBSTER post-processing.
 \end{description}
 
 % ============================================================
