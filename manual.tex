@@ -409,6 +409,42 @@ OUTCAR analysis & Energy, Fermi level, magnetic moment, forces. \\
 \bottomrule
 \end{tabularx}
 
+\subsection{Viewing results of jobs run elsewhere}
+\label{sec:open-results}
+
+The GUI can show the results of calculations it did not set up or run ---
+a finished cluster job, a whole high-throughput screen, or the small tarball
+from \texttt{collect\_results.sh}.  On the bar under the tabs, type a path in
+\textbf{Open results folder} and press \textbf{Open}:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Path & What is opened \\ \midrule
+one calculation, e.g.\ \texttt{\ldots/materials/mp-8} & that project (listed as \texttt{mp-8}) \\
+a highthroughput folder, e.g.\ \texttt{\ldots/highthroughput\_test} & every
+  \texttt{materials/<id>} (listed as \texttt{highthroughput\_test\textasciitilde mp-8}, \ldots) \\
+an unpacked \texttt{screen\_results.tar.gz} (\texttt{\ldots/results}) & every
+  \texttt{results/<id>} \\
+\bottomrule
+\end{tabularx}
+
+The opened calculations are added to the project list (marked
+\emph{opened}) and remembered in \texttt{settings.json}; \textbf{Results}
+shows the selected one.  Plots that \texttt{analyze.sh} already wrote to
+\texttt{analysis/} are shown as they are; any that are missing (because
+\texttt{analyze.sh} never ran, or ran without matplotlib) are drawn by the GUI
+from the raw outputs --- bands from \texttt{03\_bands/EIGENVAL}, COHP / COBI /
+COOP and LOBSTER DOS from \texttt{08\_lobster/*.lobster}, ELF from
+\texttt{02\_scf/ELFCAR} --- and saved into \texttt{analysis/}.  Nothing is
+submitted or rerun.  A step counts as done when its OUTCAR shows VASP
+finished (a relaxation must also reach the ionic criterion).
+\textbf{Forget opened} removes them from the list without touching any file.
+
+\texttt{collect\_results.sh} keeps this folder layout (\texttt{02\_scf},
+\texttt{03\_bands}, \texttt{08\_lobster}, \texttt{analysis} per material)
+with trimmed OUTCARs, so the tarball opens directly; set
+\texttt{FULL\_OUTCAR=1} to keep the complete OUTCARs.
+
 % ============================================================
 \section{CLI Agents}
 % ============================================================
@@ -1937,7 +1973,8 @@ Band plot empty or not shown &
     \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
     built automatically, DFPT step removed; each job runs \texttt{analyze.sh}
     at the end (\texttt{ANALYSIS\_PYTHON} in \texttt{env.sh}), plus
-    \texttt{analyze\_all.sh}.
+    \texttt{analyze\_all.sh}.  GUI: \textbf{Open results folder} views jobs run elsewhere and draws
+    missing plots; \texttt{collect\_results.sh} keeps the per-step layout.
 \end{description}
 
 % ============================================================

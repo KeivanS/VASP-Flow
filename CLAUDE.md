@@ -63,6 +63,7 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 | `/api/phonon_plot/<slug>/<ptype>` | GET | Phonon band/DOS plots |
 | `/api/files/<slug>/<step>` | GET | List editable files in step |
 | `/api/file/<slug>/<step>/<filename>` | GET/POST | Read/edit file contents |
+| `/api/open_results` | POST | Register an existing results folder (one job, a highthroughput dir, or an unpacked `results/`) for viewing; stored in `CONFIG['opened_results']` (slug → path), resolved by `_pd()` |
 
 ## Workflow Steps
 

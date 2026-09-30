@@ -56,6 +56,9 @@ CONFIG = {
     'band_ymax':              '4',
     'dos_xmin':               '-6',
     'dos_xmax':               '6',
+    # results folders opened for viewing (slug -> absolute path), e.g. a
+    # highthroughput materials/ tree or a collect_results.sh results/ folder
+    'opened_results':         {},
 }
 
 # ── load saved settings (settings.json in working directory) ──────────────────
@@ -78,7 +81,40 @@ if not _first_run:
 def _slug(name):
     return re.sub(r'[^\w\-]', '_', name.strip()).strip('_') or 'vasp_project'
 
-def _pd(slug):    return os.path.join(CONFIG['projects_dir'], slug)
+def _pd(slug):
+    """Project directory for *slug*: an opened results folder, else a
+    sub-folder of the projects directory."""
+    opened = CONFIG.get('opened_results') or {}
+    if slug in opened:
+        return opened[slug]
+    return os.path.join(CONFIG['projects_dir'], slug)
+
+def _is_project_dir(d):
+    """A calculation folder: holds at least one NN_step sub-folder."""
+    try:
+        return os.path.isdir(d) and any(
+            re.match(r'\d\d_', x) and os.path.isdir(os.path.join(d, x))
+            for x in os.listdir(d))
+    except OSError:
+        return False
+
+def _outcar_tail(path, nbytes=200000):
+    """Last *nbytes* of an OUTCAR (completion markers live at the end)."""
+    try:
+        with open(path, 'rb') as fh:
+            fh.seek(max(0, os.path.getsize(path) - nbytes))
+            return fh.read().decode(errors='replace')
+    except OSError:
+        return ''
+
+def _step_finished(step, txt):
+    """Did this step's VASP run finish successfully?  A relaxation must reach
+    the ionic criterion; a static/NSCF run is done when VASP printed its
+    final timing (or the electronic loop hit EDIFF)."""
+    if step.startswith('01_'):
+        return 'reached required accuracy' in txt
+    return ('reached required accuracy' in txt or 'General timing' in txt
+            or 'aborting loop because EDIFF is reached' in txt)
 
 def _vasprun_complete(path):
     """True if vasprun.xml looks finished (root </modeling> present near EOF).
@@ -680,7 +716,7 @@ def api_status(slug):
     for step in _steps(slug):
         outcar = os.path.join(pd, step, 'OUTCAR')
         out[step] = ('done' if os.path.exists(outcar) and
-                     'reached required accuracy' in Path(outcar).read_text(errors='replace')
+                     _step_finished(step, _outcar_tail(outcar))
                      else 'ran' if os.path.exists(outcar) else 'ready')
     with _jlock:
         for key, info in _jobs.items():
@@ -1545,7 +1581,9 @@ def api_plot(slug, ptype):
     return jsonify(error='Not available yet — run the calculation first'), 404
 
 def _slug_base(slug):
-    return slug
+    """File-name stem for plots: the folder name (so an opened results folder
+    'mp-8' reuses analyze.sh's mp-8_band.png etc.)."""
+    return os.path.basename(os.path.normpath(_pd(slug))) or slug
 
 @app.route('/api/projects')
 def api_projects():
@@ -1573,7 +1611,62 @@ def api_projects():
                                      os.path.join(full, '00_convergence'))})
     except Exception:
         pass
+    seen = {p['slug'] for p in projects}
+    for slug, path in (CONFIG.get('opened_results') or {}).items():
+        if slug not in seen and os.path.isdir(path):
+            projects.append({'slug': slug, 'steps': _steps(slug), 'opened': path,
+                             'has_convergence': os.path.isdir(
+                                 os.path.join(path, '00_convergence'))})
     return jsonify(projects=projects)
+
+
+@app.route('/api/open_results', methods=['POST'])
+def api_open_results():
+    """Register an existing results folder for viewing in the Results tab.
+
+    *path* may be one calculation folder (has 02_scf/ ...), a highthroughput
+    directory (its materials/ or results/ sub-folder is scanned), or any
+    folder whose sub-folders are calculation folders (e.g. the unpacked
+    screen_results.tar.gz).  Plots missing from analysis/ are drawn on
+    demand by /api/plot from the raw outputs.
+    POST {path, clear?} -> {slugs:[...]}.  {clear:true} forgets all.
+    """
+    data = request.json or {}
+    opened = dict(CONFIG.get('opened_results') or {})
+    if data.get('clear'):
+        opened = {}
+    raw = (data.get('path') or '').strip()
+    slugs = []
+    if raw:
+        root = os.path.abspath(os.path.expanduser(raw))
+        if not os.path.isdir(root):
+            return jsonify(error=f'not a folder: {root}'), 404
+        if _is_project_dir(root):
+            found = [root]
+        else:
+            found = []
+            for sub in (root, os.path.join(root, 'materials'), os.path.join(root, 'results')):
+                if os.path.isdir(sub):
+                    found += [os.path.join(sub, x) for x in sorted(os.listdir(sub))
+                              if _is_project_dir(os.path.join(sub, x))]
+        if not found:
+            return jsonify(error='no calculation folders (02_scf, 03_bands, ...) '
+                                 f'found in {root}'), 404
+        tag = _slug(os.path.basename(root))
+        for d in dict.fromkeys(found):
+            name = _slug(os.path.basename(d))
+            slug = name if len(found) == 1 and d == root else f'{tag}~{name}'
+            clash = os.path.isdir(os.path.join(CONFIG['projects_dir'], slug))
+            if clash and os.path.abspath(os.path.join(CONFIG['projects_dir'], slug)) != d:
+                slug = f'{tag}~{name}'
+            opened[slug] = d
+            slugs.append(slug)
+    CONFIG['opened_results'] = opened
+    try:
+        Path(_settings_path).write_text(json.dumps(CONFIG, indent=2))
+    except Exception:
+        pass
+    return jsonify(slugs=slugs)
 
 @app.route('/api/clear_plots/<slug>')
 def api_clear_plots(slug):
@@ -2106,7 +2199,7 @@ def api_summary(slug):
         if energies: info['energy'] = energies[-1]
         fermi = re.findall(r'E-fermi\s*:\s*([-\d.]+)', txt)
         if fermi: info['efermi'] = fermi[-1]
-        info['converged'] = 'reached required accuracy' in txt
+        info['converged'] = _step_finished(step, txt)
         out[step] = info
     return jsonify(out)
 
@@ -2359,7 +2452,18 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
           title="Populate Setup page with this project's settings for editing">✏ Edit &amp; Regenerate</button>
   <button class="btn btn-ghost btn-sm" onclick="resumeProject()"
           title="Jump directly to Workflow page without regenerating">→ Workflow</button>
+  <button class="btn btn-ghost btn-sm" onclick="resumeProject('results')"
+          title="Show the plots of this project (missing plots are drawn from the raw outputs)">📊 Results</button>
   <span id="resume-msg" style="font-size:12px;color:var(--sub);"></span>
+  <span style="flex-basis:100%;height:0;"></span>
+  <span style="color:var(--sub);font-weight:600;">Open results folder:</span>
+  <input id="open-res-path" placeholder="a finished job (…/mp-8), a highthroughput folder, or an unpacked results/ folder"
+         style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:420px;"
+         onkeydown="if(event.key==='Enter')openResults()">
+  <button class="btn btn-primary btn-sm" onclick="openResults()"
+          title="Read the results of an executed job; plots not made by analyze.sh are generated here">📂 Open</button>
+  <button class="btn btn-ghost btn-sm" onclick="openResults(true)"
+          title="Remove all opened results folders from the project list (files are not touched)">Forget opened</button>
 </div>
 
 <main>
@@ -3064,7 +3168,8 @@ async function populateResumeList(){
     projects.forEach(p=>{
       const opt=document.createElement('option');
       opt.value=p.slug;
-      opt.textContent=`${p.slug}  (${p.steps.length} steps)`;
+      opt.textContent=`${p.slug}  (${p.steps.length} steps)`+(p.opened?'  — opened':'');
+      if(p.opened) opt.title=p.opened;
       opt.dataset.hasConv=p.has_convergence;
       opt.dataset.steps=JSON.stringify(p.steps);
       sel.appendChild(opt);
@@ -3073,8 +3178,29 @@ async function populateResumeList(){
   }catch{}
 }
 
-async function resumeProject(){
-  // Jump directly to Workflow tab for an existing project (no regeneration)
+async function openResults(clear){
+  // Register a folder of finished calculations for viewing; plots missing
+  // from analysis/ are generated on demand by /api/plot.
+  const msg=document.getElementById('resume-msg');
+  const path=clear?'':(document.getElementById('open-res-path').value||'').trim();
+  if(!clear&&!path){if(msg) msg.textContent='Type a folder path first.'; return;}
+  if(msg) msg.textContent=clear?'Forgetting…':'Opening…';
+  try{
+    const r=await fetch('/api/open_results',{method:'POST',headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify(clear?{clear:true}:{path})});
+    const d=await r.json();
+    if(!r.ok){if(msg) msg.textContent='✗ '+(d.error||r.status); return;}
+    await populateResumeList();
+    if(clear){if(msg) msg.textContent='✓ opened folders forgotten'; return;}
+    const sel=document.getElementById('resume-sel');
+    if(sel&&d.slugs.length) sel.value=d.slugs[0];
+    if(msg) msg.textContent=`✓ ${d.slugs.length} calculation(s) opened — pick one in the list`;
+    if(d.slugs.length===1) resumeProject('results');
+  }catch(e){if(msg) msg.textContent='Error: '+e.message;}
+}
+
+async function resumeProject(target){
+  // Jump directly to Workflow (or Results) tab for an existing project (no regeneration)
   const sel=document.getElementById('resume-sel');
   const msg=document.getElementById('resume-msg');
   const slug=sel.value;
@@ -3088,8 +3214,8 @@ async function resumeProject(){
     document.getElementById('proj-label').textContent='Project: '+PROJECT+'/';
     if(msg) msg.textContent='✓ loaded';
     buildWorkflow(proj.steps, proj.has_convergence);
-    goTab('workflow');
-    refreshStatus();
+    if(target==='results'){ goTab('results'); }
+    else { goTab('workflow'); refreshStatus(); }
   }catch(e){if(msg) msg.textContent='Error: '+e.message;}
 }
 

@@ -779,36 +779,54 @@ PYEND
 '''
 
 COLLECT_SH = r'''#!/bin/bash
-# Aggregate the finished screen into one small tarball to bring back home:
-# LOBSTER bonding CSVs, band eigenvalues,
-# and every INCAR/KPOINTS for provenance.  No CHGCAR/WAVECAR/vasprun.xml.
+# Aggregate the finished screen into one small tarball to bring back home.
+# The per-material folder layout is kept (results/<id>/02_scf, 03_bands,
+# 08_lobster, analysis), so the VASP-Flow GUI can open results/ directly
+# (Setup -> "Open results folder") and draw any plot that is missing.
+# No CHGCAR/WAVECAR/vasprun.xml/PROCAR.  OUTCARs are trimmed to the lines the
+# GUI reads (energies, E-fermi, convergence); FULL_OUTCAR=1 copies them whole.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/results"
 mkdir -p "$OUT"
 
+outcar() {   # $1 = source OUTCAR, $2 = destination
+    [ -f "$1" ] || return 0
+    if [ "${FULL_OUTCAR:-0}" = "1" ]; then cp "$1" "$2"; return; fi
+    { echo " # OUTCAR trimmed by collect_results.sh"
+      grep -E "NIONS|NBANDS=|ISPIN|E-fermi|energy  without entropy|free  energy|number of electron|reached required accuracy|aborting loop because EDIFF|General timing|Elapsed time" "$1"
+    } > "$2" 2>/dev/null
+}
+
 while read -r id; do
     [ -z "$id" ] && continue
     d="$HERE/materials/$id"
     [ -d "$d" ] || continue
-    o="$OUT/$id"; mkdir -p "$o"
+    o="$OUT/$id"; mkdir -p "$o/analysis"
+    cp "$d/POSCAR" "$o/" 2>/dev/null
+    cp "$d/instructions.txt" "$o/" 2>/dev/null
+    for s in 02_scf 03_bands 08_lobster; do
+        [ -d "$d/$s" ] || continue
+        mkdir -p "$o/$s"
+        for f in INCAR KPOINTS POSCAR OSZICAR; do
+            [ -f "$d/$s/$f" ] && cp "$d/$s/$f" "$o/$s/" 2>/dev/null
+        done
+        outcar "$d/$s/OUTCAR" "$o/$s/OUTCAR"
+    done
+    [ -f "$d/03_bands/EIGENVAL" ] && cp "$d/03_bands/EIGENVAL" "$o/03_bands/" 2>/dev/null
     for f in ICOHPLIST.lobster ICOBILIST.lobster ICOOPLIST.lobster \
              COHPCAR.lobster COBICAR.lobster COOPCAR.lobster \
-             DOSCAR.lobster CHARGE.lobster lobsterin lobster.out; do
-        [ -f "$d/08_lobster/$f" ] && cp "$d/08_lobster/$f" "$o/" 2>/dev/null
+             DOSCAR.lobster CHARGE.lobster lobsterin lobsterout lobster.out \
+             lobster_summary.csv; do
+        [ -f "$d/08_lobster/$f" ] && cp "$d/08_lobster/$f" "$o/08_lobster/" 2>/dev/null
     done
-    [ -f "$d/03_bands/EIGENVAL" ] && cp "$d/03_bands/EIGENVAL" "$o/" 2>/dev/null
-    [ -f "$d/03_bands/KPOINTS" ]  && cp "$d/03_bands/KPOINTS" "$o/KPOINTS.bands" 2>/dev/null
-    [ -f "$d/02_scf/OUTCAR" ] && \
-        grep -E "free  energy|E-fermi" "$d/02_scf/OUTCAR" | tail -5 > "$o/SCF_summary.txt" 2>/dev/null
-    cp "$d/POSCAR" "$o/" 2>/dev/null
-    for s in 02_scf 03_bands 08_lobster; do
-        [ -f "$d/$s/INCAR" ] && cp "$d/$s/INCAR" "$o/INCAR.$s" 2>/dev/null
+    for f in "$d"/analysis/*.png "$d"/analysis/*.pdf "$d"/analysis/*.csv "$d"/analysis/*.log; do
+        [ -f "$f" ] && cp "$f" "$o/analysis/" 2>/dev/null
     done
-    [ -f "$d/02_scf/KPOINTS" ] && cp "$d/02_scf/KPOINTS" "$o/KPOINTS.scf" 2>/dev/null
 done < "$HERE/material_list.txt"
 
 cp "$HERE/materials_summary.csv" "$OUT/" 2>/dev/null
+cp "$HERE/screen_lobster_all.csv" "$OUT/" 2>/dev/null
 tar czf "$HERE/screen_results.tar.gz" -C "$HERE" results
 echo "Wrote $HERE/screen_results.tar.gz"
 du -sh "$HERE/screen_results.tar.gz"
