@@ -76,6 +76,7 @@
 │ Same U block in every step; LMAXMIX 4 (d) / 6 (f) set with it.                │
 │ Rows with U_eff = 0 (Zn, Cd) get no U.  Never automatic with R2SCAN/HSE06.    │
 │ GUI: Default Hubbard U auto/on/off.   HT drivers: --gga_u auto|on|off.        │
+│ Key GGA_U = GGA-U = GGA+U = GGAU; key, value and --gga_u/-u/+u any case.      │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ EXPLICIT VASP KEYWORDS (any INCAR tag) ───────────────────────────────────────┐

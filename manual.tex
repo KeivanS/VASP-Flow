@@ -1002,9 +1002,16 @@ Flag & Effect \\ \midrule
 \texttt{GGA\_U: ON} & tabulated $U_{\mathrm{eff}}$ on every tabulated element,
   whatever the compound. \\
 \texttt{GGA\_U: OFF} & no U (also \texttt{no GGA+U}). \\
+\texttt{GGA\_U: AUTO} & same as no flag. \\
 \texttt{GGA+U with U=\ldots\ on El-orb} & explicit values; always win. \\
 \bottomrule
 \end{tabularx}
+
+The key may also be written \texttt{GGA-U}, \texttt{GGA+U} or \texttt{GGAU},
+and key and value are case-insensitive (\texttt{gga+u: on}); likewise the
+command-line option of the high-throughput drivers accepts
+\texttt{-{}-gga\_u}, \texttt{-{}-gga-u}, \texttt{-{}-gga+u} (or upper case)
+with \texttt{auto}, \texttt{on}, \texttt{off} in any case.
 
 The same U block is written to every step (relax, SCF, bands, DOS, LOBSTER,
 \ldots), so all steps share one Hamiltonian.  Never automatic under

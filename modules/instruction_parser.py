@@ -325,6 +325,8 @@ class InstructionParser:
         """GGA+U flag for the tabulated U values (hubbard_u_defaults.csv).
 
             GGA_U: ON     (TRUE/YES/1)   -> U on every tabulated d/f element
+            (key also GGA-U / GGA+U / GGAU, key and value in any case;
+             GGA_U: AUTO = the default below)
             GGA_U: OFF    (FALSE/NONE/NO/0, or 'no GGA+U' / 'without Hubbard U')
                                          -> no U at all
             no flag                      -> 'auto': U only when the compound
@@ -334,12 +336,15 @@ class InstructionParser:
         Explicit 'GGA+U with U=... on El-orb' entries always win (see
         _extract_gga_u); a bare 'GGA+U' in Methods without values means ON.
         """
-        if re.search(r'GGA_?\+?U\s*[:=]\s*(OFF|FALSE|NONE|NO|0)\b'
-                     r'|\b(no|without)\s+(GGA\s*\+?\s*U|Hubbard\s*U|DFT\s*\+?\s*U)',
+        key = r'GGA\s*[_+-]?\s*U\s*[:=]\s*'          # GGA_U / GGA-U / GGA+U / GGAU, any case
+        if re.search(key + r'(OFF|FALSE|NONE|NO|0)\b'
+                     r'|\b(no|without)\s+(GGA\s*[_+-]?\s*U|Hubbard\s*U|DFT\s*\+?\s*U)',
                      content, re.IGNORECASE):
             return 'off'
-        if re.search(r'GGA_?\+?U\s*[:=]\s*(ON|TRUE|YES|1)\b', content, re.IGNORECASE):
+        if re.search(key + r'(ON|TRUE|YES|1)\b', content, re.IGNORECASE):
             return 'on'
+        if re.search(key + r'AUTO\b', content, re.IGNORECASE):
+            return 'auto'
         if re.search(r'(GGA\+U|DFT\+U)', content, re.IGNORECASE):
             return 'on'
         return 'auto'

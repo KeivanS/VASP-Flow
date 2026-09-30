@@ -1217,7 +1217,8 @@ def main():
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition; no multi-node tier')
-    ap.add_argument('--gga_u', '--gga-u', dest='gga_u', choices=['auto', 'on', 'off'], default='auto',
+    ap.add_argument('--gga_u', '--gga-u', '--gga+u', '--GGA_U', '--GGA-U', '--GGA+U',
+                    dest='gga_u', type=str.lower, choices=['auto', 'on', 'off'], default='auto',
                     help='GGA+U with the tabulated U_eff: auto (default) = only if a '
                          'chalcogen/halogen (O,S,Se,Te,F,Cl,Br,I) is present; on = every '
                          'tabulated d/f element; off = never')
