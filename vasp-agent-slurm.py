@@ -38,7 +38,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
 from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar,
-                                  merge_cli_incar)
+                                  merge_cli_incar, STEP_WALLTIME, RESUME_SBATCH,
+                                  RESUME_LIB)
 
 
 # ── helpers (identical to vasp-agent.py) ─────────────────────────────────
@@ -178,8 +179,11 @@ class SLURMVASPAgent:
 
     # ── SLURM script builders ─────────────────────────────────────────────
 
-    def _sbatch_header(self, job_name: str, time_override: str = None) -> str:
-        """Return the #SBATCH preamble for a batch script."""
+    def _sbatch_header(self, job_name: str, time_override: str = None,
+                       resume: bool = False) -> str:
+        """Return the #SBATCH preamble for a batch script.  resume=True adds
+        the time-limit warning/requeue directives (the script must then trap
+        USR1 -- see RESUME_LIB -- or the warning signal would end it)."""
         t = time_override or self.slurm_time
         lines = [
             "#!/bin/bash",
@@ -193,6 +197,8 @@ class SLURMVASPAgent:
         ]
         if self.account:
             lines.append(f"#SBATCH --account {self.account}")
+        if resume:
+            lines += RESUME_SBATCH.rstrip("\n").split("\n")
         lines.append("")
         if self.modules:
             lines.append("module purge")
@@ -218,23 +224,42 @@ class SLURMVASPAgent:
         """
         script = os.path.join(step_dir, 'run.sh')
         abs_dir = os.path.abspath(step_dir)
+        step = job_name.rsplit('_', 1)[-1]          # relax, scf, bands, lobster, ...
+        kind = step if step in ('relax', 'lobster') else 'static'
         with open(script, 'w') as f:
-            f.write(self._sbatch_header(job_name, time_override))
+            f.write(self._sbatch_header(job_name, time_override or self._step_time(step),
+                                        resume=True))
             f.write(f"cd {abs_dir}\n")
-            f.write(f"echo \"Working directory: $(pwd)\"\n\n")
+            f.write(f"echo \"Working directory: $(pwd)\"\n")
+            f.write(f"VF_KIND={kind}\nVF_SCRIPT={abs_dir}/run.sh\n")
+            f.write(RESUME_LIB)
+            f.write("vf_resume_prepare\n\n")
             # Call pre-run copy scripts if they exist (copy POSCAR/CHGCAR from previous step)
             for copy_script in ('copy_from_relax.sh', 'copy_from_scf.sh'):
                 if os.path.isfile(os.path.join(step_dir, copy_script)):
                     f.write(f'echo "Copying input files..."\n')
-                    f.write(f'bash {abs_dir}/{copy_script}\n\n')
-            f.write(f"{self._vasp_run_line()}\n")
-            f.write('\necho "Exit status: $?"\n')
+                    f.write(f'[ "$vf_skip_vasp" = 1 ] || bash {abs_dir}/{copy_script}\n\n')
+            f.write('VF_PHASE=vasp\n')
+            f.write(f'[ "$vf_skip_vasp" = 1 ] || vf_run {self._vasp_run_line()}\n')
+            f.write('echo "Exit status: $?"\n')
+            f.write('vf_after vasp        # time limit hit -> continue in a requeued job\n')
             if os.path.isfile(os.path.join(step_dir, 'run_elf.sh')):
                 f.write(f'\n# Separate ELF pass (KPAR = 1)\n'
                         f'bash {abs_dir}/run_elf.sh {self._vasp_run_line()}\n')
             if post:
-                f.write("\n" + post + "\n")
+                f.write("\nVF_PHASE=post\n" + post + "\nvf_after post\n")
         chmod_x(script)
+
+    def _step_time(self, step: str) -> str:
+        """Walltime for one step: <STEP>_WALLTIME > global WALLTIME in the
+        instructions > VASP-Flow per-step default > profile time."""
+        inst = self.parser.instructions
+        per = inst.get('step_walltime') or {}
+        if step in per:
+            return per[step]
+        if inst.get('slurm_walltime'):
+            return inst['slurm_walltime']
+        return STEP_WALLTIME.get(step, self.slurm_time)
 
     def _lobster_post(self) -> str:
         """Shell appended after VASP in the LOBSTER step: run the lobster binary
@@ -266,7 +291,7 @@ LOB
 fi
 if [ -f lobsterin ]; then
     echo "Running LOBSTER ($LOBSTER_BIN)"
-    "$LOBSTER_BIN" > lobster.out 2>&1 || echo "  LOBSTER failed -- see lobster.out"
+    vf_run "$LOBSTER_BIN" > lobster.out 2>&1 || echo "  LOBSTER failed -- see lobster.out"
 else
     echo "ERROR: no lobsterin and no DOSCAR; skipping LOBSTER"
 fi'''

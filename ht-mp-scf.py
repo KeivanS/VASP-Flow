@@ -213,7 +213,7 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=No
         if not kmesh:
             lines.append(f"RELAX_KMESH_DENSITY: {relax_kpra or kpra or 'coarse'}")
     if gga_u in ('on', 'off'):
-        lines.append(f"GGA_U: {gga_u.upper()}   # default (no flag): U only for oxides/chalcogenides")
+        lines.append(f"GGA_U: {gga_u.upper()}   # default (no flag): U only for chalcogenides/halides")
     if kpar:
         lines.append(f"KPAR: {kpar}")
     if ncore:
@@ -384,8 +384,8 @@ def main():
                     help="k-point density of the relaxation (default: same as --kpra, "
                          "so the SCF can reuse the relaxed WAVECAR)")
     ap.add_argument('--gga-u', choices=['auto', 'on', 'off'], default='auto',
-                    help="GGA+U with the tabulated U_eff: auto (default) = only for "
-                         "oxides/chalcogenides (O, S, Se, Te present); on = every "
+                    help="GGA+U with the tabulated U_eff: auto (default) = only if a "
+                         "chalcogen/halogen (O,S,Se,Te,F,Cl,Br,I) is present; on = every "
                          "tabulated d/f element; off = never")
     ap.add_argument('--kmesh', default=None,
                     help="fixed SCF Gamma k-mesh for every material, e.g. '8 8 8'; "

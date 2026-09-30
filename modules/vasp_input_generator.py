@@ -4,7 +4,7 @@ VASP Input Generator Module
 Generates INCAR, KPOINTS, and job scripts for VASP calculations
 """
 
-import os, shutil
+import os, sys, shutil
 from typing import Dict, List, Any
 import numpy as np
 
@@ -21,40 +21,26 @@ _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster')
 
 
 # ── Default Hubbard U lookup ─────────────────────────────────────────────────
-# Values live in hubbard_u_defaults.csv (repo root) with full references;
-# this hard-coded fallback mirrors the CSV so generation works without it.
-# Used (Dudarev GGA+U) by default only for oxides/chalcogenides (O, S, Se, Te
-# present); 'GGA_U: ON' applies it to every tabulated element, 'GGA_U: OFF'
-# never; explicit 'GGA+U with U=... on El-orb' always wins.  See _u_lines().
-_U_CHALCOGENS = ('O', 'S', 'Se', 'Te')   # default GGA+U only for these compounds
-_U_FALLBACK = {   # mirror of hubbard_u_defaults.csv: (orbital, U_eff, J=0)
-    'Sc': ('d', 2.0, 0.0), 'Ti': ('d', 3.0, 0.0), 'V': ('d', 3.1, 0.0), 'Cr': ('d', 2.4, 0.0),
-    'Mn': ('d', 4.1, 0.0), 'Fe': ('d', 4.1, 0.0), 'Co': ('d', 4.4, 0.0), 'Ni': ('d', 5.3, 0.0),
-    'Cu': ('d', 5.0, 0.0), 'Y': ('d', 2.0, 0.0), 'Zr': ('d', 2.0, 0.0), 'Nb': ('d', 2.0, 0.0),
-    'Mo': ('d', 1.9, 0.0), 'Tc': ('d', 3.0, 0.0), 'Ru': ('d', 3.0, 0.0), 'Rh': ('d', 3.0, 0.0),
-    'Pd': ('d', 3.0, 0.0), 'Ag': ('d', 3.0, 0.0), 'Hf': ('d', 2.0, 0.0), 'Ta': ('d', 2.0, 0.0),
-    'W': ('d', 1.5, 0.0), 'Re': ('d', 2.5, 0.0), 'Os': ('d', 2.5, 0.0), 'Ir': ('d', 2.5, 0.0),
-    'Pt': ('d', 2.0, 0.0), 'Au': ('d', 2.0, 0.0), 'La': ('f', 10.3, 0.0), 'Ce': ('f', 5.0, 0.0),
-    'Pr': ('f', 5.25, 0.0), 'Nd': ('f', 5.75, 0.0), 'Sm': ('f', 6.25, 0.0), 'Eu': ('f', 6.5, 0.0),
-    'Gd': ('f', 6.7, 0.0), 'Tb': ('f', 6.0, 0.0), 'Dy': ('f', 6.0, 0.0), 'Ho': ('f', 6.0, 0.0),
-    'Er': ('f', 6.0, 0.0), 'Tm': ('f', 6.0, 0.0), 'Yb': ('f', 6.0, 0.0), 'Th': ('f', 3.0, 0.0),
-    'U': ('f', 4.5, 0.0),
-}
+# U_eff values live ONLY in hubbard_u_defaults.csv (repo root).  Dudarev
+# GGA+U: LDAUU = U_eff, LDAUJ = 0.  Used by default only when the compound
+# contains a chalcogen or halogen (below); 'GGA_U: ON' applies it to every
+# tabulated element, 'GGA_U: OFF' never; explicit 'GGA+U with U=... on El-orb'
+# always wins.  See _u_lines().
+_U_ANIONS = ('O', 'S', 'Se', 'Te', 'F', 'Cl', 'Br', 'I')   # chalcogens + halogens
 
 
 def load_u_defaults():
     """{element: {'orbital', 'U', 'J'}} from hubbard_u_defaults.csv (repo root).
 
-    The file is a whitespace/tab-separated table; lines starting with '#' are
-    comments.  Only the first three columns are used:
-        element   orbital (3d, 4d, 5d, 4f, 5f or d/f)   U_eff = U - J (eV)
-    Dudarev's scheme (LDAUTYPE = 2) depends on U - J only, so the INCAR gets
-    LDAUU = U_eff and LDAUJ = 0; the J column is informational.  Rows with
-    U_eff = 0 (e.g. Zn, Cd) get no correction.  Falls back to the built-in
-    mirror only if the file is missing or unreadable.
+    Whitespace/tab-separated table; '#' lines are comments.  Only the first
+    three columns are read: element, orbital (3d, 4d, 5d, 4f, 5f or d/f) and
+    U_eff (eV).  Dudarev's scheme uses U_eff only, so J is always 0 (any J
+    column in the file is ignored).  Rows with U_eff = 0 get no correction.
+    There are no built-in values: if the file cannot be read, a warning is
+    printed and no default U is applied.
     """
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        '..', 'hubbard_u_defaults.csv')
+    path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         '..', 'hubbard_u_defaults.csv'))
     out = {}
     try:
         with open(path, encoding='utf-8', errors='replace') as fh:
@@ -71,12 +57,111 @@ def load_u_defaults():
                     continue
                 if orb in 'spdf' and u > 0:
                     out[tok[0]] = {'orbital': orb, 'U': u, 'J': 0.0}
-    except OSError:
-        pass
-    if not out:
-        out = {el: {'orbital': o, 'U': u, 'J': 0.0}
-               for el, (o, u, _j) in _U_FALLBACK.items()}
+    except OSError as e:
+        print(f"WARNING: cannot read {path} ({e}); no default Hubbard U applied",
+              file=sys.stderr)
     return out
+
+
+# ── SLURM: continue a step that hits its time limit ─────────────────────────
+# Default walltime per step (HH:MM:SS).  An explicit <STEP>_WALLTIME or a
+# global WALLTIME in the instructions wins; steps not listed use the profile.
+STEP_WALLTIME = {'relax': '08:00:00', 'scf': '04:00:00', 'bands': '02:00:00',
+                 'dos': '02:00:00', 'lobster': '04:00:00'}
+
+# #SBATCH lines that make SLURM warn the batch shell 15 min before the limit
+# and allow the job to be requeued (same job id, so afterok chains survive).
+RESUME_SBATCH = ("#SBATCH --signal=B:USR1@900\n"
+                 "#SBATCH --requeue\n"
+                 "#SBATCH --open-mode=append\n")
+
+# Bash functions sourced into every SLURM step script.  Needs, set before:
+#   VF_KIND   = relax | static | lobster      VF_SCRIPT = path of this script
+#   VF_ARGS   = arguments to resubmit it with (optional)
+# Flow:  vf_resume_prepare ; VF_PHASE=vasp ; vf_run <vasp launch> ;
+#        vf_after vasp ; VF_PHASE=post ; vf_run <lobster> ; vf_after post
+RESUME_LIB = r"""
+# ---- auto-continue on time limit (VASP-Flow) --------------------------------
+VF_MAX_RESTARTS="${VF_MAX_RESTARTS:-5}"
+vf_timeout=0
+vf_skip_vasp=0
+vf_on_usr1() {            # SLURM: 15 min left
+    vf_timeout=1
+    echo "=== $(date): time limit near - stopping VASP cleanly ==="
+    if [ "${VF_KIND:-static}" = relax ]; then echo "LSTOP = .TRUE." > STOPCAR   # after this ionic step
+    else echo "LABORT = .TRUE." > STOPCAR; fi                        # after this electronic step
+    # a non-VASP program (e.g. the LOBSTER binary) cannot stop cleanly: end it
+    [ "${VF_PHASE:-vasp}" = post ] && [ -n "${vf_post_pid:-}" ] && kill "$vf_post_pid" 2>/dev/null
+}
+trap vf_on_usr1 USR1
+vf_run() {                # run in the background so the USR1 trap can fire
+    "$@" &
+    local pid=$! rc=0
+    vf_post_pid=$pid
+    wait "$pid"; rc=$?
+    while kill -0 "$pid" 2>/dev/null; do wait "$pid"; rc=$?; done
+    vf_post_pid=
+    return $rc
+}
+vf_vasp_done() { [ -f OUTCAR ] && grep -q "General timing and accounting" OUTCAR; }
+vf_poscar_from_xdatcar() { # last frame of XDATCAR -> POSCAR (cell included for ISIF=3)
+    python3 - <<'PYX'
+lines = open('XDATCAR').read().splitlines()
+idx = [i for i, l in enumerate(lines) if l.strip().lower().startswith('direct configuration')]
+if not idx:
+    raise SystemExit(1)
+last = idx[-1]
+nat = sum(int(x) for x in lines[6].split())
+# variable cell (ISIF=3): every frame repeats the 7-line header
+head = lines[last - 7:last] if last >= 7 and lines[last - 7].strip() == lines[0].strip() \
+    else lines[:7]
+open('POSCAR', 'w').write('\n'.join(head + ['Direct'] + lines[last + 1:last + 1 + nat]) + '\n')
+PYX
+}
+vf_resume_prepare() {     # called at the start of every (re)run
+    [ -f .vf_resume ] || return 0
+    local phase; phase=$(cat .vf_resume)
+    rm -f .vf_resume STOPCAR
+    echo "=== resuming after time limit (phase: $phase, restart $(cat .vf_restarts 2>/dev/null)) ==="
+    if [ "$phase" = post ]; then vf_skip_vasp=1; return 0; fi   # VASP part done; redo the rest
+    local n; n=$(ls OUTCAR.timeout* 2>/dev/null | wc -l)
+    [ -f OUTCAR ] && mv OUTCAR "OUTCAR.timeout$n"
+    [ -f OSZICAR ] && mv OSZICAR "OSZICAR.timeout$n"
+    if [ "${VF_KIND:-static}" = relax ]; then
+        local nat; nat=$(sed -n 7p POSCAR | awk '{s=0; for(i=1;i<=NF;i++) s+=$i; print s}')
+        if [ -s CONTCAR ] && [ "$(wc -l < CONTCAR)" -ge $((8 + nat)) ]; then
+            cp CONTCAR POSCAR && echo "  continuing from CONTCAR"
+        elif [ -s XDATCAR ] && vf_poscar_from_xdatcar; then
+            echo "  continuing from the last XDATCAR frame"
+        fi
+        [ -f XDATCAR ] && mv XDATCAR "XDATCAR.timeout$n"
+    fi
+}
+vf_after() {              # $1 = vasp | post : resubmit if the limit was hit
+    [ "$vf_timeout" = 1 ] || return 0
+    rm -f STOPCAR
+    local n; n=$(( $(cat .vf_restarts 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > .vf_restarts
+    if [ "$n" -gt "$VF_MAX_RESTARTS" ]; then
+        echo "!!! time limit hit $n times - giving up (raise the walltime)"; exit 1
+    fi
+    echo "$1" > .vf_resume
+    if [ -n "${SLURM_JOB_ID:-}" ] && scontrol requeue "$SLURM_JOB_ID" 2>/dev/null; then
+        echo "=== requeued job $SLURM_JOB_ID (restart $n) ==="; sleep 300; exit 0
+    fi
+    # requeue not allowed: submit a copy and point dependent jobs at it
+    local opts="--job-name=${SLURM_JOB_NAME:-vasp}" tl
+    tl=$(squeue -h -j "${SLURM_JOB_ID:-0}" -o %l 2>/dev/null | awk 'NR==1{print $1}')
+    [[ "$tl" =~ ^[0-9]+(-[0-9]+)?(:[0-9]+)*$ ]] && opts="$opts --time=$tl"
+    local new; new=$(cd "${SLURM_SUBMIT_DIR:-$PWD}" && sbatch --parsable $opts "$VF_SCRIPT" ${VF_ARGS:-}) \
+        || { echo "!!! resubmit failed"; exit 1; }
+    echo "=== resubmitted as job $new (restart $n) ==="
+    squeue -h -u "${USER:-$(whoami)}" -o "%i %E" 2>/dev/null | awk -v j="${SLURM_JOB_ID:-none}" 'index($2, j) {print $1}' |
+        while read -r dep; do scontrol update JobId="$dep" Dependency="afterok:$new"; done
+    exit 0
+}
+# -----------------------------------------------------------------------------
+"""
 
 
 _INCAR_STEPS = ('all', 'relax', 'scf', 'bands', 'dos', 'wannier',
@@ -2022,9 +2107,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
            according to the GGA_U flag in the instructions:
              GGA_U: ON   -> every tabulated d/f element gets its U
              GGA_U: OFF  -> no U
-             no flag     -> U only if the compound is an oxide/chalcogenide
-                            (contains O, S, Se or Te); otherwise U = 0,
-                            since the table values were fitted for those.
+             no flag     -> U only if the compound contains a chalcogen or
+                            halogen (O, S, Se, Te, F, Cl, Br, I); otherwise
+                            U = 0 (the table values were fitted for those).
            Never automatic under R2SCAN/HSE06 (already reduce the
            self-interaction error).
         """
@@ -2034,7 +2119,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         auto = False
         if not els and mode != 'off':
             func_ok = self.instructions.get('functional', 'PBE') not in ('R2SCAN', 'HSE06')
-            chalc = any(a in (self.elements or []) for a in _U_CHALCOGENS)
+            chalc = any(a in (self.elements or []) for a in _U_ANIONS)
             if func_ok and (mode == 'on' or chalc):
                 table = load_u_defaults()
                 els = {el: table[el] for el in (self.elements or []) if el in table}
@@ -2049,7 +2134,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 orb = els[el].get('orbital', 'd')
                 ldaul.append(str(orb_map.get(orb, 2)))
                 ldauu.append(str(els[el].get('U', 0.0)))
-                ldauj.append(str(els[el].get('J', 0.0)))
+                ldauj.append('0.0')          # Dudarev: only U_eff matters
             else:
                 ldaul.append('-1')
                 ldauu.append('0.0')
@@ -2058,7 +2143,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         head = ["# GGA+U (Dudarev, LDAUTYPE=2)"]
         if auto:
             why = ("GGA_U: ON" if auto == 'on' else
-                   "oxide/chalcogenide (O/S/Se/Te present), no GGA_U flag")
+                   "chalcogenide/halide (O/S/Se/Te/F/Cl/Br/I present), no GGA_U flag")
             head = ["# GGA+U (Dudarev, LDAUTYPE=2) — U_eff from hubbard_u_defaults.csv",
                     f"# because: {why}.",
                     "# 'GGA_U: OFF' disables it; 'GGA+U with U=<val> on <El>-<orb>' overrides."]

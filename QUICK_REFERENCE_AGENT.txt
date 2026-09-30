@@ -66,13 +66,13 @@
 
 ┌─ DEFAULT HUBBARD U (automatic GGA+U) ─────────────────────────────────────────┐
 │ Optional flag in instructions.txt:                                            │
-│   (no flag)   GGA+U only if the POSCAR has O, S, Se or Te (oxide /            │
-│               chalcogenide); otherwise U = 0                                  │
+│   (no flag)   GGA+U only if the POSCAR has a chalcogen or halogen             │
+│               (O, S, Se, Te, F, Cl, Br, I); otherwise U = 0                   │
 │   GGA_U: ON   U on every tabulated d/f element, any compound                  │
 │   GGA_U: OFF  never  (also: no GGA+U / without GGA+U)                         │
 │   Methods: GGA+U with U=4.0 on Fe-d    explicit values always win             │
 │ Dudarev (LDAUTYPE=2): LDAUU = U_eff from  hubbard_u_defaults.csv  (repo       │
-│ root; element, orbital, U_eff = U - J, ...; edit/extend it), LDAUJ = 0.       │
+│ root; the ONLY source of U values; element, orbital, U_eff), LDAUJ = 0.       │
 │ Same U block in every step; LMAXMIX 4 (d) / 6 (f) set with it.                │
 │ Rows with U_eff = 0 (Zn, Cd) get no U.  Never automatic with R2SCAN/HSE06.    │
 │ GUI: Default Hubbard U auto/on/off.   HT drivers: --gga-u auto|on|off.        │

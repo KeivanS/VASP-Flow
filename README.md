@@ -97,7 +97,7 @@ In the **Setup** tab:
 
 **Spin** — leave as *Non-magnetic* unless you know your material has magnetic order or you need spin-orbit coupling (SOC).
 
-**Hubbard U** — GGA+U (Dudarev, LDAUTYPE=2) uses U_eff from `hubbard_u_defaults.csv` (LDAUU = U_eff, LDAUJ = 0), the same in every step, controlled by an optional flag in `instructions.txt`: no flag = only for oxides/chalcogenides (O, S, Se or Te in the POSCAR), otherwise U = 0; `GGA_U: ON` = always; `GGA_U: OFF` = never. GUI: *Default Hubbard U* auto/on/off; HT drivers: `--gga-u`. The Dudarev parameter is U_eff = U − J; J is set to zero automatically so no separate entry is needed. Values and literature references live in [`hubbard_u_defaults.csv`](hubbard_u_defaults.csv) — edit that file to change the defaults. Uncheck *Default Hubbard U* in Setup (or put `GGA_U: OFF` in the instructions file) to disable; explicit per-element GGA+U entries always override the lookup.
+**Hubbard U** — GGA+U (Dudarev, LDAUTYPE=2) uses U_eff from `hubbard_u_defaults.csv` only (no built-in values; LDAUU = U_eff, LDAUJ = 0), the same in every step, controlled by an optional flag in `instructions.txt`: no flag = only if the POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I), otherwise U = 0; `GGA_U: ON` = always; `GGA_U: OFF` = never. GUI: *Default Hubbard U* auto/on/off; HT drivers: `--gga-u`. The Dudarev parameter is U_eff = U − J; J is set to zero automatically so no separate entry is needed. Values and literature references live in [`hubbard_u_defaults.csv`](hubbard_u_defaults.csv) — edit that file to change the defaults. Uncheck *Default Hubbard U* in Setup (or put `GGA_U: OFF` in the instructions file) to disable; explicit per-element GGA+U entries always override the lookup.
 
 **K-mesh density** — all Gamma-centred meshes are generated automatically from the POSCAR geometry using a *k-points per reciprocal atom* (kpra) target: `KMESH_DENSITY: coarse|fine|<integer>` in the instructions file, or the *K-mesh density* selector / *Custom kpra target* box in Setup.
 
@@ -306,3 +306,5 @@ version. See the [LICENSE](LICENSE) file for the full text.
 Note: VASP itself is proprietary software licensed separately by the VASP
 Software GmbH; this project only generates inputs for and post-processes
 outputs from VASP.
+
+**SLURM walltime per step** — each step is its own job: relax 8 h, SCF 4 h, bands/DOS 2 h, LOBSTER 4 h (override with `RELAX_WALLTIME:` … or one `WALLTIME:` in `instructions.txt`; `TIME_*` in a highthroughput `env.sh`). 15 min before the limit VASP is stopped cleanly (STOPCAR) and the job is requeued with the same id, so `afterok` chains keep waiting: relaxations continue from CONTCAR (or the last XDATCAR frame), LOBSTER reruns only the binary if the NSCF finished (at most `VF_MAX_RESTARTS`=5 times).

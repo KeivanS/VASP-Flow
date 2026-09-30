@@ -570,7 +570,10 @@ Steps per material & \texttt{01\_relax} (ISIF = 3) $\to$ \texttt{02\_scf}
   \texttt{03\_bands} $\to$ \texttt{08\_lobster} (no ELF, no DFPT) \\
 Runs on & workstation or SLURM & SLURM only \\
 Jobs & one job per step, submitted by \texttt{runall.sh} &
-  one \texttt{job.sbatch} per material, all steps inside \\
+  one job per step (\texttt{job.sbatch <step>}), chained by
+  \texttt{submit\_all.sh} \\
+Walltime & per step (Section~\ref{sec:slurm-time}) & per step, \texttt{TIME\_*}
+  in \texttt{env.sh} \\
 Resources & one setting for all materials & ENCUT ($1.3\times$ max ENMAX)
   and job size per material \\
 Extras & element/$Z$ table & throttled, resumable \texttt{submit\_all.sh};
@@ -607,7 +610,7 @@ python3 ./ht-semimetals.py --list lists/mylist.txt \
     --kpra 8000 --single-node
 cd highthroughput_mylist
 vi env.sh                    # VASP module, LOBSTER_BIN, ANALYSIS_PYTHON
-./retune.sh --time 06:00:00  # optional: set walltime
+./retune.sh --time-lobster 06:00:00   # optional: change a step walltime
 ./submit_all.sh              # POTCARs + submit; re-run = resume
 ./status.sh                  # progress per step
 # when finished:
@@ -621,7 +624,7 @@ material folders into the directory it is run from, so use a work directory:
 mkdir -p /scratch/$USER/ht_mylist && cd /scratch/$USER/ht_mylist
 python3 ~/VASP-Flow/ht-mp-scf.py -l ~/VASP-Flow/lists/mylist.txt \
     --agent slurm --no-chain --nodes 1 --ntasks-per-node 40 \
-    --walltime 12:00:00 --account elmgroup --kpra 8000 --encut 520
+    --account elmgroup --kpra 8000 --encut 520
 ./runall.sh     # build inputs, submit relax -> SCF+ELF -> LOBSTER
 squeue -u $USER
 \end{lstlisting}
@@ -635,7 +638,9 @@ Choose \texttt{-{}-encut} as about $1.3\times$ the largest ENMAX in the set
 all later jobs.
 
 \textbf{4. Test first.}  Run two or three materials before a long list, then
-read the timings and look at the plots before setting the walltime:
+read the timings and look at the plots (the per-step walltimes of
+Section~\ref{sec:slurm-time} are defaults; steps that hit them continue
+automatically):
 \begin{lstlisting}[language=bash]
 grep "Elapsed time" materials/*/0*/OUTCAR     # ht-semimetals
 grep "Elapsed time" */0*/OUTCAR               # ht-mp-scf
@@ -684,7 +689,7 @@ Option & Meaning \\ \midrule
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-relax-kpra} & k-density of the relaxation (default: \texttt{-{}-kpra}). \\
 \texttt{-{}-gga-u auto|on|off} & GGA+U flag (default \texttt{auto}: only
-  oxides/chalcogenides). \\
+  chalcogenides/halides). \\
 \texttt{-{}-kpra} & \texttt{coarse}, \texttt{fine} (5000) or an integer. \\
 \texttt{-{}-kmesh} & Fixed $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}. \\
 \texttt{-{}-encut} & ENCUT (eV); default 500. \\
@@ -693,7 +698,9 @@ Option & Meaning \\ \midrule
 \texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR/NCORE (give one, the other
   is derived); the ELF pass always uses KPAR${}={}$1. \\
 \texttt{-{}-mpi} & MPI ranks per job (workstation). \\
-\texttt{-{}-nodes}, \texttt{-{}-ntasks-per-node}, \texttt{-{}-walltime},
+\texttt{-{}-walltime} & One walltime for every step (default: per-step
+  defaults, Section~\ref{sec:slurm-time}). \\
+\texttt{-{}-nodes}, \texttt{-{}-ntasks-per-node},
   \texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-profile} & SLURM
   resources, written into each \texttt{instructions.txt} (they override
   \texttt{profiles/slurm.json}). \\
@@ -720,16 +727,21 @@ falls back to \texttt{Structure.get\_primitive\_structure()} automatically.
 \label{sec:ht-semimetals}
 
 It builds a self-contained \texttt{highthroughput\_*} directory: one
-\texttt{materials/<id>/job.sbatch} per material running the relaxation
+\texttt{materials/<id>/job.sbatch} per material; \texttt{submit\_all.sh}
+submits it once per step (\texttt{relax}, \texttt{scf}, \texttt{bands},
+\texttt{lobster}) as an \texttt{afterok} chain with the walltimes
+\texttt{TIME\_RELAX}/\texttt{TIME\_SCF}/\texttt{TIME\_BANDS}/\texttt{TIME\_LOBSTER}
+of \texttt{env.sh}, and steps that reach their limit continue automatically
+(Section~\ref{sec:slurm-time}).  The steps are the relaxation
 (\texttt{01\_relax}, IBRION = 2, ISIF = 3, same k-density as the SCF; if the
 first pass does not reach the force criterion it is restarted once from its
 CONTCAR), the SCF from the relaxed structure, bands and the LOBSTER NSCF +
-LOBSTER in one allocation (finished steps are skipped on resubmission), and ends with \texttt{analyze.sh} (plots and
+LOBSTER (finished steps are skipped on resubmission); the LOBSTER job ends and ends with \texttt{analyze.sh} (plots and
 \texttt{lobster\_summary.csv} in \texttt{analysis/}).  ENCUT and the LOBSTER
 NBANDS come from the POTCARs at generation time and are checked against
 \texttt{potcar\_manifest.json} when the POTCARs are built on the cluster.
 3d elements (V--Ni) start spin-polarised.  GGA+U follows the default rule
-(only oxides/chalcogenides, Section~\ref{sec:ggau}) unless
+(only chalcogenides/halides, Section~\ref{sec:ggau}) unless
 \texttt{-{}-gga-u on|off} is given.  There is no DFPT step (dielectric
 tensors and Born charges are ill-defined at zero gap, and the linear-response
 loop tends not to converge) and no ELF (\texttt{ELF: off}).
@@ -741,7 +753,7 @@ Option & Meaning \\ \midrule
 \texttt{-{}-kpra N} & k-points per reciprocal atom (e.g.\ 8000). \\
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-gga-u auto|on|off} & GGA+U flag written into every
-  \texttt{instructions.txt} (default \texttt{auto}: only oxides/chalcogenides). \\
+  \texttt{instructions.txt} (default \texttt{auto}: only chalcogenides/halides). \\
 \texttt{-{}-single-node} & Every material on one node with
   \texttt{-{}-cores-per-node} (default 40) ranks; otherwise large cells get
   more nodes. \\
@@ -762,12 +774,16 @@ Option & Meaning \\ \midrule
 Script (in the directory) & Purpose \\ \midrule
 \texttt{env.sh} & The one file to edit on the cluster: modules,
   \texttt{VASP\_STD}, \texttt{LOBSTER\_BIN}, \texttt{VASP\_POTCAR\_DIR},
-  \texttt{ANALYSIS\_PYTHON}, disk policy. \\
-\texttt{submit\_all.sh [N]} & Build missing POTCARs, submit (at most
-  \texttt{MAX\_QUEUED}=50 queued); skips finished/queued materials, so it is
-  also the resume command. \\
+  \texttt{ANALYSIS\_PYTHON}, step walltimes \texttt{TIME\_*},
+  \texttt{VF\_MAX\_RESTARTS}, disk policy. \\
+\texttt{submit\_all.sh [N]} & Build missing POTCARs, submit each material's
+  unfinished steps as a chain (at most \texttt{MAX\_QUEUED}=200 jobs queued);
+  skips finished/queued materials, so it is also the resume command. \\
 \texttt{status.sh} & Per-step completion counts; writes \texttt{incomplete.txt}. \\
-\texttt{retune.sh} & Change partition/account/walltime in every job script. \\
+\texttt{retune.sh} & Change the step walltimes in \texttt{env.sh}
+  (\texttt{-{}-time-relax}, \texttt{-{}-time-scf}, \texttt{-{}-time-bands},
+  \texttt{-{}-time-lobster}, or \texttt{-{}-time} for all) or
+  partition/account in every job script. \\
 \texttt{make\_potcars.sh} & Build and verify the POTCARs (run automatically). \\
 \texttt{analyze\_all.sh [id]} & Redo the plots (each job already runs \texttt{analyze.sh}). \\
 \texttt{postprocess\_all.sh} & Per-material and combined LOBSTER bond tables. \\
@@ -856,7 +872,10 @@ Keyword & Meaning \\ \midrule
 \texttt{NODES:} & Compute nodes (SLURM). \\
 \texttt{NTASKS\_PER\_NODE:} & MPI tasks per node (SLURM). \\
 \texttt{PARTITION:} & SLURM partition. \\
-\texttt{WALLTIME:} & Time limit, e.g.\ \texttt{12:00:00}. \\
+\texttt{WALLTIME:} & One time limit for every step, e.g.\ \texttt{12:00:00}
+  (default: per step, Section~\ref{sec:slurm-time}). \\
+\texttt{RELAX\_WALLTIME:} \textit{etc.} & Per-step time limit (RELAX, SCF,
+  BANDS, DOS, WANNIER, DFPT, PHONONS, LOBSTER). \\
 \texttt{ACCOUNT:} & SLURM account / allocation. \\
 \texttt{DFPT\_EDIFF:} & EDIFF for DFPT. Default \texttt{1E-8}. \\
 \texttt{PHONONS\_DIM:} & Supercell, e.g.\ \texttt{2 2 2}. \\
@@ -966,17 +985,20 @@ Combine freely with \texttt{collinear magnetization}.
 
 Default values come from \texttt{hubbard\_u\_defaults.csv} (repo root:
 element, orbital, $U_{\mathrm{eff}} = U - J$, \ldots; 3d, 4d, 5d, 4f, 5f
-elements).  Dudarev's scheme depends on $U - J$ only, so the INCAR gets
-\texttt{LDAUU} $= U_{\mathrm{eff}}$ and \texttt{LDAUJ} $= 0$; rows with
-$U_{\mathrm{eff}} = 0$ (Zn, Cd) get no correction.  These values were fitted
-for oxides and chalcogenides, so their use is set by one optional flag in
+elements) --- the only source of default values (there are no built-in
+ones).  Dudarev's scheme uses $U_{\mathrm{eff}}$ only, so the INCAR gets
+\texttt{LDAUU} $= U_{\mathrm{eff}}$ and \texttt{LDAUJ} $= 0$ (a J column in
+the file is ignored); rows with $U_{\mathrm{eff}} = 0$ (Zn, Cd) get no
+correction.  These values were fitted
+for oxides, chalcogenides and halides, so their use is set by one optional flag in
 \texttt{instructions.txt}:
 
 \begin{tabularx}{\linewidth}{@{}lX@{}}
 \thead
 Flag & Effect \\ \midrule
-(none) & \textbf{default}: GGA+U only if the POSCAR contains O, S, Se or Te
-  (oxide/chalcogenide); otherwise $U = 0$. \\
+(none) & \textbf{default}: GGA+U on the tabulated d/f elements only if the
+  POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I);
+  otherwise $U = 0$. \\
 \texttt{GGA\_U: ON} & tabulated $U_{\mathrm{eff}}$ on every tabulated element,
   whatever the compound. \\
 \texttt{GGA\_U: OFF} & no U (also \texttt{no GGA+U}). \\
@@ -1541,9 +1563,54 @@ RELAX_KPAR: 2   PHONONS_KPAR: 1   # DFPT is always KPAR=1, NCORE=1
 \subsection{Per-project overrides (in instructions.txt)}
 
 \begin{lstlisting}
-NODES: 4     NTASKS_PER_NODE: 32     PARTITION: gpu
-WALLTIME: 48:00:00     ACCOUNT: myallocation
+NODES: 4     NTASKS_PER_NODE: 32     PARTITION: gpu     ACCOUNT: myallocation
+RELAX_WALLTIME: 12:00:00      # one step
+WALLTIME: 48:00:00            # every step (instead of the per-step defaults)
 \end{lstlisting}
+
+\subsection{Walltime per step and automatic continuation}
+\label{sec:slurm-time}
+
+Each step is its own SLURM job with its own time limit, so short steps get
+short limits (and better queue priority).  Defaults:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Step & Walltime \\ \midrule
+\texttt{01\_relax} & 08:00:00 \\
+\texttt{02\_scf} & 04:00:00 \\
+\texttt{03\_bands}, \texttt{04\_dos} & 02:00:00 \\
+\texttt{08\_lobster} & 04:00:00 (symmetry-off NSCF over the full mesh, plus the
+  LOBSTER projection) \\
+others & the profile time \\
+\bottomrule
+\end{tabularx}
+
+Priority: \texttt{<STEP>\_WALLTIME} $>$ \texttt{WALLTIME} $>$ these defaults
+$>$ \texttt{profiles/slurm.json}.  In \texttt{ht-semimetals.py} directories
+the same defaults sit in \texttt{env.sh} (\texttt{TIME\_RELAX} \ldots;
+\texttt{retune.sh -{}-time-relax \ldots}).
+
+\textbf{A step that reaches its limit is continued, not lost.}  Every step
+script asks SLURM for a warning 15~min before the limit
+(\texttt{-{}-signal=B:USR1@900}).  On the warning it writes a
+\texttt{STOPCAR} (\texttt{LSTOP} for a relaxation: stop after the current
+ionic step; \texttt{LABORT} otherwise), lets VASP finish cleanly and requeues
+the job with \texttt{scontrol requeue} --- same job id, so jobs chained after
+it with \texttt{afterok} keep waiting.  The requeued job then
+\begin{itemize}
+  \item \textbf{relaxation}: continues from the \texttt{CONTCAR} (or, if that
+    is empty, from the last \texttt{XDATCAR} frame, cell included);
+  \item \textbf{LOBSTER}: skips the NSCF if it had finished and reruns only
+    the LOBSTER binary;
+  \item other steps: rerun.
+\end{itemize}
+The interrupted \texttt{OUTCAR}/\texttt{XDATCAR} are kept as
+\texttt{*.timeout0}, \texttt{*.timeout1}, \ldots  If requeueing is not
+allowed on the cluster, the job resubmits a copy of itself with the same
+name and time limit and re-points dependent jobs to it.  At most
+\texttt{VF\_MAX\_RESTARTS} (default 5) continuations per step.
+
 
 % ============================================================
 \section{Wannier90}
@@ -2066,9 +2133,14 @@ Band plot empty or not shown &
     in the COHP plot and LOBSTER post-processing.
     GGA+U flag \texttt{GGA\_U: ON|OFF} in \texttt{instructions.txt} (GUI:
     auto/on/off; HT drivers: \texttt{-{}-gga-u}); without it the tabulated
-    $U_{\mathrm{eff}}$ is used only for oxides/chalcogenides (O, S, Se, Te),
-    otherwise $U=0$; same U in all steps; new U table (3d/4d/5d/4f/5f,
-    \texttt{LDAUU} $= U_{\mathrm{eff}}$, \texttt{LDAUJ} $=0$).
+    $U_{\mathrm{eff}}$ is used only for chalcogenides/halides (O, S, Se, Te,
+    F, Cl, Br, I), otherwise $U=0$; same U in all steps; U values only from
+    \texttt{hubbard\_u\_defaults.csv} (3d/4d/5d/4f/5f, \texttt{LDAUU}
+    $= U_{\mathrm{eff}}$, \texttt{LDAUJ} $=0$).
+    SLURM: walltime per step (relax 8~h, SCF 4~h, bands/DOS 2~h, LOBSTER
+    4~h); a step reaching its limit is stopped cleanly and requeued
+    (relaxations continue from CONTCAR/XDATCAR); \texttt{ht-semimetals.py}
+    submits one job per step.
     \texttt{ht-semimetals.py} relaxes cell + ions first (\texttt{01\_relax},
     ISIF = 3).
 \end{description}

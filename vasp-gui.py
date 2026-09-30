@@ -2687,10 +2687,10 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <label class="ck"><input type="checkbox" id="hexagonal" checked> Hexagonal BZ</label>
     <label class="ck"><input type="checkbox" id="is_2d"> 2D / slab (k<sub>z</sub>=1)</label>
     <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U (explicit)</label>
-    <label class="ck" title="Tabulated U_eff (hubbard_u_defaults.csv, Dudarev). Auto: only for oxides/chalcogenides (O, S, Se, Te in the POSCAR), otherwise U = 0. On: every tabulated d/f element. Off: never. Explicit GGA+U rows always override.">
+    <label class="ck" title="Tabulated U_eff (hubbard_u_defaults.csv, Dudarev). Auto: only for chalcogenides/halides (O, S, Se, Te, F, Cl, Br, I in the POSCAR), otherwise U = 0. On: every tabulated d/f element. Off: never. Explicit GGA+U rows always override.">
       Default Hubbard U:
       <select id="u_mode" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
-        <option value="auto" selected>auto (oxides/chalcogenides)</option>
+        <option value="auto" selected>auto (chalcogenides/halides)</option>
         <option value="on">on (all tabulated d/f)</option>
         <option value="off">off</option>
       </select></label>

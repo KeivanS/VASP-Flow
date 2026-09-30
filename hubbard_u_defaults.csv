@@ -1,8 +1,9 @@
-# Default Hubbard U_eff for VASP-Flow (Dudarev, LDAUTYPE=2): LDAUU = U_eff, LDAUJ = 0.
-# Columns used: element, orbital, U_eff = U - J (eV); the rest is information.
-# When applied: no GGA_U flag in instructions.txt -> only for oxides/chalcogenides
-#   (O, S, Se or Te in the POSCAR), otherwise U = 0;  GGA_U: ON -> always;
-#   GGA_U: OFF -> never;  explicit 'GGA+U with U=... on El-orb' always wins.
+# Default Hubbard U_eff for VASP-Flow -- the ONLY source of default U values.
+# Dudarev (LDAUTYPE=2): LDAUU = U_eff, LDAUJ = 0 (J is irrelevant; any J column is ignored).
+# Columns read: element, orbital, U_eff (eV); the rest is information.  U_eff = 0 -> no U.
+# When applied: no GGA_U flag in instructions.txt -> only if the POSCAR contains a
+#   chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I), otherwise U = 0;
+#   GGA_U: ON -> always;  GGA_U: OFF -> never;  explicit 'GGA+U with U=... on El-orb' wins.
 #Elt    Orb  U_eff=U-J	J_eV	U_MP_eV	U_LR_range_eV	Context	Reference
 Sc	3d	2.0	0.5	—	 1–3	d0/early TM; usually weak need for U	Tesch & Kowalski 2022
 Ti	3d	3.0	0.5	3.0	 2–4	Ti oxides      localized d	LR / MP

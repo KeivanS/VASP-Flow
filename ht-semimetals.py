@@ -23,7 +23,7 @@ high-throughput driver.  This script adds the screening-specific parts:
   * automatic spin polarisation for cells containing 3d magnetic elements;
   * the LOBSTER NSCF capped at 1x the SCF mesh (it runs ISYM=0, so its cost is
     the *full* mesh -- 2x would make it dominate the whole screen);
-  * per-material SLURM sizing (nodes / walltime) from the electron count and
+  * per-material SLURM sizing (nodes) from the electron count and
     the k-point count, capped at --max-nodes x --cores-per-node;
   * a highthroughput directory with one job per material, a throttled submitter, a POTCAR
     builder, a status reporter and a result collector.
@@ -67,6 +67,7 @@ import numpy as np
 REPO_DIR    = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO_DIR, 'modules'))
 AGENT_SLURM = os.path.join(REPO_DIR, 'vasp-agent-slurm.py')
+from vasp_input_generator import STEP_WALLTIME, RESUME_LIB   # noqa: E402
 
 # ── defaults ────────────────────────────────────────────────────────────────
 KSPACING        = 0.10      # A^-1; N_i = even(ceil(|b_i*| / KSPACING))
@@ -82,7 +83,8 @@ ENCUT_FACTOR    = 1.3       # x max(ENMAX); hard cutoff for LOBSTER/bands consis
 # atoms there are and what kind they are (valence electrons per POTCAR), and
 # NELECT^2 tracks the NBANDS^2 scaling of the diagonalisation.  N_kpoints is
 # the FULL mesh because the LOBSTER NSCF runs ISYM=0 and dominates the cost.
-# Tier table: (W_upper_bound, nodes, cores_per_node, walltime, partition).
+# Tier table: (W_upper_bound, nodes, cores_per_node, partition).  Walltimes are
+# per step, not per material (STEP_WALLTIME, set in env.sh as TIME_RELAX ...).
 # None as the bound means "everything above the previous tier".
 #
 # Sized for Rivanna as reported by sinfo:
@@ -92,9 +94,9 @@ ENCUT_FACTOR    = 1.3       # x max(ENMAX); hard cutoff for LOBSTER/bands consis
 # past ~40 ranks, so extra nodes buy little.  Only the heaviest 10% go wide, on parallel's 96-core
 # nodes -- requesting 40 tasks there would strand 56 cores per node.
 TIERS = [
-    (5.0,  1, 40, '24:00:00', 'standard'),
-    (25.0, 1, 40, '72:00:00', 'standard'),
-    (None, 2, 96, '72:00:00', 'parallel'),
+    (5.0,  1, 40, 'standard'),
+    (25.0, 1, 40, 'standard'),
+    (None, 2, 96, 'parallel'),
 ]
 
 # 3d elements that need a spin-polarised starting guess.
@@ -205,18 +207,18 @@ def material_potcar_info(struct, potcar_dir):
 
 # ── per-material SLURM sizing ───────────────────────────────────────────────
 def size_job(nelect, nk_full, tiers=None, max_nodes=MAX_NODES):
-    """Return (nodes, cores_per_node, walltime, partition, W) for one material.
+    """Return (nodes, cores_per_node, partition, W) for one material.
 
     W = NELECT^2 * N_kpoints / 1e6 -- see the TIERS comment.  The first tier
     whose upper bound exceeds W wins; the last tier is the catch-all.
     """
     tiers = tiers or TIERS
     W = (nelect ** 2) * nk_full / 1.0e6
-    for bound, nodes, cores, walltime, partition in tiers:
+    for bound, nodes, cores, partition in tiers:
         if bound is None or W < bound:
-            return min(nodes, max_nodes), cores, walltime, partition, W
-    bound, nodes, cores, walltime, partition = tiers[-1]
-    return min(nodes, max_nodes), cores, walltime, partition, W
+            return min(nodes, max_nodes), cores, partition, W
+    bound, nodes, cores, partition = tiers[-1]
+    return min(nodes, max_nodes), cores, partition, W
 
 
 # ── instructions.txt ────────────────────────────────────────────────────────
@@ -233,7 +235,7 @@ def magmom_string(struct):
 
 
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
-                       ntasks_per_node, walltime, partition, account,
+                       ntasks_per_node, partition, account,
                        functional='PBE', kpra=None, kpar=None, ncore=None,
                        relax=True, gga_u='auto'):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
@@ -276,13 +278,14 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "# Turn it back on only if ELFCAR is wanted, and expect a much slower SCF.",
         "ELF: off",
         "",
-        *([f"GGA_U: {gga_u.upper()}   # default (no flag): U only for oxides/chalcogenides"]
+        *([f"GGA_U: {gga_u.upper()}   # default (no flag): U only for chalcogenides/halides"]
           if gga_u in ('on', 'off') else []),
         *([f"KPAR: {kpar}"] if kpar else []),
         *([f"NCORE: {ncore}"] if ncore else []),
         f"NODES: {nodes}",
         f"NTASKS_PER_NODE: {ntasks_per_node}",
-        f"WALLTIME: {walltime}",
+        *[f"{st.upper()}_WALLTIME: {t}" for st, t in STEP_WALLTIME.items()
+          if st in ('relax', 'scf', 'bands', 'lobster')],
         f"PARTITION: {partition}",
         f"ACCOUNT: {account}",
     ]
@@ -388,25 +391,28 @@ JOB_TEMPLATE = r'''#!/bin/bash
 #SBATCH --ntasks-per-node=@NTASKS@
 #SBATCH --time=@TIME@
 #SBATCH --account=@ACCOUNT@
-#SBATCH --output=@ID@-%j.out
-#SBATCH --error=@ID@-%j.err
+#SBATCH --output=@ID@-%x-%j.out
+#SBATCH --error=@ID@-%x-%j.err
+#SBATCH --signal=B:USR1@900
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #
 # @ID@  --  @FORMULA@, @NATOMS@ atoms, NELECT=@NELECT@, mesh @MESH@ (@NK@ k-points)
 # Sized from the electron count and k-point count: W=@W@ -> @NODES@ node(s).
-# Runs 01_relax -> 02_scf -> 03_bands -> 08_lobster in one allocation.
-# Steps that already carry a finished OUTCAR are skipped, so re-submitting
-# this script after a timeout resumes rather than restarting.
+#
+# One step per job:   sbatch job.sbatch relax | scf | bands | lobster
+# submit_all.sh submits the four as a chain (afterok) with the walltime of each
+# step from env.sh (TIME_RELAX, TIME_SCF, TIME_BANDS, TIME_LOBSTER); 'all' runs
+# every step in one job.  15 min before the time limit VASP is stopped cleanly
+# and the job is requeued (same job id, so the chain waits): a relaxation then
+# continues from its CONTCAR (or the last XDATCAR frame), a LOBSTER job whose
+# NSCF finished reruns only the LOBSTER binary.  Finished steps are skipped.
 
 set -u
+STEP="${1:-all}"
 
-# Locate this material's directory.
-#
-# NOTE: under sbatch, SLURM copies the script to /var/spool/slurm/.../slurm_script
-# before running it, so ${BASH_SOURCE[0]} points at the spool copy, NOT at the
-# highthroughput directory.  SLURM_SUBMIT_DIR is the directory sbatch was invoked from, which is
-# the reliable anchor.  Accept it whether the job was submitted from inside the
-# material directory or from the highthroughput root, and fall back to the script's own
-# location when the script is run directly with bash (no SLURM).
+# Locate this material's directory.  Under sbatch the script runs from a spool
+# copy, so ${BASH_SOURCE[0]} is useless; SLURM_SUBMIT_DIR is the anchor.
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "$SLURM_SUBMIT_DIR/02_scf" ]; then
     PROJ="$SLURM_SUBMIT_DIR"
 elif [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "$SLURM_SUBMIT_DIR/materials/@ID@/02_scf" ]; then
@@ -414,136 +420,112 @@ elif [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "$SLURM_SUBMIT_DIR/materials/@ID@/02
 else
     PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
-
 if [ ! -d "$PROJ/02_scf" ]; then
     echo "ERROR: cannot locate the @ID@ directory (tried '$PROJ')." >&2
-    echo "       Submit with:  cd <highthroughput>/materials/@ID@ && sbatch job.sbatch" >&2
+    echo "       Submit with:  cd <highthroughput>/materials/@ID@ && sbatch job.sbatch <step>" >&2
     exit 1
 fi
 cd "$PROJ"
-
 ENV_SH="$PROJ/../../env.sh"
-if [ ! -f "$ENV_SH" ]; then
-    echo "ERROR: env.sh not found at $ENV_SH" >&2
-    exit 1
-fi
+[ -f "$ENV_SH" ] || { echo "ERROR: env.sh not found at $ENV_SH" >&2; exit 1; }
 source "$ENV_SH"
 
-echo "=== @ID@ (@FORMULA@) on $(hostname) ==="
+VF_SCRIPT="$PROJ/job.sbatch"
+VF_ARGS="$STEP"
+@RESUME_LIB@
+echo "=== @ID@ (@FORMULA@) step '$STEP' on $(hostname), job ${SLURM_JOB_ID:-local} ==="
 echo "Started: $(date)"
-FAILED=0
 
-finished() {   # a VASP step is done when OUTCAR carries the final timing block
-    [ -f "$1/OUTCAR" ] && grep -q "General timing and accounting" "$1/OUTCAR"
-}
+finished() { [ -f "$1/OUTCAR" ] && grep -q "General timing and accounting" "$1/OUTCAR"; }
+relaxed()  { [ -f "$1/OUTCAR" ] && grep -q "reached required accuracy" "$1/OUTCAR"; }
 
-run_vasp_step() {
+# Run VASP in one step directory; resumes after a time limit (see above).
+run_vasp_step() {   # $1 = step dir, $2 = relax | static | lobster
     local step=$1
-    if finished "$step"; then
-        echo "--- $step already complete, skipping"
-        return 0
-    fi
-    if [ ! -d "$step" ]; then
-        # Not an optional condition: every material is generated with all its
-        # steps, so a missing directory means the job is looking in the wrong
-        # place.  Fail loudly rather than "succeeding" without doing anything.
-        echo "!!! $step directory missing under $PROJ - wrong working directory?"
-        return 1
+    [ -d "$PROJ/$step" ] || { echo "!!! $step missing under $PROJ"; return 1; }
+    cd "$PROJ/$step"
+    VF_KIND=$2
+    vf_resume_prepare
+    if [ "$vf_skip_vasp" = 1 ] || { finished . && [ "$VF_KIND" != relax ]; }; then
+        echo "--- $step VASP part already complete"
+        cd "$PROJ"; return 0
     fi
     echo "--- $step : $(date)"
-    local rc=0
-    cd "$PROJ/$step"
     [ -f copy_from_relax.sh ] && bash ./copy_from_relax.sh
     [ -f copy_from_scf.sh ] && bash ./copy_from_scf.sh
-    $VASP_LAUNCH "$VASP_STD"
-    rc=$?
+    VF_PHASE=vasp
+    vf_run $VASP_LAUNCH "$VASP_STD"
+    vf_after vasp                       # limit hit -> requeued, exits here
     cd "$PROJ"
-    if ! finished "$step"; then
-        echo "!!! $step did not reach the final timing block (exit $rc)"
-        return 1
-    fi
+    finished "$step" || { echo "!!! $step did not reach the final timing block"; return 1; }
     echo "--- $step done"
-    return 0
 }
 
-# ── 01_relax: cell + ions (ISIF=3).  A cell relaxation changes the basis, so
-#    if the first pass does not reach the force criterion it is restarted
-#    once from its CONTCAR (fresh basis for the new cell).
-relaxed() { [ -f "$1/OUTCAR" ] && grep -q "reached required accuracy" "$1/OUTCAR"; }
-if [ -d 01_relax ]; then
-    if relaxed 01_relax; then
-        echo "--- 01_relax already converged, skipping"
-    else
-        run_vasp_step 01_relax || { echo "Relaxation failed - dependent steps skipped"; exit 1; }
-        if ! relaxed 01_relax; then
-            echo "--- 01_relax not converged after pass 1: restarting from CONTCAR"
-            ( cd 01_relax && cp CONTCAR POSCAR && mv OUTCAR OUTCAR.pass1 \
-                && mv OSZICAR OSZICAR.pass1 2>/dev/null; true )
-            run_vasp_step 01_relax || { echo "Relaxation failed - dependent steps skipped"; exit 1; }
-            relaxed 01_relax || { echo "WARNING: 01_relax still not converged - SCF uses its CONTCAR"; FAILED=1; }
-        fi
+do_relax() {        # cell + ions (ISIF=3); one extra pass from CONTCAR if needed
+    [ -d 01_relax ] || return 0
+    if relaxed 01_relax; then echo "--- 01_relax already converged"; return 0; fi
+    run_vasp_step 01_relax relax || return 1
+    if ! relaxed 01_relax; then
+        echo "--- 01_relax not converged: second pass from CONTCAR (new basis)"
+        ( cd 01_relax && cp CONTCAR POSCAR && mv OUTCAR OUTCAR.pass1 \
+            && mv OSZICAR OSZICAR.pass1 2>/dev/null; true )
+        run_vasp_step 01_relax relax || return 1
+        relaxed 01_relax || echo "WARNING: 01_relax still not converged - SCF uses its CONTCAR"
     fi
-fi
-
-run_vasp_step 02_scf   || { echo "SCF failed - dependent steps skipped"; exit 1; }
-run_vasp_step 03_bands || { echo "WARNING: bands step failed, continuing"; FAILED=1; }
-
-# ── LOBSTER: symmetry-off NSCF, then the LOBSTER binary on the same node ────
-if run_vasp_step 08_lobster; then
+}
+do_scf()   { run_vasp_step 02_scf static; }
+do_bands() { run_vasp_step 03_bands static || echo "WARNING: bands step failed"; return 0; }
+do_lobster() {      # symmetry-off NSCF, then the LOBSTER binary
+    run_vasp_step 08_lobster lobster || return 1
     cd "$PROJ/08_lobster"
+    VF_KIND=lobster
     if [ -f lobster.out ] && grep -q "finished in" lobster.out; then
-        echo "--- LOBSTER already complete, skipping"
+        echo "--- LOBSTER already complete"
     else
         echo "--- LOBSTER binary : $(date)"
-        if "$LOBSTER_BIN" > lobster.out 2>&1; then
-            grep -q "finished in" lobster.out || FAILED=1
+        VF_PHASE=post
+        vf_run "$LOBSTER_BIN" > lobster.out 2>&1
+        vf_after post                   # limit hit -> requeued, rerun LOBSTER only
+        grep -q "finished in" lobster.out || echo "!!! LOBSTER failed - see lobster.out"
+    fi
+    grep -q "finished in" lobster.out 2>/dev/null && { [ "${KEEP_WAVECAR:-0}" = "1" ] || rm -f WAVECAR; }
+    cd "$PROJ"
+}
+do_final() {        # clean up, plots, .done
+    if [ "${KEEP_LARGE_FILES:-0}" != "1" ]; then
+        rm -f 03_bands/CHGCAR 08_lobster/CHGCAR
+        rm -f 01_relax/WAVECAR 01_relax/CHGCAR 01_relax/CHG
+    fi
+    if [ "${RUN_ANALYSIS:-1}" = "1" ] && [ -f analyze.sh ]; then
+        [ -n "${ANALYSIS_PYTHON:-}" ] && export PATH="$(dirname "$ANALYSIS_PYTHON"):$PATH"
+        if python3 -c "import numpy, matplotlib" 2>/dev/null; then
+            echo "--- analysis       : $(date)"
+            mkdir -p analysis
+            MPLBACKEND=Agg bash analyze.sh > analysis/analyze.log 2>&1 \
+                || echo "WARNING: analyze.sh reported errors - see analysis/analyze.log"
         else
-            echo "!!! LOBSTER failed - see lobster.out"
-            FAILED=1
+            echo "WARNING: python3 without numpy/matplotlib - analysis skipped."
+            echo "         Set ANALYSIS_PYTHON in env.sh, then run ./analyze_all.sh."
         fi
     fi
-    # WAVECAR is large and is only needed by LOBSTER itself.
-    [ "${KEEP_WAVECAR:-0}" = "1" ] || rm -f WAVECAR
-    cd "$PROJ"
-else
-    echo "WARNING: LOBSTER NSCF failed"
-    FAILED=1
-fi
-
-# CHGCAR/WAVECAR copies dominate the footprint of a 1865-material screen.
-if [ "${KEEP_LARGE_FILES:-0}" != "1" ]; then
-    rm -f "$PROJ"/03_bands/CHGCAR
-    rm -f "$PROJ"/01_relax/WAVECAR "$PROJ"/01_relax/CHGCAR "$PROJ"/01_relax/CHG
-    rm -f "$PROJ"/08_lobster/CHGCAR
-fi
-
-# ── Analysis: band / COHP / COBI / COOP / LOBSTER-DOS plots + bonding CSV ────
-# Runs analyze.sh on the compute node once the VASP/LOBSTER steps are done.
-# Never fails the job: a missing numpy/matplotlib only skips the plots, and
-# ./analyze_all.sh can redo them later from the login node.
-if [ "${RUN_ANALYSIS:-1}" = "1" ] && [ -f "$PROJ/analyze.sh" ]; then
-    [ -n "${ANALYSIS_PYTHON:-}" ] && export PATH="$(dirname "$ANALYSIS_PYTHON"):$PATH"
-    if python3 -c "import numpy, matplotlib" 2>/dev/null; then
-        echo "--- analysis       : $(date)"
-        mkdir -p "$PROJ/analysis"
-        MPLBACKEND=Agg bash "$PROJ/analyze.sh" > "$PROJ/analysis/analyze.log" 2>&1 \
-            || echo "WARNING: analyze.sh reported errors - see analysis/analyze.log"
+    # .done (submit_all.sh skips the material) only when every step succeeded
+    if { [ ! -d 01_relax ] || relaxed 01_relax; } && finished 02_scf && finished 03_bands \
+            && grep -q "finished in" 08_lobster/lobster.out 2>/dev/null; then
+        touch .done; echo "--- all steps complete"
     else
-        echo "WARNING: python3 without numpy/matplotlib - analysis skipped."
-        echo "         Set ANALYSIS_PYTHON in env.sh, then run ./analyze_all.sh."
+        echo "One or more steps incomplete - not marking .done; ./submit_all.sh retries them."
     fi
-fi
+}
 
+case "$STEP" in
+    relax)   do_relax || exit 1 ;;
+    scf)     do_scf   || exit 1 ;;
+    bands)   do_bands ;;
+    lobster) do_lobster || { do_final; exit 1; }; do_final ;;
+    all)     do_relax && do_scf || exit 1; do_bands; do_lobster; do_final ;;
+    *) echo "usage: sbatch job.sbatch relax|scf|bands|lobster|all" >&2; exit 2 ;;
+esac
 echo "Finished: $(date)"
-# .done is what submit_all.sh uses to skip a material.  Only write it when
-# every step succeeded, so a partially-failed material is retried on the next
-# pass (finished steps are skipped, so the retry is cheap).
-if [ "$FAILED" -eq 0 ]; then
-    touch "$PROJ/.done"
-else
-    echo "One or more steps failed - not marking .done; re-submit to retry."
-    exit 1
-fi
 '''
 
 
@@ -555,7 +537,8 @@ def write_job_script(proj_dir, mp_id, meta, partition, account):
             .replace('@ACCOUNT@',   account)
             .replace('@NODES@',     str(meta['nodes']))
             .replace('@NTASKS@',    str(meta['ntasks_per_node']))
-            .replace('@TIME@',      meta['walltime'])
+            .replace('@TIME@',      STEP_WALLTIME['relax'])
+            .replace('@RESUME_LIB@', RESUME_LIB)
             .replace('@FORMULA@',   meta['formula'])
             .replace('@NATOMS@',    str(meta['natoms']))
             .replace('@NELECT@',    f"{meta['nelect']:.0f}")
@@ -571,9 +554,9 @@ def write_job_script(proj_dir, mp_id, meta, partition, account):
 ENV_SH = r'''#!/bin/bash
 # ============================================================================
 # env.sh -- the ONE file to edit on the cluster.
-# Sourced by every material's job.sbatch.  #SBATCH headers cannot read shell
-# variables, so partition/account/walltime live in the job scripts themselves;
-# retune.sh rewrites those in place if they need to change.
+# Sourced by every material's job.sbatch and by submit_all.sh.  Walltimes per
+# step are set below; partition/account live in the job scripts (#SBATCH
+# headers cannot read shell variables) -- retune.sh rewrites those in place.
 # ============================================================================
 
 # --- modules -----------------------------------------------------------------
@@ -622,6 +605,15 @@ fi
 #   export ANALYSIS_PYTHON="$HOME/vaspenv/bin/python3"
 export RUN_ANALYSIS=1
 export ANALYSIS_PYTHON="${ANALYSIS_PYTHON:-}"
+
+# --- walltime per step (submit_all.sh passes these to sbatch --time) ----------
+# A step that reaches its limit is stopped cleanly and requeued automatically
+# (at most VF_MAX_RESTARTS times): relaxations continue from CONTCAR/XDATCAR.
+export TIME_RELAX="@T_RELAX@"
+export TIME_SCF="@T_SCF@"
+export TIME_BANDS="@T_BANDS@"
+export TIME_LOBSTER="@T_LOBSTER@"
+export VF_MAX_RESTARTS=5
 
 # --- disk policy -------------------------------------------------------------
 # CHGCAR/WAVECAR copies are deleted after each material by default.
@@ -712,22 +704,35 @@ PYEND
 '''
 
 SUBMIT_ALL = r'''#!/bin/bash
-# Submit one job per material, keeping at most $MAX_QUEUED of our own jobs in
-# the queue at a time.  Safe to re-run: materials that already carry .done, or
-# that currently have a job in the queue, are skipped -- so this doubles as the
-# resume command after a batch of timeouts.
+# Submit every material as a chain of step jobs
+#     relax -> scf -> bands -> lobster      (sbatch --dependency=afterok)
+# each with its own walltime (TIME_RELAX, TIME_SCF, TIME_BANDS, TIME_LOBSTER in
+# env.sh).  A step that reaches its limit is continued automatically (requeued
+# with the same job id).  Keeps at most $MAX_QUEUED of our jobs in the queue.
+# Safe to re-run: finished steps, materials with .done and materials that
+# already have jobs queued are skipped -- so this is also the resume command.
 #
 #   ./submit_all.sh              submit everything (throttled)
 #   ./submit_all.sh 20           submit at most 20 materials this pass
-#   MAX_QUEUED=100 ./submit_all.sh
+#   MAX_QUEUED=400 ./submit_all.sh
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAX_QUEUED="${MAX_QUEUED:-50}"
+VASPFLOW_NO_CHECK=1 source "$HERE/env.sh" >/dev/null 2>&1
+MAX_QUEUED="${MAX_QUEUED:-200}"
 LIMIT="${1:-0}"
 USER_NAME="${USER:-$(whoami)}"
 
 queued() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | wc -l | tr -d ' '; }
-in_queue() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | grep -qx "$1"; }
+in_queue() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | grep -q "^$1_"; }
+step_done() {   # $1 = material dir, $2 = step
+    local o
+    case "$2" in
+        relax)   [ ! -d "$1/01_relax" ] || grep -q "reached required accuracy" "$1/01_relax/OUTCAR" 2>/dev/null ;;
+        scf)     grep -q "General timing and accounting" "$1/02_scf/OUTCAR" 2>/dev/null ;;
+        bands)   grep -q "General timing and accounting" "$1/03_bands/OUTCAR" 2>/dev/null ;;
+        lobster) grep -q "finished in" "$1/08_lobster/lobster.out" 2>/dev/null ;;
+    esac
+}
 
 # Build any missing POTCARs automatically (licensed files are not shipped).
 need_potcar=0
@@ -753,14 +758,25 @@ while read -r id; do
         continue
     fi
     while [ "$(queued)" -ge "$MAX_QUEUED" ]; do sleep 60; done
-    jid=$(cd "$d" && sbatch --parsable job.sbatch) || { echo "FAILED $id"; continue; }
-    echo "submitted $id -> $jid"
+    prev=""; line="$id:"
+    for st in relax scf bands lobster; do
+        step_done "$d" "$st" && continue
+        case "$st" in
+            relax) t="${TIME_RELAX:-08:00:00}" ;;  scf)     t="${TIME_SCF:-04:00:00}" ;;
+            bands) t="${TIME_BANDS:-02:00:00}" ;;  lobster) t="${TIME_LOBSTER:-04:00:00}" ;;
+        esac
+        jid=$(cd "$d" && sbatch --parsable --job-name="${id}_$st" --time="$t" \
+                ${prev:+--dependency=afterok:$prev} job.sbatch "$st") \
+            || { echo "FAILED $id $st"; break; }
+        prev="$jid"; line="$line $st=$jid($t)"
+    done
+    echo "submitted $line"
     submitted=$((submitted + 1))
     [ "$LIMIT" -gt 0 ] && [ "$submitted" -ge "$LIMIT" ] && break
 done < "$HERE/material_list.txt"
 
 echo ""
-echo "Submitted $submitted job(s).  Monitor:  squeue -u $USER_NAME"
+echo "Submitted $submitted material(s).  Monitor:  squeue -u $USER_NAME"
 '''
 
 STATUS_SH = r'''#!/bin/bash
@@ -787,7 +803,9 @@ for mp_id in ids:
                 tail = open(o, errors='ignore').read()[-4000:]
             except OSError:
                 tail = ''
-            if 'General timing and accounting' in tail:
+            key = ('reached required accuracy' if s == '01_relax'
+                   else 'General timing and accounting')
+            if key in (tail if s != '01_relax' else open(o, errors='ignore').read()):
                 done[s] += 1
                 continue
         ok = False
@@ -870,12 +888,12 @@ du -sh "$HERE/screen_results.tar.gz"
 '''
 
 RETUNE_SH = r'''#!/bin/bash
-# Rewrite the #SBATCH partition / account / walltime in every job.sbatch.
-# Use this if the cluster's partition name or your allocation differs from
-# what the highthroughput directory was generated with.
+# Change partition / account in every job.sbatch, or the per-step walltimes in
+# env.sh (used by submit_all.sh for jobs submitted from now on).
 #
 #   ./retune.sh --partition compute --account elmgroup
-#   ./retune.sh --time 72:00:00
+#   ./retune.sh --time-relax 12:00:00 --time-lobster 06:00:00
+#   ./retune.sh --time 06:00:00          # all four steps
 #
 # Many clusters restrict their default/serial partition to a SINGLE node and
 # require a different partition for multi-node jobs.  --single/--multi sets
@@ -884,17 +902,24 @@ RETUNE_SH = r'''#!/bin/bash
 #   ./retune.sh --single standard --multi parallel
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PART=""; ACCT=""; TIME=""; SINGLE=""; MULTI=""
+PART=""; ACCT=""; SINGLE=""; MULTI=""
+TR=""; TS=""; TB=""; TL=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --partition) PART="$2"; shift 2 ;;
-        --account)   ACCT="$2"; shift 2 ;;
-        --time)      TIME="$2"; shift 2 ;;
-        --single)    SINGLE="$2"; shift 2 ;;
-        --multi)     MULTI="$2"; shift 2 ;;
+        --partition)    PART="$2"; shift 2 ;;
+        --account)      ACCT="$2"; shift 2 ;;
+        --time)         TR="$2"; TS="$2"; TB="$2"; TL="$2"; shift 2 ;;
+        --time-relax)   TR="$2"; shift 2 ;;
+        --time-scf)     TS="$2"; shift 2 ;;
+        --time-bands)   TB="$2"; shift 2 ;;
+        --time-lobster) TL="$2"; shift 2 ;;
+        --single)       SINGLE="$2"; shift 2 ;;
+        --multi)        MULTI="$2"; shift 2 ;;
         *) echo "unknown option: $1"; exit 1 ;;
     esac
 done
+setenv() { [ -n "$2" ] && sed -i "s|^export $1=.*|export $1=\"$2\"|" "$HERE/env.sh" && echo "  $1=$2"; }
+setenv TIME_RELAX "$TR"; setenv TIME_SCF "$TS"; setenv TIME_BANDS "$TB"; setenv TIME_LOBSTER "$TL"
 n=0; n1=0; nm=0
 for f in "$HERE"/materials/*/job.sbatch; do
     if [ -n "$SINGLE" ] || [ -n "$MULTI" ]; then
@@ -907,7 +932,6 @@ for f in "$HERE"/materials/*/job.sbatch; do
     fi
     [ -n "$PART" ] && sed -i "s|^#SBATCH --partition=.*|#SBATCH --partition=$PART|" "$f"
     [ -n "$ACCT" ] && sed -i "s|^#SBATCH --account=.*|#SBATCH --account=$ACCT|" "$f"
-    [ -n "$TIME" ] && sed -i "s|^#SBATCH --time=.*|#SBATCH --time=$TIME|" "$f"
     n=$((n + 1))
 done
 echo "Updated $n job script(s)."
@@ -919,8 +943,8 @@ exit 0
 
 README_HPC = r'''# Semimetal high-throughput screen — HPC instructions
 
-Generated by `ht-semimetals.py`.  Every material runs four VASP steps in a
-single SLURM job:
+Generated by `ht-semimetals.py`.  Every material runs four steps, each as its
+own SLURM job, chained with `--dependency=afterok`:
 
     01_relax    cell + ions relaxation (IBRION=2, ISIF=3), restarted once if needed
     02_scf      SCF from the relaxed CONTCAR/CHGCAR, N_i proportional to |b_i*|
@@ -950,9 +974,15 @@ lacks them.  `./analyze_all.sh` redoes the analysis for finished materials.
 `LOBSTER_BIN` must be the **Linux** LOBSTER build — the macOS binary named in
 the local config will not run on the cluster.
 
-If the partition name, account or walltime need to change:
+Walltime per step (env.sh): TIME_RELAX=@T_RELAX@, TIME_SCF=@T_SCF@,
+TIME_BANDS=@T_BANDS@, TIME_LOBSTER=@T_LOBSTER@.  A step that reaches its limit
+is stopped cleanly 15 min before the end and requeued automatically (same job
+id, so the chain keeps waiting), at most VF_MAX_RESTARTS=5 times: a
+relaxation continues from its CONTCAR (or the last XDATCAR frame), a LOBSTER
+job whose NSCF finished reruns only the LOBSTER binary.  To change:
 
-    ./retune.sh --partition <name> --account <alloc> --time 48:00:00
+    ./retune.sh --time-relax 12:00:00 --time-lobster 06:00:00   # or --time for all
+    ./retune.sh --partition <name> --account <alloc>
 
 ## 3. POTCARs (automatic)
 
@@ -967,29 +997,31 @@ against your cluster's library.
 
 ## 4. Test first
 
-    cd materials/@FIRST@
-    sbatch job.sbatch
+    ./submit_all.sh 1            # first material: relax -> scf -> bands -> lobster
     squeue -u $USER
 
 When it finishes, check:
 
+    cd materials/@FIRST@
+    grep "reached required accuracy" 01_relax/OUTCAR
     grep "General timing" 02_scf/OUTCAR 03_bands/OUTCAR 08_lobster/OUTCAR
     grep -i "finished in" 08_lobster/lobster.out
     head -30 08_lobster/ICOHPLIST.lobster
 
 ## 5. Submit the screen (SLURM)
 
-Each material is one SLURM job (`materials/<id>/job.sbatch`); `submit_all.sh`
-calls `sbatch` on them, keeping at most MAX_QUEUED in the queue.  Single material:
-`cd materials/<id> && sbatch job.sbatch`.
+`submit_all.sh` submits each material's four step jobs
+(`materials/<id>/job.sbatch relax|scf|bands|lobster`, job names `<id>_<step>`),
+keeping at most MAX_QUEUED jobs in the queue.  One step by hand:
+`cd materials/<id> && sbatch --time=04:00:00 job.sbatch scf`.
 
-    ./submit_all.sh              # throttled to MAX_QUEUED=50 concurrent jobs
-    MAX_QUEUED=100 ./submit_all.sh
+    ./submit_all.sh              # throttled to MAX_QUEUED=200 queued jobs
+    MAX_QUEUED=400 ./submit_all.sh
     ./submit_all.sh 20           # only 20 materials this pass
 
 Re-running `submit_all.sh` is the resume command: materials with a `.done`
-marker or a job already in the queue are skipped, and each `job.sbatch` skips
-steps whose OUTCAR already carries the final timing block.
+marker or jobs already in the queue are skipped, and finished steps are not
+resubmitted.
 
 ## 6. Monitor and collect
 
@@ -1014,7 +1046,10 @@ steps whose OUTCAR already carries the final timing block.
 * **Spin.**  Cells containing V/Cr/Mn/Fe/Co/Ni start spin-polarised (ISPIN=2)
   with a high moment on the magnetic species.  Everything else is
   non-spin-polarised.
-* **Disk.**  Each job deletes its CHGCAR/WAVECAR copies at the end.  Set
+* **GGA+U.**  Default: U_eff from hubbard_u_defaults.csv only if the cell
+  contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I); `--gga-u on|off`
+  at generation overrides it.
+* **Disk.**  The last (LOBSTER) job deletes the CHGCAR/WAVECAR copies.  Set
   `KEEP_LARGE_FILES=1` in env.sh to retain them.
 '''
 
@@ -1106,7 +1141,11 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
                    .replace('@MODULES@',     module_lines or '# (no modules)')
                    .replace('@VASP_STD@',    args.vasp_std)
                    .replace('@LOBSTER_BIN@', args.lobster_bin)
-                   .replace('@POTCAR_DIR@',  args.hpc_potcar_dir)),
+                   .replace('@POTCAR_DIR@',  args.hpc_potcar_dir)
+                   .replace('@T_RELAX@',     STEP_WALLTIME['relax'])
+                   .replace('@T_SCF@',       STEP_WALLTIME['scf'])
+                   .replace('@T_BANDS@',     STEP_WALLTIME['bands'])
+                   .replace('@T_LOBSTER@',   STEP_WALLTIME['lobster'])),
         'make_potcars.sh':    MAKE_POTCARS,
         'submit_all.sh':      SUBMIT_ALL,
         'status.sh':          STATUS_SH,
@@ -1115,6 +1154,10 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
         'postprocess_all.sh': POSTPROCESS_SH,
         'analyze_all.sh':     ANALYZE_ALL_SH,
         'README_HPC.md': (README_HPC
+                          .replace('@T_RELAX@', STEP_WALLTIME['relax'])
+                          .replace('@T_SCF@', STEP_WALLTIME['scf'])
+                          .replace('@T_BANDS@', STEP_WALLTIME['bands'])
+                          .replace('@T_LOBSTER@', STEP_WALLTIME['lobster'])
                           .replace('@HTDIR@',   os.path.basename(htdir))
                           .replace('@FIRST@',    first_id)
                           .replace('@KMESH_NOTE@',
@@ -1145,7 +1188,7 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
 
 def write_summary_csv(path, metas):
     cols = ['mp_id', 'formula', 'natoms', 'nelect', 'encut', 'kmesh', 'nk_full',
-            'W', 'nodes', 'ntasks_per_node', 'walltime', 'partition', 'ispin',
+            'W', 'nodes', 'ntasks_per_node', 'partition', 'ispin',
             'potcars']
     with open(path, 'w') as f:
         f.write(','.join(cols) + '\n')
@@ -1154,7 +1197,7 @@ def write_summary_csv(path, metas):
                 mp_id, m['formula'], str(m['natoms']), f"{m['nelect']:.0f}",
                 str(m['encut']), 'x'.join(str(x) for x in m['mesh']),
                 str(m['nk_full']), f"{m['W']:.2f}", str(m['nodes']),
-                str(m['ntasks_per_node']), m['walltime'], m['partition'],
+                str(m['ntasks_per_node']), m['partition'],
                 '2' if m['ispin'] else '1', ' '.join(m['variants']),
             ]) + '\n')
 
@@ -1173,10 +1216,10 @@ def main():
                          'in-plane multiples of 6 for hexagonal lattices.')
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
-                         '--partition (walltime still tiered by size); no multi-node tier')
+                         '--partition; no multi-node tier')
     ap.add_argument('--gga-u', choices=['auto', 'on', 'off'], default='auto',
-                    help='GGA+U with the tabulated U_eff: auto (default) = only for '
-                         'oxides/chalcogenides (O, S, Se, Te present); on = every '
+                    help='GGA+U with the tabulated U_eff: auto (default) = only if a '
+                         'chalcogen/halogen (O,S,Se,Te,F,Cl,Br,I) is present; on = every '
                          'tabulated d/f element; off = never')
     ap.add_argument('--relax', dest='relax', action='store_true', default=True,
                     help='first relax cell + ions (01_relax, IBRION=2, ISIF=3); default on')
@@ -1280,16 +1323,16 @@ def main():
         else:
             mesh = kmesh_from_lattice(struct['A'], args.kspacing)
         nk_full = mesh[0] * mesh[1] * mesh[2]
-        tiers = ([(b, 1, args.cores_per_node, wt, args.partition)
-                  for b, _n, _c, wt, _p in TIERS] if args.single_node else None)
-        nodes, ntpn, walltime, partition, W = size_job(
+        tiers = ([(b, 1, args.cores_per_node, args.partition)
+                  for b, _n, _c, _p in TIERS] if args.single_node else None)
+        nodes, ntpn, partition, W = size_job(
             pinfo['nelect'], nk_full, tiers=tiers, max_nodes=args.max_nodes)
 
         formula = ''.join(f"{el}{cnt if cnt > 1 else ''}"
                           for el, cnt in zip(struct['species'], struct['counts']))
 
         write_instructions(os.path.join(stage, 'instructions.txt'), mp_id,
-                           struct, mesh, pinfo['encut'], nodes, ntpn, walltime,
+                           struct, mesh, pinfo['encut'], nodes, ntpn,
                            partition, args.account, args.functional, kpra=args.kpra,
                            kpar=args.kpar, ncore=args.ncore, relax=args.relax,
                            gga_u=args.gga_u)
@@ -1340,7 +1383,7 @@ def main():
         meta = {'formula': formula, 'natoms': struct['natoms'],
                 'nelect': pinfo['nelect'], 'encut': pinfo['encut'],
                 'mesh': mesh, 'nk_full': nk_full, 'W': W, 'nodes': nodes,
-                'ntasks_per_node': ntpn, 'walltime': walltime,
+                'ntasks_per_node': ntpn,
                 'ispin': magmom_string(struct) is not None,
                 'partition': partition, 'variants': pinfo['variants']}
         write_job_script(proj, mp_id, meta, partition, args.account)
@@ -1349,7 +1392,7 @@ def main():
 
         print(f"[{n}/{len(ids)}] {mp_id:<12} {formula:<12} "
               f"{struct['natoms']:>3} at  {'x'.join(str(x) for x in mesh):>10}  "
-              f"ENCUT={pinfo['encut']:<4} W={W:7.1f}  {nodes}n x {ntpn}  {walltime}")
+              f"ENCUT={pinfo['encut']:<4} W={W:7.1f}  {nodes}n x {ntpn}")
 
     if not ok:
         sys.exit("\nERROR: no materials staged.")
@@ -1359,7 +1402,7 @@ def main():
 
     tier = {}
     for m in metas.values():
-        key = (m['partition'], m['nodes'], m['ntasks_per_node'], m['walltime'])
+        key = (m['partition'], m['nodes'], m['ntasks_per_node'])
         tier[key] = tier.get(key, 0) + 1
 
     print(f"\n{'='*66}")
@@ -1372,8 +1415,11 @@ def main():
         print(f"  failed        : {len(failed)}  ({', '.join(failed[:10])}"
               f"{' ...' if len(failed) > 10 else ''})")
     print("  tiers         :")
-    for (part, nodes, cores, wt), cnt in sorted(tier.items()):
-        print(f"      {cnt:5d}  {part:<9} {nodes} node(s) x {cores}  {wt}")
+    for (part, nodes, cores), cnt in sorted(tier.items()):
+        print(f"      {cnt:5d}  {part:<9} {nodes} node(s) x {cores}")
+    print("  walltime/step : " + ", ".join(f"{k} {v}" for k, v in STEP_WALLTIME.items()
+                                          if k in ('relax', 'scf', 'bands', 'lobster'))
+          + "  (TIME_* in env.sh; continued automatically at the limit)")
     print(f"  summary       : materials_summary.csv")
     build = args.build_potcars
     if build is None:

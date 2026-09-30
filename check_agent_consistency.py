@@ -61,7 +61,7 @@ Direct
   0.666666667  0.333333333  0.577000000
 """
 STUB_POTCARS = {'Fe': (8, 267.9), 'O': (6, 400.0), 'Mo': (6, 224.6), 'S': (6, 258.7),
-                'Si': (4, 245.3)}
+                'Si': (4, 245.3), 'Cl': (7, 262.5)}
 POSCAR_FESI = """FeSi
 1.0
 4.49 0 0
@@ -178,7 +178,12 @@ def cases():
              text=("Project: fesi\nMethods: PBE functional\n"
                    "Tasks: structure relaxation, SCF calculation, band structure, "
                    "LOBSTER COHP/COBI analysis\nMPI: 16\nELF: off\n"),
-             expect=dict(u_everywhere=False)),
+             expect=dict(u_everywhere=False, walltimes={'01_relax': '08:00:00', '02_scf': '04:00:00',
+                                                        '03_bands': '02:00:00', '08_lobster': '04:00:00'})),
+        dict(name='gga-u-default-halide', poscar=POSCAR_FESI.replace('Fe Si', 'Fe Cl'), form=None,
+             text=("Project: fecl\nMethods: PBE functional\n"
+                   "Tasks: SCF calculation, band structure\nMPI: 16\nELF: off\n"),
+             expect=dict(u_everywhere=True)),
         dict(name='gga-u-on-intermetallic', poscar=POSCAR_FESI, form=None,
              text=("Project: fesi\nMethods: PBE functional\n"
                    "Tasks: structure relaxation, SCF calculation, band structure, "
@@ -372,6 +377,18 @@ def check_semantics(case, out_dir, instr):
         t = incar_tags(steps['01_relax'] / 'INCAR')
         if 'KPAR' not in t:
             bad.append("01_relax: KPAR missing")
+
+    if ex.get('walltimes'):
+        for st, want in ex['walltimes'].items():
+            rs = (steps[st] / 'run.sh').read_text() if st in steps else ''
+            if '#SBATCH' not in rs:
+                continue                                  # workstation run.sh
+            m = re.search(r'^#SBATCH --time=(\S+)', rs, re.M)
+            if not m or m.group(1) != want:
+                bad.append(f"{st}: walltime {m.group(1) if m else None} (want {want})")
+            for d in ('--signal=B:USR1@900', '--requeue', 'vf_resume_prepare', 'vf_after vasp'):
+                if d not in rs:
+                    bad.append(f"{st}: run.sh lacks '{d}' (auto-continue)")
 
     if 'u_everywhere' in ex:
         want = ex['u_everywhere']

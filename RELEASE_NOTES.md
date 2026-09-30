@@ -6,6 +6,9 @@
 - `ht-mp-scf.py`, SLURM chained mode: every step of a material (relax → SCF → LOBSTER) is submitted, not only the SCF.
 - `ht-semimetals.py`: DFPT step removed (ill-defined for zero-gap systems, Davidson convergence problems). Each job runs `analyze.sh` at the end (`ANALYSIS_PYTHON` in `env.sh`); new `analyze_all.sh`; `collect_results.sh` keeps the per-step folder layout with trimmed OUTCARs.
 - GUI: **Open results folder** — view a finished job, a whole highthroughput directory, or an unpacked `results/` tarball; plots missing from `analysis/` are drawn from the raw outputs. SCF/NSCF steps are shown as done when VASP finished.
+- GGA+U flag `GGA_U: ON|OFF` in `instructions.txt` (GUI: auto/on/off; HT drivers: `--gga-u`). Without it the U_eff of `hubbard_u_defaults.csv` (now the only source of U values; LDAUU = U_eff, LDAUJ = 0) is applied only when the POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I); same U block in every step.
+- `ht-semimetals.py`: relaxation first (`01_relax`, ISIF = 3), one SLURM job per step chained with afterok.
+- SLURM walltime per step (relax 8 h, SCF 4 h, bands/DOS 2 h, LOBSTER 4 h; `<STEP>_WALLTIME` / `WALLTIME` / `TIME_*` in env.sh override). A step that reaches its limit is stopped cleanly 15 min before the end and requeued (same job id): relaxations continue from CONTCAR or the last XDATCAR frame, LOBSTER reruns only the binary once its NSCF is done.
 - NumPy 2 compatibility: `np.trapz` → `np.trapezoid` in `cohp_plot.py` and `lobster_postprocess.py`.
 
 ## v2.1 — 2026-09-30 · Simpler k-mesh and parallel rules; two-step ELF

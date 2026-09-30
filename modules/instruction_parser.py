@@ -113,7 +113,9 @@ class InstructionParser:
             'slurm_partition':      self._extract_str_key(content,
                                     r'PARTITION\s*[:,=]\s*(\S+)', default=None),
             'slurm_walltime':       self._extract_str_key(content,
-                                    r'(?:WALLTIME|WALL_TIME|TIME)\s*[:,=]\s*(\S+)', default=None),
+                                    r'(?<![A-Za-z_])(?:WALLTIME|WALL_TIME|TIME)\s*[:,=]\s*(\S+)', default=None),
+            # Per-step walltimes: RELAX_WALLTIME: 08:00:00, SCF_WALLTIME, ...
+            'step_walltime':        self._extract_step_walltimes(content),
             'slurm_account':        self._extract_str_key(content,
                                     r'ACCOUNT\s*[:,=]\s*(\S+)', default=None),
             # ELF (ELFCAR): on by default; disable with "ELF: off" / "no ELF"
@@ -179,6 +181,19 @@ class InstructionParser:
         if re.search(r'\b(no|disable|without)\s+elf\b', content, re.IGNORECASE):
             return False
         return True
+
+    def _extract_step_walltimes(self, content: str) -> Dict[str, str]:
+        """{step: 'HH:MM:SS'} from RELAX_WALLTIME / SCF_WALLTIME / BANDS_WALLTIME /
+        DOS_WALLTIME / WANNIER_WALLTIME / DFPT_WALLTIME / PHONONS_WALLTIME /
+        LOBSTER_WALLTIME (also *_TIME) lines."""
+        out = {}
+        for step, val in re.findall(
+                r'^[ \t]*(RELAX|SCF|BANDS?|DOS|WANNIER|DFPT|PHONONS?|LOBSTER)_(?:WALL_?)?TIME'
+                r'\s*[:=]\s*(\S+)', content, re.IGNORECASE | re.MULTILINE):
+            step = step.lower()
+            step = {'band': 'bands', 'phonon': 'phonons'}.get(step, step)
+            out[step] = val
+        return out
 
     def _extract_elf_mode(self, content: str) -> str:
         """'separate' for `ELF: separate` / `ELF: two-step` (SCF at full KPAR,
@@ -313,8 +328,9 @@ class InstructionParser:
             GGA_U: OFF    (FALSE/NONE/NO/0, or 'no GGA+U' / 'without Hubbard U')
                                          -> no U at all
             no flag                      -> 'auto': U only when the compound
-                                            contains O, S, Se or Te (oxide /
-                                            chalcogenide), otherwise U = 0
+                                            contains a chalcogen or halogen
+                                            (O, S, Se, Te, F, Cl, Br, I),
+                                            otherwise U = 0
         Explicit 'GGA+U with U=... on El-orb' entries always win (see
         _extract_gga_u); a bare 'GGA+U' in Methods without values means ON.
         """
@@ -349,7 +365,7 @@ class InstructionParser:
         # Per-step parameter keys (RELAX_KPAR, SCF_NCORE, DOS_KPAR,
         # RELAX_KMESH_DENSITY, ...) name a step but do not request it.
         content_lower = re.sub(
-            r'^[ \t]*(?:relax|scf|bands?|dos|dfpt|phonons?)_[a-z_]+[ \t]*[:=].*$',
+            r'^[ \t]*(?:relax|scf|bands?|dos|dfpt|phonons?|lobster|wannier)_[a-z_]+[ \t]*[:=].*$',
             '', content.lower(), flags=re.MULTILINE)
         for task, keywords in task_keywords.items():
             if any(kw in content_lower for kw in keywords):
