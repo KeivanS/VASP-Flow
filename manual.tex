@@ -688,7 +688,7 @@ Option & Meaning \\ \midrule
   always sequential. \\
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-relax-kpra} & k-density of the relaxation (default: \texttt{-{}-kpra}). \\
-\texttt{-{}-gga-u auto|on|off} & GGA+U flag (default \texttt{auto}: only
+\texttt{-{}-gga\_u auto|on|off} & GGA+U flag (default \texttt{auto}: only
   chalcogenides/halides). \\
 \texttt{-{}-kpra} & \texttt{coarse}, \texttt{fine} (5000) or an integer. \\
 \texttt{-{}-kmesh} & Fixed $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}. \\
@@ -742,7 +742,7 @@ NBANDS come from the POTCARs at generation time and are checked against
 \texttt{potcar\_manifest.json} when the POTCARs are built on the cluster.
 3d elements (V--Ni) start spin-polarised.  GGA+U follows the default rule
 (only chalcogenides/halides, Section~\ref{sec:ggau}) unless
-\texttt{-{}-gga-u on|off} is given.  There is no DFPT step (dielectric
+\texttt{-{}-gga\_u on|off} is given.  There is no DFPT step (dielectric
 tensors and Born charges are ill-defined at zero gap, and the linear-response
 loop tends not to converge) and no ELF (\texttt{ELF: off}).
 
@@ -752,7 +752,7 @@ Option & Meaning \\ \midrule
 \texttt{-{}-list}, \texttt{-{}-out} & ID file and directory to create. \\
 \texttt{-{}-kpra N} & k-points per reciprocal atom (e.g.\ 8000). \\
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
-\texttt{-{}-gga-u auto|on|off} & GGA+U flag written into every
+\texttt{-{}-gga\_u auto|on|off} & GGA+U flag written into every
   \texttt{instructions.txt} (default \texttt{auto}: only chalcogenides/halides). \\
 \texttt{-{}-single-node} & Every material on one node with
   \texttt{-{}-cores-per-node} (default 40) ranks; otherwise large cells get
@@ -1011,7 +1011,7 @@ The same U block is written to every step (relax, SCF, bands, DOS, LOBSTER,
 R2SCAN/HSE06.  All three routes honour the flag: the GUI (Setup,
 \emph{Default Hubbard U}: auto / on / off), \texttt{vasp-agent.py} and
 \texttt{vasp-agent-slurm.py}; the high-throughput drivers write it with
-\texttt{-{}-gga-u auto|on|off}.
+\texttt{-{}-gga\_u auto|on|off}.
 
 % ============================================================
 \subsection{Automatic k-mesh generation}
@@ -2132,7 +2132,7 @@ Band plot empty or not shown &
     VASP finished.  NumPy~2 fix (\texttt{np.trapz} $\to$ \texttt{np.trapezoid})
     in the COHP plot and LOBSTER post-processing.
     GGA+U flag \texttt{GGA\_U: ON|OFF} in \texttt{instructions.txt} (GUI:
-    auto/on/off; HT drivers: \texttt{-{}-gga-u}); without it the tabulated
+    auto/on/off; HT drivers: \texttt{-{}-gga\_u}); without it the tabulated
     $U_{\mathrm{eff}}$ is used only for chalcogenides/halides (O, S, Se, Te,
     F, Cl, Br, I), otherwise $U=0$; same U in all steps; U values only from
     \texttt{hubbard\_u\_defaults.csv} (3d/4d/5d/4f/5f, \texttt{LDAUU}

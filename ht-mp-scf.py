@@ -383,7 +383,7 @@ def main():
     ap.add_argument('--relax-kpra', default=None,
                     help="k-point density of the relaxation (default: same as --kpra, "
                          "so the SCF can reuse the relaxed WAVECAR)")
-    ap.add_argument('--gga-u', choices=['auto', 'on', 'off'], default='auto',
+    ap.add_argument('--gga_u', '--gga-u', dest='gga_u', choices=['auto', 'on', 'off'], default='auto',
                     help="GGA+U with the tabulated U_eff: auto (default) = only if a "
                          "chalcogen/halogen (O,S,Se,Te,F,Cl,Br,I) is present; on = every "
                          "tabulated d/f element; off = never")

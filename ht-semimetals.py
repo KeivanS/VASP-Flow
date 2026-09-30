@@ -1047,7 +1047,7 @@ resubmitted.
   with a high moment on the magnetic species.  Everything else is
   non-spin-polarised.
 * **GGA+U.**  Default: U_eff from hubbard_u_defaults.csv only if the cell
-  contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I); `--gga-u on|off`
+  contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I); `--gga_u on|off`
   at generation overrides it.
 * **Disk.**  The last (LOBSTER) job deletes the CHGCAR/WAVECAR copies.  Set
   `KEEP_LARGE_FILES=1` in env.sh to retain them.
@@ -1217,7 +1217,7 @@ def main():
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition; no multi-node tier')
-    ap.add_argument('--gga-u', choices=['auto', 'on', 'off'], default='auto',
+    ap.add_argument('--gga_u', '--gga-u', dest='gga_u', choices=['auto', 'on', 'off'], default='auto',
                     help='GGA+U with the tabulated U_eff: auto (default) = only if a '
                          'chalcogen/halogen (O,S,Se,Te,F,Cl,Br,I) is present; on = every '
                          'tabulated d/f element; off = never')
