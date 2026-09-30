@@ -2684,7 +2684,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <label class="ck"><input type="checkbox" id="hexagonal" checked> Hexagonal BZ</label>
     <label class="ck"><input type="checkbox" id="is_2d"> 2D / slab (k<sub>z</sub>=1)</label>
     <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U (explicit)</label>
-    <label class="ck" title="Tabulated literature U values (hubbard_u_defaults.csv, with references) are applied automatically to d/f elements when the structure contains an electronegative anion (O, F, S, Se, Te, Cl, Br, I). Uncheck to disable; explicit GGA+U entries always override the defaults.">
+    <label class="ck" title="Tabulated literature U values (hubbard_u_defaults.csv, with references) are applied automatically to every tabulated d/f element in the structure (V, Cr, Mn, Fe, Co, Ni, Cu, Mo, W, lanthanides, actinides), with or without an anion. Uncheck to disable; explicit GGA+U entries always override the defaults.">
       <input type="checkbox" id="u_auto" checked> Default Hubbard U (auto lookup)</label>
   </div>
   <!-- GGA+U rows -->

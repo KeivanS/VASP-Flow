@@ -60,7 +60,25 @@ Direct
   0.666666667  0.333333333  0.423000000
   0.666666667  0.333333333  0.577000000
 """
-STUB_POTCARS = {'Fe': (8, 267.9), 'O': (6, 400.0), 'Mo': (6, 224.6), 'S': (6, 258.7)}
+STUB_POTCARS = {'Fe': (8, 267.9), 'O': (6, 400.0), 'Mo': (6, 224.6), 'S': (6, 258.7),
+                'Si': (4, 245.3)}
+POSCAR_FESI = """FeSi
+1.0
+4.49 0 0
+0 4.49 0
+0 0 4.49
+Fe Si
+4 4
+Direct
+0.137 0.137 0.137
+0.637 0.363 0.863
+0.863 0.637 0.363
+0.363 0.863 0.637
+0.842 0.842 0.842
+0.342 0.658 0.158
+0.158 0.342 0.658
+0.658 0.158 0.342
+"""
 
 STEP_KEYS = {'01_relax': 'relax', '02_scf': 'scf', '03_bands': 'bands',
              '04_dos': 'dos', '06_dfpt': 'dfpt', '08_lobster': 'lobster'}
@@ -156,6 +174,11 @@ def cases():
                    "Tasks: structure relaxation, SCF calculation, DOS\nMPI: 16\n"
                    "ELF: off\nSCF_NCORE: 8\nINCAR dos:\n   KPAR = 2\nEND_INCAR\n"),
              expect=dict(text_parallel=True)),
+        dict(name='gga-u-no-anion', poscar=POSCAR_FESI, form=None,
+             text=("Project: fesi\nMethods: PBE functional\n"
+                   "Tasks: structure relaxation, SCF calculation, band structure, "
+                   "LOBSTER COHP/COBI analysis\nMPI: 16\nELF: off\n"),
+             expect=dict(u_everywhere=True)),
         dict(name='text-elf-separate', poscar=POSCAR_AFM, form=None,
              text=("Project: elf2\nMethods: PBE functional\n"
                    "Tasks: SCF calculation\nMPI: 16\nELF: separate\n"),
@@ -334,6 +357,17 @@ def check_semantics(case, out_dir, instr):
         t = incar_tags(steps['01_relax'] / 'INCAR')
         if 'KPAR' not in t:
             bad.append("01_relax: KPAR missing")
+
+    if ex.get('u_everywhere'):
+        for st, sd in steps.items():
+            t = incar_tags(sd / 'INCAR')
+            if t.get('LDAU') != '.TRUE.' or not t.get('LDAUU', '').startswith('5.3'):
+                bad.append(f"{st}: transition metal without anion must get GGA+U "
+                           f"(LDAU={t.get('LDAU')}, LDAUU={t.get('LDAUU')})")
+            n = sum(1 for l in (sd / 'INCAR').read_text().splitlines()
+                    if l.strip().startswith('LMAXMIX'))
+            if n != 1:
+                bad.append(f"{st}: {n} LMAXMIX lines (want 1)")
 
     if ex.get('elf_separate'):
         t = incar_tags(steps['02_scf'] / 'INCAR')

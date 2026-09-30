@@ -566,8 +566,8 @@ input generator as the rest of VASP-Flow.
  & \texttt{ht-mp-scf.py} & \texttt{ht-semimetals.py} \\ \midrule
 Steps per material & \texttt{01\_relax} (ISIF = 3) $\to$ \texttt{02\_scf}
   + ELF $\to$ \texttt{08\_lobster} (optional) &
-  \texttt{02\_scf} $\to$ \texttt{03\_bands} $\to$ \texttt{08\_lobster}
-  (no relaxation, no ELF, no DFPT) \\
+  \texttt{01\_relax} (ISIF = 3) $\to$ \texttt{02\_scf} $\to$
+  \texttt{03\_bands} $\to$ \texttt{08\_lobster} (no ELF, no DFPT) \\
 Runs on & workstation or SLURM & SLURM only \\
 Jobs & one job per step, submitted by \texttt{runall.sh} &
   one \texttt{job.sbatch} per material, all steps inside \\
@@ -718,13 +718,16 @@ falls back to \texttt{Structure.get\_primitive\_structure()} automatically.
 \label{sec:ht-semimetals}
 
 It builds a self-contained \texttt{highthroughput\_*} directory: one
-\texttt{materials/<id>/job.sbatch} per material running SCF, bands and the
-LOBSTER NSCF + LOBSTER in one allocation (finished steps are skipped on
-resubmission), and ends with \texttt{analyze.sh} (plots and
+\texttt{materials/<id>/job.sbatch} per material running the relaxation
+(\texttt{01\_relax}, IBRION = 2, ISIF = 3, same k-density as the SCF; if the
+first pass does not reach the force criterion it is restarted once from its
+CONTCAR), the SCF from the relaxed structure, bands and the LOBSTER NSCF +
+LOBSTER in one allocation (finished steps are skipped on resubmission), and ends with \texttt{analyze.sh} (plots and
 \texttt{lobster\_summary.csv} in \texttt{analysis/}).  ENCUT and the LOBSTER
 NBANDS come from the POTCARs at generation time and are checked against
 \texttt{potcar\_manifest.json} when the POTCARs are built on the cluster.
-3d elements (V--Ni) start spin-polarised.  There is no DFPT step (dielectric
+3d elements (V--Ni) start spin-polarised; every tabulated d/f element gets
+GGA+U in all steps (Section~\ref{sec:keywords}, default Hubbard U).  There is no DFPT step (dielectric
 tensors and Born charges are ill-defined at zero gap, and the linear-response
 loop tends not to converge) and no ELF (\texttt{ELF: off}).
 
@@ -733,6 +736,7 @@ loop tends not to converge) and no ELF (\texttt{ELF: off}).
 Option & Meaning \\ \midrule
 \texttt{-{}-list}, \texttt{-{}-out} & ID file and directory to create. \\
 \texttt{-{}-kpra N} & k-points per reciprocal atom (e.g.\ 8000). \\
+\texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-single-node} & Every material on one node with
   \texttt{-{}-cores-per-node} (default 40) ranks; otherwise large cells get
   more nodes. \\
@@ -955,14 +959,13 @@ automatically.  In the Dudarev formalism the parameter labelled $U$ is already
 $U_{\mathrm{eff}}$, so no separate $J$ entry is needed.
 Combine freely with \texttt{collinear magnetization}.
 
-The automatic lookup is triggered whenever the structure contains a
-transition-metal or rare-earth element \emph{and} at least one
-electronegative anion from the set
-O, F, S, Se, Te, Cl, Br, I.
-This covers oxides, sulfides (e.g.\ AgCrP$_2$S$_6$), selenides, tellurides,
-and halides.  U values are read from \texttt{hubbard\_u\_defaults.csv};
-elements absent from the table (e.g.\ Ag with a filled $d^{10}$ shell)
-receive no correction.
+The automatic lookup applies to \emph{every} structure that contains a
+tabulated d/f element --- magnetic or not, oxide or intermetallic --- and to
+every step of it (relax, SCF, bands, DOS, LOBSTER, \ldots), so all steps share
+one Hamiltonian.  U values are read from \texttt{hubbard\_u\_defaults.csv}
+(V, Cr, Mn, Fe, Co, Ni, Cu, Mo, W, lanthanides, actinides); elements absent
+from the table (e.g.\ Sc, Ti, Zn, Ag) receive no correction.  Not applied
+under R2SCAN/HSE06.  \texttt{GGA\_U: OFF} disables it.
 
 % ============================================================
 \subsection{Automatic k-mesh generation}
@@ -2037,6 +2040,9 @@ Band plot empty or not shown &
     run elsewhere and draws missing plots; SCF/NSCF steps show as done when
     VASP finished.  NumPy~2 fix (\texttt{np.trapz} $\to$ \texttt{np.trapezoid})
     in the COHP plot and LOBSTER post-processing.
+    Default GGA+U now applies to every structure with a tabulated d/f
+    element (no anion required), in all steps; \texttt{ht-semimetals.py}
+    relaxes cell + ions first (\texttt{01\_relax}, ISIF = 3).
 \end{description}
 
 \vfill

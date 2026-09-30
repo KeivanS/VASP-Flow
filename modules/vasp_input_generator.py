@@ -23,9 +23,9 @@ _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster')
 # ── Default Hubbard U lookup ─────────────────────────────────────────────────
 # Values live in hubbard_u_defaults.csv (repo root) with full references;
 # this hard-coded fallback mirrors the CSV so generation works without it.
-# Applied automatically (Dudarev GGA+U) when a tabulated d/f element occurs
-# together with an electronegative anion (O, F, S, Se, Te, Cl, Br, I) —
-# disable with 'GGA_U: OFF', override with explicit 'GGA+U with U=... on El-orb'.
+# Applied automatically (Dudarev GGA+U) to every tabulated d/f element in the
+# structure, magnetic or not, with or without an anion — disable with
+# 'GGA_U: OFF', override with explicit 'GGA+U with U=... on El-orb'.
 _U_FALLBACK = {
     'V': ('d', 3.25, 0.0), 'Cr': ('d', 3.7, 0.0),  'Mn': ('d', 3.9, 0.0),
     'Fe': ('d', 5.3, 0.0), 'Co': ('d', 3.32, 0.0), 'Ni': ('d', 6.2, 0.0),
@@ -37,7 +37,6 @@ _U_FALLBACK = {
     **{_el: ('f', 6.0, 0.0) for _el in
        ('Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb')},
 }
-_U_ANIONS = ('O', 'F', 'S', 'Se', 'Te', 'Cl', 'Br', 'I')
 
 
 def load_u_defaults():
@@ -2002,10 +2001,12 @@ echo "      Data:  band.yaml  FORCE_SETS"
         """Generate GGA+U INCAR lines.
 
         Explicit user entries (instructions 'GGA+U with U=... on El-orb')
-        always win. Otherwise, DEFAULT U values from hubbard_u_defaults.csv
-        are applied automatically when a tabulated d/f element occurs
-        together with an electronegative anion (O, F, S, Se, Te, Cl, Br, I). Disable
-        the automatic defaults with 'GGA_U: OFF' in the instructions.
+        always win. Otherwise the DEFAULT U values from hubbard_u_defaults.csv
+        are applied to every tabulated d/f element in the structure (V, Cr,
+        Mn, Fe, Co, Ni, Cu, Mo, W and the lanthanides/actinides), magnetic or
+        not, with or without an anion -- so every step of every such
+        structure is GGA+U.  Not under R2SCAN/HSE06.  Disable with
+        'GGA_U: OFF' in the instructions.
         """
         u_info = self.instructions.get('gga_u', {})
         els  = u_info.get('elements', {}) if u_info.get('enabled') else {}
@@ -2016,7 +2017,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             # reduce the self-interaction error (explicit entries still win).
             func_ok = self.instructions.get('functional', 'PBE') not in \
                       ('R2SCAN', 'HSE06')
-            if func_ok and any(a in (self.elements or []) for a in _U_ANIONS):
+            if func_ok:
                 table = load_u_defaults()
                 els = {el: table[el] for el in (self.elements or [])
                        if el in table}
@@ -2040,7 +2041,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         head = ["# GGA+U (Dudarev, LDAUTYPE=2)"]
         if auto:
             head = ["# GGA+U (Dudarev, LDAUTYPE=2) — DEFAULT U from the lookup",
-                    "# table hubbard_u_defaults.csv (d/f element + electronegative anion).",
+                    "# table hubbard_u_defaults.csv (applied to every tabulated d/f element).",
                     "# Disable with 'GGA_U: OFF' or override with",
                     "# 'GGA+U with U=<val> on <El>-<orb>' in the instructions."]
         return head + [
@@ -2300,7 +2301,10 @@ echo "      Data:  band.yaml  FORCE_SETS"
             lines += fl + [""]
         lines += self._mag_lines()
         lines += self._soc_lines()
-        lines += self._u_lines()
+        u = self._u_lines()
+        if u:   # the GGA+U block carries its own LMAXMIX -- keep one
+            lines = [l for l in lines if not l.startswith('LMAXMIX')]
+        lines += u
         lines.extend(self._get_parallel_lines('lobster'))
         lines.extend([
             "# Output (WAVECAR is read by LOBSTER; dense DOSCAR for the energy window)",

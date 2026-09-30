@@ -16,7 +16,7 @@ modules/
   vasp_input_generator.py    # Generates INCAR, KPOINTS, POTCAR, run.sh per step
 ```
 
-**High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (relax task with an `INCAR relax:` block IBRION=2/ISIF=3 and `RELAX_KMESH_DENSITY` = SCF density unless `--no-relax`; SCF task with `ELF: separate`; optional LOBSTER), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). SLURM runs chain every step of every material (relax → scf → lobster, then the next material) via `--dependency=afterok` by default (`--no-chain` to submit independently).
+**High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (relax task with an `INCAR relax:` block IBRION=2/ISIF=3 and `RELAX_KMESH_DENSITY` = SCF density unless `--no-relax`; SCF task with `ELF: separate`; optional LOBSTER), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). `ht-semimetals.py` also starts with `01_relax` (ISIF=3, restarted once from CONTCAR if unconverged; `--no-relax`). SLURM runs chain every step of every material (relax → scf → lobster, then the next material) via `--dependency=afterok` by default (`--no-chain` to submit independently).
 
 **Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons, 08_lobster}
 
@@ -98,6 +98,8 @@ Regex-based extraction from natural language instruction files. Supported parame
 **KPAR/NCORE:** `_auto_kpar_ncore(np, n_k, kpar=None, ncore=None)`: KPAR = largest divisor of np ≤ n_k (irreducible k of the step's own KPOINTS); NCORE = largest divisor of np/KPAR ≤ its sqrt. A given value is snapped to a divisor and the other derived. Priority: ELF pin > INCAR block > per-step key > global key > rule. DFPT hard-codes 1/1; phonons and wannier default KPAR=1.
 
 **ELF:** `ELF: on` (default) = LELF in the SCF, KPAR pinned to 1; `ELF: separate` (default in `ht-mp-scf.py`) = SCF at auto KPAR, then `02_scf/run_elf.sh` runs a short restart in `02_scf/elf/` (ISTART=1, ICHARG=1, LELF, KPAR=1, NBANDS from the SCF OUTCAR) and copies ELFCAR to `02_scf/`. Both run.sh flavours call run_elf.sh after VASP.
+
+**GGA+U default:** `_u_lines()` applies `hubbard_u_defaults.csv` U values to every tabulated d/f element (no anion condition) in every step's INCAR, unless `GGA_U: OFF`, explicit `GGA+U with U=…`, or R2SCAN/HSE06.
 
 **Raw INCAR passthrough:** an `INCAR: … END_INCAR` block in the instructions file injects literal INCAR tags into the generated INCAR(s). Per-step blocks use `INCAR <step>:` (relax/scf/bands/dos/wannier/dfpt/phonons); an unqualified block applies to all steps. Parsed into `incar_raw` ({'all'|step: ['TAG = val', …]}); merged by `VASPInputGenerator._apply_incar_overrides()`, which overwrites matching generated tags in place and appends the rest under a "User INCAR overrides" comment.
 

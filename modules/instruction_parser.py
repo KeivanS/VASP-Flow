@@ -309,8 +309,8 @@ class InstructionParser:
     def _extract_gga_u_auto(self, content: str) -> bool:
         """Switch for the automatic default-U lookup (hubbard_u_defaults.csv).
 
-        True (default): tabulated U values are applied automatically to d/f
-        elements in compounds containing O, F, S, Se, Te, Cl, Br, or I.
+        True (default): tabulated U values are applied automatically to every
+        tabulated d/f element in the structure (with or without an anion).
         Turned off by any of:
             GGA_U: OFF        (also = FALSE / NONE / NO / 0)
             no GGA+U   /   without GGA+U   /   no Hubbard U

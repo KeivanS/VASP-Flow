@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-High-Throughput Semimetal Screen -> SCF + bands + LOBSTER (SLURM highthroughput directory)
+High-Throughput Semimetal Screen -> relax + SCF + bands + LOBSTER (SLURM highthroughput directory)
 ==============================================================================
-Builds a self-contained, transferable highthroughput directory that runs three steps per material
+Builds a self-contained, transferable highthroughput directory that runs these steps per material
 on a SLURM cluster:
 
+    01_relax    cell + ions relaxation (IBRION=2, ISIF=3; --no-relax skips it)
     02_scf      self-consistent field  (Gamma-centred, commensurate k-mesh)
     03_bands    band structure         (spglib Setyawan-Curtarolo line mode)
     08_lobster  symmetry-off NSCF + LOBSTER COHP/COBI/COOP
@@ -233,13 +234,14 @@ def magmom_string(struct):
 
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
                        ntasks_per_node, walltime, partition, account,
-                       functional='PBE', kpra=None, kpar=None, ncore=None):
+                       functional='PBE', kpra=None, kpar=None, ncore=None,
+                       relax=True):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
 
     Task keywords are matched as substrings over the whole file by
     InstructionParser, so this text deliberately avoids words that would
-    switch on steps we do not want (relax, phonon, wannier, transport, and
-    anything containing 'dos').
+    switch on steps we do not want (phonon, wannier, transport, and anything
+    containing 'dos').
     """
     nx, ny, nz = mesh
     lines = [
@@ -249,8 +251,18 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "",
         # No DFPT: for a zero-gap system LEPSILON/Born charges are ill-defined
         # and the linear-response Davidson loop tends not to converge.
-        "Tasks: SCF calculation, band structure, LOBSTER COHP/COBI analysis",
+        "Tasks: " + ("structure relaxation, " if relax else "")
+        + "SCF calculation, band structure, LOBSTER COHP/COBI analysis",
         "",
+        *(["# 01_relax: full relaxation of cell shape, volume and ions with this",
+           "# functional (the MP cell was relaxed with a different setup).  The",
+           "# SCF starts from its CONTCAR + CHGCAR (+ WAVECAR: same k-mesh).",
+           "INCAR relax:",
+           "   IBRION = 2",
+           "   ISIF = 3",
+           "END_INCAR",
+           *([f"RELAX_KMESH_DENSITY: {kpra}"] if kpra else []),
+           ""] if relax else []),
         *(["# k-point density: even N_i proportional to |b_i*| (uniform k-space",
            f"# spacing), N1*N2*N3*N_atoms as close to {kpra} as possible.",
            f"KMESH_DENSITY: {kpra}"] if kpra else
@@ -357,7 +369,7 @@ def strip_potcars(proj_dir):
             if name == 'POTCAR':
                 os.remove(os.path.join(root, name))
     # os.walk does not report dangling symlinks as files on every platform
-    for step in ('02_scf', '03_bands', '08_lobster'):
+    for step in ('01_relax', '02_scf', '03_bands', '08_lobster'):
         link = os.path.join(proj_dir, step, 'POTCAR')
         if os.path.lexists(link):
             os.remove(link)
@@ -379,7 +391,7 @@ JOB_TEMPLATE = r'''#!/bin/bash
 #
 # @ID@  --  @FORMULA@, @NATOMS@ atoms, NELECT=@NELECT@, mesh @MESH@ (@NK@ k-points)
 # Sized from the electron count and k-point count: W=@W@ -> @NODES@ node(s).
-# Runs 02_scf -> 03_bands -> 08_lobster in one allocation.
+# Runs 01_relax -> 02_scf -> 03_bands -> 08_lobster in one allocation.
 # Steps that already carry a finished OUTCAR are skipped, so re-submitting
 # this script after a timeout resumes rather than restarting.
 
@@ -430,7 +442,7 @@ run_vasp_step() {
         return 0
     fi
     if [ ! -d "$step" ]; then
-        # Not an optional condition: every material is generated with all four
+        # Not an optional condition: every material is generated with all its
         # steps, so a missing directory means the job is looking in the wrong
         # place.  Fail loudly rather than "succeeding" without doing anything.
         echo "!!! $step directory missing under $PROJ - wrong working directory?"
@@ -439,6 +451,7 @@ run_vasp_step() {
     echo "--- $step : $(date)"
     local rc=0
     cd "$PROJ/$step"
+    [ -f copy_from_relax.sh ] && bash ./copy_from_relax.sh
     [ -f copy_from_scf.sh ] && bash ./copy_from_scf.sh
     $VASP_LAUNCH "$VASP_STD"
     rc=$?
@@ -450,6 +463,25 @@ run_vasp_step() {
     echo "--- $step done"
     return 0
 }
+
+# ── 01_relax: cell + ions (ISIF=3).  A cell relaxation changes the basis, so
+#    if the first pass does not reach the force criterion it is restarted
+#    once from its CONTCAR (fresh basis for the new cell).
+relaxed() { [ -f "$1/OUTCAR" ] && grep -q "reached required accuracy" "$1/OUTCAR"; }
+if [ -d 01_relax ]; then
+    if relaxed 01_relax; then
+        echo "--- 01_relax already converged, skipping"
+    else
+        run_vasp_step 01_relax || { echo "Relaxation failed - dependent steps skipped"; exit 1; }
+        if ! relaxed 01_relax; then
+            echo "--- 01_relax not converged after pass 1: restarting from CONTCAR"
+            ( cd 01_relax && cp CONTCAR POSCAR && mv OUTCAR OUTCAR.pass1 \
+                && mv OSZICAR OSZICAR.pass1 2>/dev/null; true )
+            run_vasp_step 01_relax || { echo "Relaxation failed - dependent steps skipped"; exit 1; }
+            relaxed 01_relax || { echo "WARNING: 01_relax still not converged - SCF uses its CONTCAR"; FAILED=1; }
+        fi
+    fi
+fi
 
 run_vasp_step 02_scf   || { echo "SCF failed - dependent steps skipped"; exit 1; }
 run_vasp_step 03_bands || { echo "WARNING: bands step failed, continuing"; FAILED=1; }
@@ -479,6 +511,7 @@ fi
 # CHGCAR/WAVECAR copies dominate the footprint of a 1865-material screen.
 if [ "${KEEP_LARGE_FILES:-0}" != "1" ]; then
     rm -f "$PROJ"/03_bands/CHGCAR
+    rm -f "$PROJ"/01_relax/WAVECAR "$PROJ"/01_relax/CHGCAR "$PROJ"/01_relax/CHG
     rm -f "$PROJ"/08_lobster/CHGCAR
 fi
 
@@ -657,7 +690,7 @@ for mp_id, info in sorted(manifest['materials'].items()):
     with open(out, 'wb') as fh:
         for c in chunks:
             fh.write(open(c, 'rb').read())
-    for step in ('02_scf', '03_bands', '08_lobster'):
+    for step in ('01_relax', '02_scf', '03_bands', '08_lobster'):
         s = os.path.join(d, step)
         if os.path.isdir(s):
             link = os.path.join(s, 'POTCAR')
@@ -736,7 +769,9 @@ python3 - "$HERE" <<'PYEND'
 import os, sys
 here = sys.argv[1]
 ids = [l.strip() for l in open(os.path.join(here, 'material_list.txt')) if l.strip()]
-steps = ['02_scf', '03_bands', '08_lobster']
+steps = ['01_relax', '02_scf', '03_bands', '08_lobster']
+steps = [s for s in steps if s != '01_relax' or any(
+    os.path.isdir(os.path.join(here, 'materials', i, '01_relax')) for i in ids)]
 done = {s: 0 for s in steps}
 lob = full = 0
 incomplete = []
@@ -805,10 +840,10 @@ while read -r id; do
     o="$OUT/$id"; mkdir -p "$o/analysis"
     cp "$d/POSCAR" "$o/" 2>/dev/null
     cp "$d/instructions.txt" "$o/" 2>/dev/null
-    for s in 02_scf 03_bands 08_lobster; do
+    for s in 01_relax 02_scf 03_bands 08_lobster; do
         [ -d "$d/$s" ] || continue
         mkdir -p "$o/$s"
-        for f in INCAR KPOINTS POSCAR OSZICAR; do
+        for f in INCAR KPOINTS POSCAR CONTCAR OSZICAR; do
             [ -f "$d/$s/$f" ] && cp "$d/$s/$f" "$o/$s/" 2>/dev/null
         done
         outcar "$d/$s/OUTCAR" "$o/$s/OUTCAR"
@@ -885,7 +920,8 @@ README_HPC = r'''# Semimetal high-throughput screen — HPC instructions
 Generated by `ht-semimetals.py`.  Every material runs four VASP steps in a
 single SLURM job:
 
-    02_scf      SCF, Gamma-centred mesh, N_i proportional to |b_i*|
+    01_relax    cell + ions relaxation (IBRION=2, ISIF=3), restarted once if needed
+    02_scf      SCF from the relaxed CONTCAR/CHGCAR, N_i proportional to |b_i*|
     03_bands    band structure, spglib high-symmetry line mode
     08_lobster  ISYM=0 NSCF from the SCF CHGCAR, then the LOBSTER binary
 
@@ -1136,6 +1172,10 @@ def main():
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition (walltime still tiered by size); no multi-node tier')
+    ap.add_argument('--relax', dest='relax', action='store_true', default=True,
+                    help='first relax cell + ions (01_relax, IBRION=2, ISIF=3); default on')
+    ap.add_argument('--no-relax', dest='relax', action='store_false',
+                    help='skip the relaxation; SCF on the MP structure as downloaded')
     ap.add_argument('--kpar', type=int, default=None,
                     help='force KPAR in the SCF/bands/LOBSTER INCARs (default: auto)')
     ap.add_argument('--ncore', type=int, default=None,
@@ -1245,7 +1285,7 @@ def main():
         write_instructions(os.path.join(stage, 'instructions.txt'), mp_id,
                            struct, mesh, pinfo['encut'], nodes, ntpn, walltime,
                            partition, args.account, args.functional, kpra=args.kpra,
-                           kpar=args.kpar, ncore=args.ncore)
+                           kpar=args.kpar, ncore=args.ncore, relax=args.relax)
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
         env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir)
@@ -1261,7 +1301,7 @@ def main():
             failed.append(mp_id)
             continue
 
-        expected = ['02_scf', '03_bands', '08_lobster']
+        expected = (['01_relax'] if args.relax else []) + ['02_scf', '03_bands', '08_lobster']
         got = [d for d in expected if os.path.isdir(os.path.join(proj, d))]
         if got != expected:
             print(f"[{n}/{len(ids)}] {mp_id}: WRONG STEPS {got}")

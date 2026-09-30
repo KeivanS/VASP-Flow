@@ -65,9 +65,8 @@
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ DEFAULT HUBBARD U (automatic GGA+U) ─────────────────────────────────────────┐
-│ When the POSCAR contains a tabulated d/f element TOGETHER WITH an             │
-│ electronegative anion (O, F, S, Se, Te, Cl, Br, I), GGA+U (Dudarev) is      │
-│ applied by DEFAULT                                                            │
+│ When the POSCAR contains a tabulated d/f element (magnetic or not, with or   │
+│ without an anion), GGA+U (Dudarev) is applied by DEFAULT in every step,      │
 │ with U/J looked up from  hubbard_u_defaults.csv  (repo root; element,        │
 │ orbital, U, J + literature reference per row — edit/extend as needed).       │
 │ Defaults = Materials Project fitted U where available, else the midpoint of  │
@@ -82,7 +81,7 @@
 │                                                                               │
 │ Disable:   GGA_U: OFF        (or:  no GGA+U  /  without GGA+U)               │
 │ Override:  Methods: GGA+U with U=4.0 on Fe-d    (explicit always wins)       │
-│ No anion (e.g. LaBi, intermetallics) -> defaults NOT applied.                 │
+│ Intermetallics included (no anion needed). Not applied with R2SCAN/HSE06.    │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ EXPLICIT VASP KEYWORDS (any INCAR tag) ───────────────────────────────────────┐
