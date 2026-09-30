@@ -678,6 +678,18 @@ USER_NAME="${USER:-$(whoami)}"
 queued() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | wc -l | tr -d ' '; }
 in_queue() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | grep -qx "$1"; }
 
+# Build any missing POTCARs automatically (licensed files are not shipped).
+need_potcar=0
+while read -r id; do
+    [ -z "$id" ] && continue
+    [ -d "$HERE/materials/$id" ] && [ ! -f "$HERE/materials/$id/POTCAR" ] && \
+        [ ! -f "$HERE/materials/$id/.done" ] && { need_potcar=1; break; }
+done < "$HERE/material_list.txt"
+if [ "$need_potcar" = 1 ]; then
+    echo "POTCARs missing -- running make_potcars.sh ..."
+    "$HERE/make_potcars.sh" || { echo "ERROR: make_potcars.sh failed; fix VASP_POTCAR_DIR in env.sh"; exit 1; }
+fi
+
 submitted=0
 while read -r id; do
     [ -z "$id" ] && continue
@@ -686,7 +698,7 @@ while read -r id; do
     [ -f "$d/.done" ] && continue
     in_queue "$id" && continue
     if [ ! -f "$d/POTCAR" ]; then
-        echo "SKIP $id -- no POTCAR (run ./make_potcars.sh first)"
+        echo "SKIP $id -- no POTCAR (make_potcars.sh did not build one)"
         continue
     fi
     while [ "$(queued)" -ge "$MAX_QUEUED" ]; do sleep 60; done
@@ -870,14 +882,15 @@ If the partition name, account or walltime need to change:
 
     ./retune.sh --partition <name> --account <alloc> --time 48:00:00
 
-## 3. Build the POTCARs
+## 3. POTCARs (automatic)
 
-    ./make_potcars.sh
-
-This concatenates each material's POTCAR from `$VASP_POTCAR_DIR` and checks
-every ENMAX/ZVAL against `potcar_manifest.json`.  ENCUT and the LOBSTER NBANDS
-in the INCARs were derived from those numbers, so **a mismatch is a real
-error**, not a warning to ignore — tell me and I will regenerate the highthroughput directory
+`./submit_all.sh` runs `make_potcars.sh` itself when a material has no POTCAR
+(and generation on the cluster builds them at the end).  Run
+`./make_potcars.sh` by hand only to check the library early.  It concatenates
+each material's POTCAR from `$VASP_POTCAR_DIR` and checks every ENMAX/ZVAL
+against `potcar_manifest.json`.  ENCUT and the LOBSTER NBANDS in the INCARs
+were derived from those numbers, so **a mismatch is a real error**, not a
+warning to ignore -- tell me and I will regenerate the highthroughput directory
 against your cluster's library.
 
 ## 4. Test first
@@ -1095,6 +1108,11 @@ def main():
                     help='POTCAR library path on the CLUSTER (written into env.sh)')
     ap.add_argument('--include-potcars', action='store_true',
                     help='ship assembled POTCARs inside the highthroughput directory (large)')
+    ap.add_argument('--build-potcars', dest='build_potcars', action='store_true', default=None,
+                    help='run make_potcars.sh right after generation (default: automatic when '
+                         'sbatch is available, i.e. on the cluster)')
+    ap.add_argument('--no-build-potcars', dest='build_potcars', action='store_false',
+                    help='do not build POTCARs after generation (e.g. generating on a Mac to rsync)')
     ap.add_argument('--api-key', default=None)
     args = ap.parse_args()
 
@@ -1260,7 +1278,21 @@ def main():
     for (part, nodes, cores, wt), cnt in sorted(tier.items()):
         print(f"      {cnt:5d}  {part:<9} {nodes} node(s) x {cores}  {wt}")
     print(f"  summary       : materials_summary.csv")
-    print(f"\n  Next: transfer the highthroughput directory, then follow README_HPC.md\n")
+    build = args.build_potcars
+    if build is None:
+        build = shutil.which('sbatch') is not None and not args.include_potcars
+    if build and not args.include_potcars:
+        print("  Building POTCARs (make_potcars.sh) ...")
+        r = subprocess.run([os.path.join(htdir, 'make_potcars.sh')],
+                           env=dict(os.environ, VASP_POTCAR_DIR=potcar_dir))
+        if r.returncode:
+            print("  WARNING: make_potcars.sh failed; fix env.sh and rerun it "
+                  "(submit_all.sh also retries automatically).")
+    if shutil.which('sbatch') and build:
+        print(f"\n  Next: cd {htdir} && ./submit_all.sh\n")
+    else:
+        print(f"\n  Next: transfer the highthroughput directory, then follow README_HPC.md\n"
+              f"  (POTCARs are built automatically by ./submit_all.sh on the cluster)\n")
 
 
 if __name__ == '__main__':

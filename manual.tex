@@ -624,7 +624,7 @@ python3 ./ht-semimetals.py --list lists/semimetals_test.txt \
     --out highthroughput_test --api-key "$MP_API_KEY" \
     --kpra 8000 --single-node --kpar 20 --ncore 2
 
-cd highthroughput_test && ./submit_all.sh   # throttled sbatch of all jobs
+cd highthroughput_test && ./submit_all.sh   # builds missing POTCARs, then throttled sbatch
 ./status.sh                                 # progress
 ./retune.sh --time 06:00:00                 # change walltime in place
 \end{lstlisting}
@@ -642,6 +642,10 @@ Option & Meaning \\ \midrule
   the SCF, bands and LOBSTER INCARs (default: automatic); DFPT always uses
   KPAR = NCORE = 1. \\
 \texttt{-{}-max-atoms}, \texttt{-{}-max-nodes} & Size filters/limits. \\
+\texttt{-{}-build-potcars} / \texttt{-{}-no-build-potcars} & Run
+  \texttt{make\_potcars.sh} after generation (default: automatic when
+  \texttt{sbatch} exists).  \texttt{submit\_all.sh} also builds any missing
+  POTCAR itself. \\
 \texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-modules},
   \texttt{-{}-vasp-std}, \texttt{-{}-lobster-bin},
   \texttt{-{}-hpc-potcar-dir} & Cluster settings. \\
