@@ -551,181 +551,219 @@ ProjectName/
   submit_all.sh        SLURM job submission (dependency chained)
   analyze.sh           post-processing: plots + OUTCAR extraction
 \end{lstlisting}
-\subsection{Execution order}
+% ============================================================
+\section{High-Throughput Calculations (Materials Project)}
+\label{sec:highthroughput}
+% ============================================================
 
-\begin{tabularx}{\linewidth}{@{}lX@{}}
+Two drivers turn a list of Materials Project IDs (one \texttt{mp-id} per
+line; blank lines and \texttt{\#} comments are ignored) into VASP runs.  Both
+download the \textbf{primitive} cell from MP and use the same agents and
+input generator as the rest of VASP-Flow.
+
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
 \thead
-Mode & Behaviour \\ \midrule
-local & \texttt{run\_all.sh} blocks --- materials run strictly
-  one-at-a-time. \\
-slurm \texttt{-{}-chain} (default) & Each material's SCF is submitted with
-  \texttt{-{}-dependency=afterok} on the previous one, so the cluster runs
-  them sequentially even though all are queued up front. \\
-slurm \texttt{-{}-no-chain} & Materials are submitted independently and run
-  whenever the scheduler allows. \\
+ & \texttt{ht-mp-scf.py} & \texttt{ht-semimetals.py} \\ \midrule
+Steps per material & \texttt{01\_relax} (ISIF = 3) $\to$ \texttt{02\_scf}
+  + ELF $\to$ \texttt{08\_lobster} (optional) &
+  \texttt{02\_scf} $\to$ \texttt{03\_bands} $\to$ \texttt{08\_lobster}
+  (no relaxation, no ELF, no DFPT) \\
+Runs on & workstation or SLURM & SLURM only \\
+Jobs & one job per step, submitted by \texttt{runall.sh} &
+  one \texttt{job.sbatch} per material, all steps inside \\
+Resources & one setting for all materials & ENCUT ($1.3\times$ max ENMAX)
+  and job size per material \\
+Extras & element/$Z$ table & throttled, resumable \texttt{submit\_all.sh};
+  \texttt{status.sh}, \texttt{retune.sh}, \texttt{analyze\_all.sh},
+  \texttt{collect\_results.sh}; POTCAR manifest \\
+Use for & structures to relax and characterise (ELF, bonding) &
+  screening a large set for bands and bonding \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Step by step on the cluster (Rivanna)}
+\label{sec:ht-howto}
+
+\textbf{1. Every new login}: update the code and set the environment.  The
+drivers download from MP, so run them on the login node (internet access).
+
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow && git pull
+source ~/vaspenv/bin/activate    # python env (see below)
+export MP_API_KEY=your_key       # materialsproject.org/api
+export VASP_POTCAR_DIR=/path/to/PAW_PBE
+\end{lstlisting}
+First time only: \texttt{python3 -m venv \textasciitilde/vaspenv \&\&
+source \textasciitilde/vaspenv/bin/activate \&\& pip install pymatgen mp-api
+spglib numpy matplotlib}.
+
+\textbf{2. Put the list in a file}, e.g.\ \texttt{\textasciitilde/VASP-Flow/lists/mylist.txt}.
+
+\textbf{3a. Semimetal screen} (\texttt{ht-semimetals.py}):
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow
+python3 ./ht-semimetals.py --list lists/mylist.txt \
+    --out highthroughput_mylist --api-key "$MP_API_KEY" \
+    --kpra 8000 --single-node
+cd highthroughput_mylist
+vi env.sh                    # VASP module, LOBSTER_BIN, ANALYSIS_PYTHON
+./retune.sh --time 06:00:00  # optional: set walltime
+./submit_all.sh              # POTCARs + submit; re-run = resume
+./status.sh                  # progress per step
+# when finished:
+./postprocess_all.sh         # -> screen_lobster_all.csv
+./collect_results.sh         # -> screen_results.tar.gz
+\end{lstlisting}
+
+\textbf{3b. Relax + SCF + ELF} (\texttt{ht-mp-scf.py}).  It writes the
+material folders into the directory it is run from, so use a work directory:
+\begin{lstlisting}[language=bash]
+mkdir -p /scratch/$USER/ht_mylist && cd /scratch/$USER/ht_mylist
+python3 ~/VASP-Flow/ht-mp-scf.py -l ~/VASP-Flow/lists/mylist.txt \
+    --agent slurm --no-chain --nodes 1 --ntasks-per-node 40 \
+    --walltime 12:00:00 --account elmgroup --kpra 8000 --encut 520
+./runall.sh     # build inputs, submit relax -> SCF+ELF -> LOBSTER
+squeue -u $USER
+\end{lstlisting}
+Check \texttt{\textasciitilde/VASP-Flow/profiles/slurm.json} first: its
+\texttt{modules} list must load a working VASP on the cluster (on Rivanna
+\texttt{vasp/5.4.4} alone; extra compiler/MPI modules cause version swaps).
+Choose \texttt{-{}-encut} as about $1.3\times$ the largest ENMAX in the set
+(the ISIF = 3 relaxation needs it against Pulay stress).
+\texttt{-{}-no-chain} lets the materials run in parallel; the default
+(chained) runs everything one after another, and one failed step then blocks
+all later jobs.
+
+\textbf{4. Test first.}  Run two or three materials before a long list, then
+read the timings and look at the plots before setting the walltime:
+\begin{lstlisting}[language=bash]
+grep "Elapsed time" materials/*/0*/OUTCAR     # ht-semimetals
+grep "Elapsed time" */0*/OUTCAR               # ht-mp-scf
+\end{lstlisting}
+
+\textbf{5. Look at the results} in the GUI (Section~\ref{sec:open-results}):
+unpack \texttt{screen\_results.tar.gz} on your computer (or run the GUI on
+the cluster with \texttt{ssh -L 5001:localhost:5001}) and use
+\textbf{Open results folder}; missing plots are drawn there.
+
+\subsection{\texttt{ht-mp-scf.py} in detail}
+\label{sec:ht-mp-scf}
+
+For each ID it stages \texttt{\_ht\_inputs/<id>/\{POSCAR, instructions.txt\}}
+and writes \texttt{runall.sh}, which calls \texttt{vasp-agent.py} (local) or
+\texttt{vasp-agent-slurm.py} (SLURM) to build the inputs and then runs or
+submits each material.  \texttt{runall.sh} downloads nothing.
+
+\textbf{Relaxation first.}  \texttt{01\_relax} relaxes cell shape, volume and
+ions (\texttt{IBRION = 2}, \texttt{ISIF = 3}), because the MP cell was relaxed
+with a different functional/setup.  It uses the SCF k-point density
+(\texttt{-{}-relax-kpra} to change it), so the SCF starts from the relaxed
+\texttt{CONTCAR}, \texttt{CHGCAR} and \texttt{WAVECAR}
+(\texttt{copy\_from\_relax.sh}).
+
+\textbf{ELF in two steps.}  The instructions carry \texttt{ELF: separate}: the
+SCF runs with the automatic KPAR/NCORE, then a short KPAR${}={}$1 restart in
+\texttt{02\_scf/elf/} writes \texttt{ELFCAR}, copied to
+\texttt{02\_scf/ELFCAR} (Section~\ref{sec:elf-separate}).
+
+\textbf{k-points.}  Uniform mesh at \texttt{-{}-kpra} (default
+\texttt{coarse} = 1000); per material via \texttt{KMESH\_DENSITY} in
+\texttt{\_ht\_inputs/<id>/instructions.txt}; \texttt{-{}-kmesh} forces one
+fixed grid for all (not recommended for mixed cell shapes).
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
+\thead
+Option & Meaning \\ \midrule
+\texttt{-l}, \texttt{-{}-list} & ID file (default \texttt{highthrouput\_list}
+  in the current directory). \\
+\texttt{-{}-agent} & \texttt{local} or \texttt{slurm}; prompts if omitted. \\
+\texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM: chain every step of every
+  material with \texttt{afterok} (default), or submit each material
+  independently (its own relax $\to$ SCF $\to$ LOBSTER chain).  Local runs are
+  always sequential. \\
+\texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
+\texttt{-{}-relax-kpra} & k-density of the relaxation (default: \texttt{-{}-kpra}). \\
+\texttt{-{}-kpra} & \texttt{coarse}, \texttt{fine} (5000) or an integer. \\
+\texttt{-{}-kmesh} & Fixed $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}. \\
+\texttt{-{}-encut} & ENCUT (eV); default 500. \\
+\texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
+\texttt{-{}-lobster} / \texttt{-{}-no-lobster} & LOBSTER step (default on). \\
+\texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR/NCORE (give one, the other
+  is derived); the ELF pass always uses KPAR${}={}$1. \\
+\texttt{-{}-mpi} & MPI ranks per job (workstation). \\
+\texttt{-{}-nodes}, \texttt{-{}-ntasks-per-node}, \texttt{-{}-walltime},
+  \texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-profile} & SLURM
+  resources, written into each \texttt{instructions.txt} (they override
+  \texttt{profiles/slurm.json}). \\
+\bottomrule
+\end{tabularx}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
+\thead
+Output & Location \\ \midrule
+Material folders & \texttt{<mp-id>/01\_relax, 02\_scf, 08\_lobster, analysis} \\
+ELFCAR & \texttt{<mp-id>/02\_scf/ELFCAR} (ELF pass in \texttt{02\_scf/elf/}) \\
+Staged inputs & \texttt{\_ht\_inputs/<mp-id>/} \\
+Element / $Z$ table & \texttt{\_ht\_inputs/elements\_Z.txt} \\
 \bottomrule
 \end{tabularx}
 
 \begin{notebox}
-The driver fetches structures over the network (Materials Project), so
-run it on a node with internet --- typically the login node.
-\texttt{runall.sh} performs no downloads and can run on a compute node.
+A download error \texttt{'dict' object has no attribute 'number'} is an
+spglib/pymatgen version mismatch: \texttt{pip install -U spglib}.  The driver
+falls back to \texttt{Structure.get\_primitive\_structure()} automatically.
 \end{notebox}
 
-% ============================================================
-\section{High-Throughput Screening (Materials Project)}
-\label{sec:highthroughput}
-% ============================================================
+\subsection{\texttt{ht-semimetals.py} in detail}
+\label{sec:ht-semimetals}
 
-\texttt{ht-mp-scf.py} drives a batch of SCF + ELF calculations straight
-from Materials Project IDs.  For every \texttt{mp-id} in the file \texttt{highthrouput\_list} it downloads the
-\textbf{primitive} cell from MP, stages a per-material
-\texttt{instructions.txt} (an SCF task plus an \texttt{INCAR scf:} block
-setting \texttt{LELF = .TRUE.} for the electron localization function),
-and writes a \texttt{runall.sh} that calls the chosen agent to build the
-inputs and then runs or submits each job.  Each SCF uses the automatic
-\texttt{coarse} density (1000~kpra, uniform mesh) by default; change it with
-\texttt{-{}-kpra} (\texttt{fine}, or an integer such as 8000), per material via
-\texttt{KMESH\_DENSITY} in \texttt{\_ht\_inputs/<id>/instructions.txt}, or give
-a fixed \texttt{-{}-kmesh} grid.
+It builds a self-contained \texttt{highthroughput\_*} directory: one
+\texttt{materials/<id>/job.sbatch} per material running SCF, bands and the
+LOBSTER NSCF + LOBSTER in one allocation (finished steps are skipped on
+resubmission), and ends with \texttt{analyze.sh} (plots and
+\texttt{lobster\_summary.csv} in \texttt{analysis/}).  ENCUT and the LOBSTER
+NBANDS come from the POTCARs at generation time and are checked against
+\texttt{potcar\_manifest.json} when the POTCARs are built on the cluster.
+3d elements (V--Ni) start spin-polarised.  There is no DFPT step (dielectric
+tensors and Born charges are ill-defined at zero gap, and the linear-response
+loop tends not to converge) and no ELF (\texttt{ELF: off}).
 
-\textbf{Relaxation first (default).}  Each material starts with
-\texttt{01\_relax}: a full relaxation of cell shape, volume and ions
-(\texttt{IBRION = 2}, \texttt{ISIF = 3}), because the Materials Project cell
-was relaxed with a different functional/setup.  It uses the same k-point
-density as the SCF (\texttt{-{}-relax-kpra} to change it), so the SCF starts
-from the relaxed \texttt{CONTCAR}, \texttt{CHGCAR} and \texttt{WAVECAR}
-(Relax $\to$ SCF hand-off, \texttt{copy\_from\_relax.sh}).
-\texttt{-{}-no-relax} runs the SCF on the downloaded structure.  With
-\texttt{ISIF = 3} give a generous \texttt{-{}-encut} (about $1.3\times$ the
-largest ENMAX) to keep the Pulay stress small.
-
-\textbf{ELF in two steps (default).}  The instructions carry
-\texttt{ELF: separate}: the SCF runs with the automatic KPAR/NCORE (full
-k-point parallelism), then a short KPAR${}={}$1 restart in
-\texttt{02\_scf/elf/} reads the converged WAVECAR/CHGCAR and writes
-\texttt{ELFCAR}, copied back to \texttt{02\_scf/ELFCAR}
-(Section~\ref{sec:elf-separate}).  Previously the whole SCF ran with
-KPAR${}={}$1 because of \texttt{LELF}.
-
-\begin{lstlisting}[language=bash]
-pip install pymatgen mp-api          # MP download + primitive standardisation
-export MP_API_KEY=...                 # Materials Project API key
-export VASP_POTCAR_DIR=...            # POTCAR library (used by the agent)
-
-# one mp-id per line (blank lines and # comments ignored)
-printf 'mp-149\nmp-2534\n' > highthrouput_list
-# or you can populate your highthrouput_list in advance
-
-./ht-mp-scf.py --agent local  --mpi 16        # workstation
-./ht-mp-scf.py --agent slurm  --profile slurm # cluster (chained by default)
-
-./runall.sh                           # build inputs + run/submit every job
-\end{lstlisting}
-
-The ELFCAR for each material is written to \texttt{<mp-id>/02\_scf/}.
-A summary \texttt{\_ht\_inputs/elements\_Z.txt} tabulates every element in
-the screening set with its atomic number $Z$ (from a built-in table --- no
-MP query), plus a per-material breakdown.
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
 \thead
 Option & Meaning \\ \midrule
-\texttt{-{}-agent} & \texttt{local} (vasp-agent.py) or \texttt{slurm}
-  (vasp-agent-slurm.py); prompts if omitted. \\
-\texttt{-{}-list} & ID file; default \texttt{highthrouput\_list}. \\
-\texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
-\texttt{-{}-mpi} & MPI tasks per job (workstation; SLURM uses nodes $\times$
-  ntasks-per-node). \\
-\texttt{-{}-encut} & Optional ENCUT override (eV). \\
-\texttt{-{}-kmesh} & Fixed SCF $\Gamma$-mesh for every material, e.g.\
-  \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}.  Not recommended for a set of
-  different cell shapes (the mesh is then not uniform). \\
-\texttt{-{}-kpra} & k-point density (default \texttt{coarse} = 1000):
-  \texttt{coarse}, \texttt{fine} (5000) or an integer (e.g.\ \texttt{8000}). \\
-\texttt{-{}-relax} / \texttt{-{}-no-relax} & Relax cell + ions first
-  (\texttt{01\_relax}, IBRION = 2, ISIF = 3); default on. \\
-\texttt{-{}-relax-kpra} & k-point density of the relaxation (default: same as
-  \texttt{-{}-kpra}). \\
-\texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR and/or NCORE in the SCF
-  (default: automatic; give one and the other is derived).  The ELF pass always
-  uses KPAR${}={}$1. \\
-\texttt{-{}-nodes}, \texttt{-{}-ntasks-per-node}, \texttt{-{}-partition},
-  \texttt{-{}-walltime}, \texttt{-{}-account} & SLURM overrides written into
-  each \texttt{instructions.txt}. \\
-\texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM only; see below. \\
+\texttt{-{}-list}, \texttt{-{}-out} & ID file and directory to create. \\
+\texttt{-{}-kpra N} & k-points per reciprocal atom (e.g.\ 8000). \\
+\texttt{-{}-single-node} & Every material on one node with
+  \texttt{-{}-cores-per-node} (default 40) ranks; otherwise large cells get
+  more nodes. \\
+\texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR/NCORE (default automatic). \\
+\texttt{-{}-max-atoms}, \texttt{-{}-max-nodes} & Skip larger cells / node limit. \\
+\texttt{-{}-build-potcars} / \texttt{-{}-no-build-potcars} & Build POTCARs
+  right after generation (default: when \texttt{sbatch} exists). \\
+\texttt{-{}-include-potcars} & Ship assembled POTCARs in the directory. \\
+\texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-modules},
+  \texttt{-{}-vasp-std}, \texttt{-{}-lobster-bin},
+  \texttt{-{}-hpc-potcar-dir} & Cluster settings, written into \texttt{env.sh}
+  and the job scripts. \\
 \bottomrule
 \end{tabularx}
 
-\begin{lstlisting}[language=bash]
-# example: SLURM, 1 node x 40 cores, density 8000, automatic KPAR/NCORE
-./ht-mp-scf.py --agent slurm --nodes 1 --ntasks-per-node 40 \
-    --kpra 8000 --walltime 12:00:00 --account elmgroup
-# same, but force NCORE=2 (KPAR is derived: 20)
-./ht-mp-scf.py --agent slurm --nodes 1 --ntasks-per-node 40 \
-    --kpra 8000 --ncore 2 --walltime 12:00:00 --account elmgroup
-\end{lstlisting}
-
-\subsection{Semimetal screen: \texttt{ht-semimetals.py}}
-\label{sec:ht-semimetals}
-
-\texttt{ht-semimetals.py} builds a complete SLURM-ready
-\texttt{highthroughput\_*} directory (SCF $\to$ bands $\to$ LOBSTER, one
-\texttt{job.sbatch} per material) from a list file such as
-\texttt{lists/semimetals\_test.txt}.  No DFPT step: with a zero gap, dielectric
-tensors and Born charges are ill-defined and the linear-response loop tends
-not to converge.  No ELF either (\texttt{ELF: off}).
-
-\textbf{\texttt{ht-mp-scf.py} vs.\ \texttt{ht-semimetals.py}.}
-\texttt{ht-mp-scf.py} is the general driver: SCF + ELF (+ optional LOBSTER)
-per material, run through \texttt{runall.sh} on a workstation or on SLURM
-(one job per step, chained with \texttt{afterok}), with one resource setting
-for all materials.  \texttt{ht-semimetals.py} is a screening pipeline built on
-top of it: SCF + bands + LOBSTER in \emph{one} SLURM job per material, a
-per-material ENCUT ($1.3\times$ max ENMAX) and job size, magnetic starting
-moments for 3d elements, a throttled \texttt{submit\_all.sh} with resume,
-\texttt{status.sh}/\texttt{retune.sh}/\texttt{collect\_results.sh}, and a
-POTCAR manifest so the directory can be generated on one machine and run on
-another.  It reuses \texttt{ht-mp-scf.py} and
-\texttt{modules/}, so run it from a clone of the repository (\texttt{git pull}
-first) on a machine with internet access, \texttt{pymatgen}, \texttt{mp-api},
-a Materials Project key and the POTCAR library:
-
-\begin{lstlisting}[language=bash]
-pip install pymatgen mp-api spglib
-export MP_API_KEY=...                  # real key (materialsproject.org/api)
-export VASP_POTCAR_DIR=/path/to/potpaw_PBE
-
-python3 ./ht-semimetals.py --list lists/semimetals_test.txt \
-    --out highthroughput_test --api-key "$MP_API_KEY" \
-    --kpra 8000 --single-node --kpar 20 --ncore 2
-
-cd highthroughput_test && ./submit_all.sh   # builds missing POTCARs, then throttled sbatch
-./status.sh                                 # progress
-./analyze_all.sh                            # redo plots (each job runs analyze.sh itself)
-./retune.sh --time 06:00:00                 # change walltime in place
-\end{lstlisting}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
 \thead
-Option & Meaning \\ \midrule
-\texttt{-{}-list}, \texttt{-{}-out} & Input list (one mp-id per line) and
-  output directory. \\
-\texttt{-{}-kpra N} & k-points per reciprocal atom; overrides
-  \texttt{-{}-kspacing}. \\
-\texttt{-{}-single-node} & Every material on one node with
-  \texttt{-{}-cores-per-node} (default 40) ranks. \\
-\texttt{-{}-kpar}, \texttt{-{}-ncore} & Force \texttt{KPAR}/\texttt{NCORE} in
-  the SCF, bands and LOBSTER INCARs (default: automatic); DFPT always uses
-  KPAR = NCORE = 1. \\
-\texttt{-{}-max-atoms}, \texttt{-{}-max-nodes} & Size filters/limits. \\
-\texttt{-{}-build-potcars} / \texttt{-{}-no-build-potcars} & Run
-  \texttt{make\_potcars.sh} after generation (default: automatic when
-  \texttt{sbatch} exists).  \texttt{submit\_all.sh} also builds any missing
-  POTCAR itself. \\
-\texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-modules},
-  \texttt{-{}-vasp-std}, \texttt{-{}-lobster-bin},
-  \texttt{-{}-hpc-potcar-dir} & Cluster settings. \\
+Script (in the directory) & Purpose \\ \midrule
+\texttt{env.sh} & The one file to edit on the cluster: modules,
+  \texttt{VASP\_STD}, \texttt{LOBSTER\_BIN}, \texttt{VASP\_POTCAR\_DIR},
+  \texttt{ANALYSIS\_PYTHON}, disk policy. \\
+\texttt{submit\_all.sh [N]} & Build missing POTCARs, submit (at most
+  \texttt{MAX\_QUEUED}=50 queued); skips finished/queued materials, so it is
+  also the resume command. \\
+\texttt{status.sh} & Per-step completion counts; writes \texttt{incomplete.txt}. \\
+\texttt{retune.sh} & Change partition/account/walltime in every job script. \\
+\texttt{make\_potcars.sh} & Build and verify the POTCARs (run automatically). \\
+\texttt{analyze\_all.sh [id]} & Redo the plots (each job already runs \texttt{analyze.sh}). \\
+\texttt{postprocess\_all.sh} & Per-material and combined LOBSTER bond tables. \\
+\texttt{collect\_results.sh} & Small \texttt{screen\_results.tar.gz} with the
+  per-step layout (trimmed OUTCARs; \texttt{FULL\_OUTCAR=1} for full). \\
 \bottomrule
 \end{tabularx}
 
@@ -2000,62 +2038,6 @@ Band plot empty or not shown &
     VASP finished.  NumPy~2 fix (\texttt{np.trapz} $\to$ \texttt{np.trapezoid})
     in the COHP plot and LOBSTER post-processing.
 \end{description}
-
-% ============================================================
-\section*{Addendum: High-Throughput Quick Reference}
-\addcontentsline{toc}{section}{Addendum: High-Throughput Quick Reference}
-\label{sec:addendum-ht}
-% ============================================================
-
-Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
-Section~\ref{sec:highthroughput}).  For each Materials Project ID it
-downloads the \textbf{primitive} cell, relaxes cell and ions
-(\texttt{01\_relax}, ISIF = 3), then stages an SCF calculation (automatic
-KPAR/NCORE) followed by a short KPAR${}={}$1 ELF restart ($\rightarrow$
-\texttt{ELFCAR}) on a uniform coarse $\Gamma$-mesh (1000~kpra default;
-override with \texttt{-{}-kpra}, \texttt{KMESH\_DENSITY} or
-\texttt{-{}-kmesh}), and builds a \texttt{runall.sh}.
-
-\begin{lstlisting}[language=bash]
-pip install pymatgen mp-api
-export MP_API_KEY=...            # Materials Project key
-export VASP_POTCAR_DIR=...       # POTCAR library (used by the agent)
-
-printf 'mp-149\nmp-2534\n' > highthrouput_list   # one mp-id per line
-
-./ht-mp-scf.py --agent local  --mpi 16           # workstation, sequential
-./ht-mp-scf.py --agent slurm  --profile slurm    # cluster, afterok-chained
-./ht-mp-scf.py --agent slurm  --no-chain         # cluster, independent
-./ht-mp-scf.py --agent slurm  --kpra 8000 --nodes 1 --ntasks-per-node 40
-
-./runall.sh                      # build inputs + run/submit each SCF
-\end{lstlisting}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Output & Location \\ \midrule
-ELFCAR (electron localization) & \texttt{<mp-id>/02\_scf/ELFCAR}
-  (ELF pass in \texttt{02\_scf/elf/}) \\
-Staged inputs (POSCAR + instructions) & \texttt{\_ht\_inputs/<mp-id>/} \\
-Element / $Z$ table & \texttt{\_ht\_inputs/elements\_Z.txt} \\
-\bottomrule
-\end{tabularx}
-
-\begin{notebox}
-\textbf{Transfer to a workstation:} only the project folder is needed
-(code, \texttt{modules/}, \texttt{profiles/}); VASP binaries and the POTCAR
-library already live there.  \texttt{ht-mp-scf.py} needs internet for the MP
-download, so run it on the login node --- \texttt{runall.sh} does none.
-\end{notebox}
-
-\begin{notebox}
-\textbf{If the download step errors with}
-\texttt{'dict' object has no attribute 'number'}: that is an spglib /
-pymatgen version mismatch.  Fix the root cause with
-\texttt{pip install -U spglib}.  The driver also falls back to
-\texttt{Structure.get\_primitive\_structure()} automatically, so a run is
-never blocked by it.
-\end{notebox}
 
 \vfill
 \noindent{\color{mainblue}\rule{\linewidth}{0.5pt}}\\[4pt]
