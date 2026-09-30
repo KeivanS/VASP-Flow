@@ -651,6 +651,7 @@ python3 ./ht-semimetals.py --list lists/semimetals_test.txt \
 
 cd highthroughput_test && ./submit_all.sh   # builds missing POTCARs, then throttled sbatch
 ./status.sh                                 # progress
+./analyze_all.sh                            # redo plots (each job runs analyze.sh itself)
 ./retune.sh --time 06:00:00                 # change walltime in place
 \end{lstlisting}
 
@@ -1934,7 +1935,9 @@ Band plot empty or not shown &
     restart writes ELFCAR (default in \texttt{ht-mp-scf.py}, which also gains
     \texttt{-{}-kpra} (default coarse), \texttt{-{}-kpar}, \texttt{-{}-ncore}).
     \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
-    built automatically, DFPT step removed.
+    built automatically, DFPT step removed; each job runs \texttt{analyze.sh}
+    at the end (\texttt{ANALYSIS\_PYTHON} in \texttt{env.sh}), plus
+    \texttt{analyze\_all.sh}.
 \end{description}
 
 % ============================================================

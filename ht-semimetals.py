@@ -482,6 +482,23 @@ if [ "${KEEP_LARGE_FILES:-0}" != "1" ]; then
     rm -f "$PROJ"/08_lobster/CHGCAR
 fi
 
+# ── Analysis: band / COHP / COBI / COOP / LOBSTER-DOS plots + bonding CSV ────
+# Runs analyze.sh on the compute node once the VASP/LOBSTER steps are done.
+# Never fails the job: a missing numpy/matplotlib only skips the plots, and
+# ./analyze_all.sh can redo them later from the login node.
+if [ "${RUN_ANALYSIS:-1}" = "1" ] && [ -f "$PROJ/analyze.sh" ]; then
+    [ -n "${ANALYSIS_PYTHON:-}" ] && export PATH="$(dirname "$ANALYSIS_PYTHON"):$PATH"
+    if python3 -c "import numpy, matplotlib" 2>/dev/null; then
+        echo "--- analysis       : $(date)"
+        mkdir -p "$PROJ/analysis"
+        MPLBACKEND=Agg bash "$PROJ/analyze.sh" > "$PROJ/analysis/analyze.log" 2>&1 \
+            || echo "WARNING: analyze.sh reported errors - see analysis/analyze.log"
+    else
+        echo "WARNING: python3 without numpy/matplotlib - analysis skipped."
+        echo "         Set ANALYSIS_PYTHON in env.sh, then run ./analyze_all.sh."
+    fi
+fi
+
 echo "Finished: $(date)"
 # .done is what submit_all.sh uses to skip a material.  Only write it when
 # every step succeeded, so a partially-failed material is retried on the next
@@ -562,6 +579,14 @@ if [ "${VASPFLOW_NO_CHECK:-0}" != "1" ]; then
         echo "         The three VASP steps will still run; 08_lobster will not." >&2
     }
 fi
+
+# --- analysis ------------------------------------------------------------------
+# Each job runs analyze.sh (plots + LOBSTER CSV) after its last step.  It needs
+# a python3 with numpy + matplotlib; module purge above usually leaves only the
+# system python, so point ANALYSIS_PYTHON at a python that has them, e.g.
+#   export ANALYSIS_PYTHON="$HOME/vaspenv/bin/python3"
+export RUN_ANALYSIS=1
+export ANALYSIS_PYTHON="${ANALYSIS_PYTHON:-}"
 
 # --- disk policy -------------------------------------------------------------
 # CHGCAR/WAVECAR copies are deleted after each material by default.
@@ -858,7 +883,13 @@ sbatch.  POTCARs are deliberately absent; step 3 rebuilds them there.
 ## 2. Configure (edit ONE file)
 
     cd /scratch/$USER/@HTDIR@
-    vi env.sh          # modules, VASP_STD, LOBSTER_BIN, VASP_POTCAR_DIR
+    vi env.sh          # modules, VASP_STD, LOBSTER_BIN, VASP_POTCAR_DIR, ANALYSIS_PYTHON
+
+Each job ends by running its `analyze.sh` (band / COHP / COBI / COOP /
+LOBSTER-DOS plots and `lobster_summary.csv` in `analysis/`, log in
+`analysis/analyze.log`).  That needs a python3 with numpy + matplotlib: set
+`ANALYSIS_PYTHON` (e.g. `$HOME/vaspenv/bin/python3`) if the system python
+lacks them.  `./analyze_all.sh` redoes the analysis for finished materials.
 
 `LOBSTER_BIN` must be the **Linux** LOBSTER build — the macOS binary named in
 the local config will not run on the cluster.
@@ -907,6 +938,7 @@ steps whose OUTCAR already carries the final timing block.
 ## 6. Monitor and collect
 
     ./status.sh                  # per-step completion counts; writes incomplete.txt
+    ./analyze_all.sh             # redo per-material plots (each job already runs analyze.sh)
     ./postprocess_all.sh         # per-material lobster_summary.csv + screen_lobster_all.csv
     ./collect_results.sh         # -> screen_results.tar.gz (small, bring this home)
 
@@ -928,6 +960,33 @@ steps whose OUTCAR already carries the final timing block.
   non-spin-polarised.
 * **Disk.**  Each job deletes its CHGCAR/WAVECAR copies at the end.  Set
   `KEEP_LARGE_FILES=1` in env.sh to retain them.
+'''
+
+
+ANALYZE_ALL_SH = r'''#!/bin/bash
+# Re-run every finished material's analyze.sh (plots + LOBSTER CSV) -- e.g.
+# on the login node if the jobs skipped it.  Safe to re-run.
+#   ./analyze_all.sh            all materials with a finished 02_scf
+#   ./analyze_all.sh mp-8       one material
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VASPFLOW_NO_CHECK=1 source "$HERE/env.sh" >/dev/null 2>&1
+[ -n "${ANALYSIS_PYTHON:-}" ] && export PATH="$(dirname "$ANALYSIS_PYTHON"):$PATH"
+python3 -c "import numpy, matplotlib" 2>/dev/null || {
+    echo "ERROR: python3 lacks numpy/matplotlib; set ANALYSIS_PYTHON in env.sh"; exit 1; }
+ids="${1:-$(cat "$HERE/material_list.txt")}"
+n=0
+for id in $ids; do
+    d="$HERE/materials/$id"
+    [ -f "$d/02_scf/OUTCAR" ] && [ -f "$d/analyze.sh" ] || continue
+    mkdir -p "$d/analysis"
+    if MPLBACKEND=Agg bash "$d/analyze.sh" > "$d/analysis/analyze.log" 2>&1; then
+        n=$((n + 1))
+    else
+        echo "  analysis errors: $id (see materials/$id/analysis/analyze.log)"
+    fi
+done
+echo "Analysed $n material(s)."
 '''
 
 
@@ -998,6 +1057,7 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
         'collect_results.sh': COLLECT_SH,
         'retune.sh':          RETUNE_SH,
         'postprocess_all.sh': POSTPROCESS_SH,
+        'analyze_all.sh':     ANALYZE_ALL_SH,
         'README_HPC.md': (README_HPC
                           .replace('@HTDIR@',   os.path.basename(htdir))
                           .replace('@FIRST@',    first_id)
