@@ -19,6 +19,8 @@ import sys
 import argparse
 import re
 import numpy as np
+# np.trapz was removed in NumPy 2.x; np.trapezoid is its replacement (NumPy >= 2.0).
+_trapz = getattr(np, "trapezoid", None) or np.trapz
 from collections import defaultdict
 
 
@@ -83,7 +85,7 @@ def plot_cohp_cobi(lobster_dir, out_stem, project_label,
     # Integrated value and antibonding metrics at E_F.
     icoxp = float(np.interp(0.0, E, itotal))
     below = E <= 0.0
-    a_int = sign * float(np.trapz(np.minimum(total, 0.0)[below], E[below]))
+    a_int = sign * float(_trapz(np.minimum(total, 0.0)[below], E[below]))
     b_int = icoxp - a_int
     fab   = abs(a_int) / (abs(a_int) + abs(b_int)) if abs(a_int) + abs(b_int) > 0 else 0.0
 

@@ -36,6 +36,8 @@ import re
 import sys
 import csv
 import numpy as np
+# np.trapz was removed in NumPy 2.x; np.trapezoid is its replacement (NumPy >= 2.0).
+_trapz = getattr(np, "trapezoid", None) or np.trapz
 
 LIST_FILE = "highthrouput_list"
 SCF_SUBDIR = "02_scf"
@@ -114,8 +116,8 @@ def bonding_antibonding(E, y, anti_sign):
     """
     mask = E <= 0.0
     e, v = E[mask], y[mask]
-    Ipos = float(np.trapz(np.clip(v, 0.0, None), e))   # integral of positive part
-    Ineg = float(np.trapz(np.clip(v, None, 0.0), e))   # integral of negative part
+    Ipos = float(_trapz(np.clip(v, 0.0, None), e))   # integral of positive part
+    Ineg = float(_trapz(np.clip(v, None, 0.0), e))   # integral of negative part
     if anti_sign > 0:                 # COHP: antibonding positive, bonding negative
         AB, B = Ipos, Ineg
     else:                             # COBI/COOP: antibonding negative, bonding positive
