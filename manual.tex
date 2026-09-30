@@ -619,9 +619,23 @@ Option & Meaning \\ \midrule
 \label{sec:ht-semimetals}
 
 \texttt{ht-semimetals.py} builds a complete SLURM-ready
-\texttt{highthroughput\_*} directory (SCF $\to$ bands $\to$ DFPT $\to$
-LOBSTER, one \texttt{job.sbatch} per material) from a list file such as
-\texttt{lists/semimetals\_test.txt}.  It reuses \texttt{ht-mp-scf.py} and
+\texttt{highthroughput\_*} directory (SCF $\to$ bands $\to$ LOBSTER, one
+\texttt{job.sbatch} per material) from a list file such as
+\texttt{lists/semimetals\_test.txt}.  No DFPT step: with a zero gap, dielectric
+tensors and Born charges are ill-defined and the linear-response loop tends
+not to converge.  No ELF either (\texttt{ELF: off}).
+
+\textbf{\texttt{ht-mp-scf.py} vs.\ \texttt{ht-semimetals.py}.}
+\texttt{ht-mp-scf.py} is the general driver: SCF + ELF (+ optional LOBSTER)
+per material, run through \texttt{runall.sh} on a workstation or on SLURM
+(one job per step, chained with \texttt{afterok}), with one resource setting
+for all materials.  \texttt{ht-semimetals.py} is a screening pipeline built on
+top of it: SCF + bands + LOBSTER in \emph{one} SLURM job per material, a
+per-material ENCUT ($1.3\times$ max ENMAX) and job size, magnetic starting
+moments for 3d elements, a throttled \texttt{submit\_all.sh} with resume,
+\texttt{status.sh}/\texttt{retune.sh}/\texttt{collect\_results.sh}, and a
+POTCAR manifest so the directory can be generated on one machine and run on
+another.  It reuses \texttt{ht-mp-scf.py} and
 \texttt{modules/}, so run it from a clone of the repository (\texttt{git pull}
 first) on a machine with internet access, \texttt{pymatgen}, \texttt{mp-api},
 a Materials Project key and the POTCAR library:
@@ -1908,7 +1922,7 @@ Band plot empty or not shown &
     override everything (GUI: Setup $\to$ Advanced).
     New \texttt{check\_agent\_consistency.py} compares GUI, workstation and
     SLURM outputs.  New \texttt{ht-semimetals.py} builds the
-    \texttt{highthroughput\_*} SCF/bands/DFPT/LOBSTER screening sets from list files.
+    \texttt{highthroughput\_*} SCF/bands/LOBSTER screening sets from list files.
   \item[\textcolor{mainblue}{v2.1} (2026-09-30)]
     \textit{Simpler k-mesh and parallel rules; two-step ELF.}
     k-mesh: one formula, $N_i$ = nearest even (hexagonal in-plane: multiple of
@@ -1920,7 +1934,7 @@ Band plot empty or not shown &
     restart writes ELFCAR (default in \texttt{ht-mp-scf.py}, which also gains
     \texttt{-{}-kpra} (default coarse), \texttt{-{}-kpar}, \texttt{-{}-ncore}).
     \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
-    built automatically.
+    built automatically, DFPT step removed.
 \end{description}
 
 % ============================================================
