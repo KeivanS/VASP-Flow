@@ -918,20 +918,22 @@ while [ $# -gt 0 ]; do
         *) echo "unknown option: $1"; exit 1 ;;
     esac
 done
-setenv() { [ -n "$2" ] && sed -i "s|^export $1=.*|export $1=\"$2\"|" "$HERE/env.sh" && echo "  $1=$2"; }
+# in-place sed that works with both GNU (Linux) and BSD (macOS) sed
+sedi() { local f="${!#}"; sed -i.vfbak "$@" && rm -f "$f.vfbak"; }
+setenv() { [ -n "$2" ] && sedi "s|^export $1=.*|export $1=\"$2\"|" "$HERE/env.sh" && echo "  $1=$2"; }
 setenv TIME_RELAX "$TR"; setenv TIME_SCF "$TS"; setenv TIME_BANDS "$TB"; setenv TIME_LOBSTER "$TL"
 n=0; n1=0; nm=0
 for f in "$HERE"/materials/*/job.sbatch; do
     if [ -n "$SINGLE" ] || [ -n "$MULTI" ]; then
         nodes=$(awk -F= '/^#SBATCH --nodes=/{print $2; exit}' "$f")
         if [ "${nodes:-1}" -le 1 ]; then
-            [ -n "$SINGLE" ] && sed -i "s|^#SBATCH --partition=.*|#SBATCH --partition=$SINGLE|" "$f" && n1=$((n1 + 1))
+            [ -n "$SINGLE" ] && sedi "s|^#SBATCH --partition=.*|#SBATCH --partition=$SINGLE|" "$f" && n1=$((n1 + 1))
         else
-            [ -n "$MULTI" ] && sed -i "s|^#SBATCH --partition=.*|#SBATCH --partition=$MULTI|" "$f" && nm=$((nm + 1))
+            [ -n "$MULTI" ] && sedi "s|^#SBATCH --partition=.*|#SBATCH --partition=$MULTI|" "$f" && nm=$((nm + 1))
         fi
     fi
-    [ -n "$PART" ] && sed -i "s|^#SBATCH --partition=.*|#SBATCH --partition=$PART|" "$f"
-    [ -n "$ACCT" ] && sed -i "s|^#SBATCH --account=.*|#SBATCH --account=$ACCT|" "$f"
+    [ -n "$PART" ] && sedi "s|^#SBATCH --partition=.*|#SBATCH --partition=$PART|" "$f"
+    [ -n "$ACCT" ] && sedi "s|^#SBATCH --account=.*|#SBATCH --account=$ACCT|" "$f"
     n=$((n + 1))
 done
 echo "Updated $n job script(s)."
