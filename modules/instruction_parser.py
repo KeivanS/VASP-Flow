@@ -71,7 +71,7 @@ class InstructionParser:
             # Initial magnetic moments: None, or a spec dict (see _extract_magmom)
             'magmom':         magmom,
             'gga_u':          self._extract_gga_u(content),
-            'gga_u_auto':     self._extract_gga_u_auto(content),
+            'gga_u_mode':     self._extract_gga_u_mode(content),
             'tasks':          self._extract_tasks(content),
             'convergence':    self._extract_convergence(content),
             'kpath':          self._extract_kpath(content),
@@ -306,21 +306,27 @@ class InstructionParser:
         
         return u_info
     
-    def _extract_gga_u_auto(self, content: str) -> bool:
-        """Switch for the automatic default-U lookup (hubbard_u_defaults.csv).
+    def _extract_gga_u_mode(self, content: str) -> str:
+        """GGA+U flag for the tabulated U values (hubbard_u_defaults.csv).
 
-        True (default): tabulated U values are applied automatically to every
-        tabulated d/f element in the structure (with or without an anion).
-        Turned off by any of:
-            GGA_U: OFF        (also = FALSE / NONE / NO / 0)
-            no GGA+U   /   without GGA+U   /   no Hubbard U
-        Explicit 'GGA+U with U=... on El-orb' entries are unaffected — they
-        always override the defaults.
+            GGA_U: ON     (TRUE/YES/1)   -> U on every tabulated d/f element
+            GGA_U: OFF    (FALSE/NONE/NO/0, or 'no GGA+U' / 'without Hubbard U')
+                                         -> no U at all
+            no flag                      -> 'auto': U only when the compound
+                                            contains O, S, Se or Te (oxide /
+                                            chalcogenide), otherwise U = 0
+        Explicit 'GGA+U with U=... on El-orb' entries always win (see
+        _extract_gga_u); a bare 'GGA+U' in Methods without values means ON.
         """
-        return not re.search(
-            r'GGA_?\+?U\s*[:=]\s*(OFF|FALSE|NONE|NO|0)\b'
-            r'|\b(no|without)\s+(GGA\s*\+?\s*U|Hubbard\s*U|DFT\s*\+?\s*U)',
-            content, re.IGNORECASE)
+        if re.search(r'GGA_?\+?U\s*[:=]\s*(OFF|FALSE|NONE|NO|0)\b'
+                     r'|\b(no|without)\s+(GGA\s*\+?\s*U|Hubbard\s*U|DFT\s*\+?\s*U)',
+                     content, re.IGNORECASE):
+            return 'off'
+        if re.search(r'GGA_?\+?U\s*[:=]\s*(ON|TRUE|YES|1)\b', content, re.IGNORECASE):
+            return 'on'
+        if re.search(r'(GGA\+U|DFT\+U)', content, re.IGNORECASE):
+            return 'on'
+        return 'auto'
 
     def _extract_tasks(self, content: str) -> List[str]:
         """Extract list of tasks to perform"""

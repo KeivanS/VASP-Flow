@@ -99,7 +99,7 @@ Regex-based extraction from natural language instruction files. Supported parame
 
 **ELF:** `ELF: on` (default) = LELF in the SCF, KPAR pinned to 1; `ELF: separate` (default in `ht-mp-scf.py`) = SCF at auto KPAR, then `02_scf/run_elf.sh` runs a short restart in `02_scf/elf/` (ISTART=1, ICHARG=1, LELF, KPAR=1, NBANDS from the SCF OUTCAR) and copies ELFCAR to `02_scf/`. Both run.sh flavours call run_elf.sh after VASP.
 
-**GGA+U default:** `_u_lines()` applies `hubbard_u_defaults.csv` U values to every tabulated d/f element (no anion condition) in every step's INCAR, unless `GGA_U: OFF`, explicit `GGA+U with U=…`, or R2SCAN/HSE06.
+**GGA+U:** parser `gga_u_mode` = `auto` (no flag) | `on` (`GGA_U: ON`, or a bare `GGA+U` in Methods) | `off` (`GGA_U: OFF`, `no GGA+U`). `_u_lines()`: explicit `GGA+U with U=…` wins; else table U when mode=on, or mode=auto and the POSCAR has O/S/Se/Te (`_U_CHALCOGENS`); never automatic under R2SCAN/HSE06; same block in every step. `load_u_defaults()` reads `hubbard_u_defaults.csv` (whitespace table, `#` comments; element, orbital 3d/4f/…, U_eff) → LDAUU=U_eff, LDAUJ=0; `_U_FALLBACK` mirrors it. GUI select `u_mode`; HT drivers `--gga-u auto|on|off`.
 
 **Raw INCAR passthrough:** an `INCAR: … END_INCAR` block in the instructions file injects literal INCAR tags into the generated INCAR(s). Per-step blocks use `INCAR <step>:` (relax/scf/bands/dos/wannier/dfpt/phonons); an unqualified block applies to all steps. Parsed into `incar_raw` ({'all'|step: ['TAG = val', …]}); merged by `VASPInputGenerator._apply_incar_overrides()`, which overwrites matching generated tags in place and appends the rest under a "User INCAR overrides" comment.
 

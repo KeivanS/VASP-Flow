@@ -174,11 +174,26 @@ def cases():
                    "Tasks: structure relaxation, SCF calculation, DOS\nMPI: 16\n"
                    "ELF: off\nSCF_NCORE: 8\nINCAR dos:\n   KPAR = 2\nEND_INCAR\n"),
              expect=dict(text_parallel=True)),
-        dict(name='gga-u-no-anion', poscar=POSCAR_FESI, form=None,
+        dict(name='gga-u-default-intermetallic', poscar=POSCAR_FESI, form=None,
              text=("Project: fesi\nMethods: PBE functional\n"
                    "Tasks: structure relaxation, SCF calculation, band structure, "
                    "LOBSTER COHP/COBI analysis\nMPI: 16\nELF: off\n"),
+             expect=dict(u_everywhere=False)),
+        dict(name='gga-u-on-intermetallic', poscar=POSCAR_FESI, form=None,
+             text=("Project: fesi\nMethods: PBE functional\n"
+                   "Tasks: structure relaxation, SCF calculation, band structure, "
+                   "LOBSTER COHP/COBI analysis\nMPI: 16\nELF: off\nGGA_U: ON\n"),
              expect=dict(u_everywhere=True)),
+        dict(name='gga-u-default-oxide', poscar=POSCAR_AFM, form=None,
+             text=("Project: feo\nMethods: PBE functional\n"
+                   "Tasks: SCF calculation, band structure\nMPI: 16\nELF: off\n"),
+             expect=dict(u_everywhere=True)),
+        dict(name='gga-u-off-oxide', poscar=POSCAR_AFM, form=None,
+             text=("Project: feo\nMethods: PBE functional\n"
+                   "Tasks: SCF calculation, band structure\nMPI: 16\nELF: off\nGGA_U: OFF\n"),
+             expect=dict(u_everywhere=False)),
+        dict(name='gui-u-mode-on', poscar=POSCAR_FESI,
+             form=form(u_mode='on'), expect=dict(u_everywhere=True)),
         dict(name='text-elf-separate', poscar=POSCAR_AFM, form=None,
              text=("Project: elf2\nMethods: PBE functional\n"
                    "Tasks: SCF calculation\nMPI: 16\nELF: separate\n"),
@@ -358,16 +373,20 @@ def check_semantics(case, out_dir, instr):
         if 'KPAR' not in t:
             bad.append("01_relax: KPAR missing")
 
-    if ex.get('u_everywhere'):
+    if 'u_everywhere' in ex:
+        want = ex['u_everywhere']
         for st, sd in steps.items():
+            if st.startswith('00'):
+                continue
             t = incar_tags(sd / 'INCAR')
-            if t.get('LDAU') != '.TRUE.' or not t.get('LDAUU', '').startswith('5.3'):
-                bad.append(f"{st}: transition metal without anion must get GGA+U "
+            has = t.get('LDAU') == '.TRUE.' and t.get('LDAUU', '').split()[:1] == ['4.1']   # Fe U_eff
+            if has != want:
+                bad.append(f"{st}: GGA+U {'expected' if want else 'not expected'} "
                            f"(LDAU={t.get('LDAU')}, LDAUU={t.get('LDAUU')})")
             n = sum(1 for l in (sd / 'INCAR').read_text().splitlines()
                     if l.strip().startswith('LMAXMIX'))
-            if n != 1:
-                bad.append(f"{st}: {n} LMAXMIX lines (want 1)")
+            if n > 1 or (want and n != 1):
+                bad.append(f"{st}: {n} LMAXMIX lines")
 
     if ex.get('elf_separate'):
         t = incar_tags(steps['02_scf'] / 'INCAR')

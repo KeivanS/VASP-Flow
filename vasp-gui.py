@@ -332,9 +332,11 @@ def api_generate():
     if d.get('is_2d'):      methods.append('2D monolayer')
     for e in u_entries:
         methods.append(f"GGA+U with U={e['U']} on {e['element']}-{e['orbital']} orbitals")
-    if not d.get('u_auto', True):
-        # disable the automatic default-U lookup (hubbard_u_defaults.csv)
-        methods.append('no GGA+U (automatic default-U lookup disabled)')
+    # GGA_U flag: 'auto' (default, no line: U only for oxides/chalcogenides),
+    # 'on' (tabulated U on every d/f element) or 'off'.  Older settings used
+    # the u_auto checkbox (False = off).
+    u_mode = d.get('u_mode') or ('auto' if d.get('u_auto', True) else 'off')
+    gga_u_line = {'on': 'GGA_U: ON', 'off': 'GGA_U: OFF'}.get(u_mode)
 
     # Tasks
     tasks, conv_lines = [], []
@@ -389,6 +391,7 @@ def api_generate():
 
     lines = [f'Project: {name}', '']
     lines += ['Methods: ' + '\n         '.join(methods), '']
+    if gga_u_line: lines += [gga_u_line, '']
     if tasks: lines += ['Tasks: ' + '\n       '.join(tasks), '']
     if conv_lines: lines += ['Convergence: ' + '\n             '.join(conv_lines), '']
     lines += [f'ISIF: {isif}', f'NSW: {nsw}', f'EDIFFG: {ediffg}', f'NKPTS: {nkpts}']
@@ -2684,8 +2687,13 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <label class="ck"><input type="checkbox" id="hexagonal" checked> Hexagonal BZ</label>
     <label class="ck"><input type="checkbox" id="is_2d"> 2D / slab (k<sub>z</sub>=1)</label>
     <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U (explicit)</label>
-    <label class="ck" title="Tabulated literature U values (hubbard_u_defaults.csv, with references) are applied automatically to every tabulated d/f element in the structure (V, Cr, Mn, Fe, Co, Ni, Cu, Mo, W, lanthanides, actinides), with or without an anion. Uncheck to disable; explicit GGA+U entries always override the defaults.">
-      <input type="checkbox" id="u_auto" checked> Default Hubbard U (auto lookup)</label>
+    <label class="ck" title="Tabulated U_eff (hubbard_u_defaults.csv, Dudarev). Auto: only for oxides/chalcogenides (O, S, Se, Te in the POSCAR), otherwise U = 0. On: every tabulated d/f element. Off: never. Explicit GGA+U rows always override.">
+      Default Hubbard U:
+      <select id="u_mode" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+        <option value="auto" selected>auto (oxides/chalcogenides)</option>
+        <option value="on">on (all tabulated d/f)</option>
+        <option value="off">off</option>
+      </select></label>
   </div>
   <!-- GGA+U rows -->
   <div id="u-section" class="hidden">
@@ -3251,7 +3259,7 @@ async function loadProjectSettings(){
 
     // GGA+U
     c('use_u', settings.use_u);
-    c('u_auto', settings.u_auto !== false);   // default ON
+    s('u_mode', settings.u_mode || (settings.u_auto === false ? 'off' : 'auto'));
     toggleU(document.getElementById('use_u'));
     if(settings.use_u && settings.u_entries?.length){
       document.getElementById('u-rows').innerHTML='';
@@ -3581,7 +3589,7 @@ async function saveProjectSettings(){
     hexagonal:      chk('hexagonal'),
     is_2d:          chk('is_2d'),
     use_u:          chk('use_u'),
-    u_auto:         chk('u_auto'),
+    u_mode:         v('u_mode'),
     u_entries:      getUEntries(),
     param_mode:     PARAM_MODE,
     conv_kp:        v('conv_kp'),
@@ -3654,7 +3662,7 @@ async function generate(){
     hexagonal:    chk('hexagonal'),
     is_2d:        chk('is_2d'),
     use_u:        chk('use_u'),
-    u_auto:       chk('u_auto'),
+    u_mode:       v('u_mode'),
     u_entries:    getUEntries(),
     param_mode:   PARAM_MODE,
     // convergence

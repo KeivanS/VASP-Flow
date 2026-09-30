@@ -65,23 +65,17 @@
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ DEFAULT HUBBARD U (automatic GGA+U) ─────────────────────────────────────────┐
-│ When the POSCAR contains a tabulated d/f element (magnetic or not, with or   │
-│ without an anion), GGA+U (Dudarev) is applied by DEFAULT in every step,      │
-│ with U/J looked up from  hubbard_u_defaults.csv  (repo root; element,        │
-│ orbital, U, J + literature reference per row — edit/extend as needed).       │
-│ Defaults = Materials Project fitted U where available, else the midpoint of  │
-│ the linear-response (Cococcioni & de Gironcoli) range:                        │
-│   d: V 3.25, Cr 3.7, Mn 3.9, Fe 5.3, Co 3.32, Ni 6.2, Cu 4.75, Mo 4.38,     │
-│      W 6.2                                                                    │
-│   f: La 10.3/J1.0, Ce 5.0, Pr 5.25, Nd 5.75, Sm 6.25, Eu 6.5, Gd 6.7/J0.7,  │
-│      Tb-Yb 6.0, Th 3.0, U 4.5/J0.54, Pu 4.75                                 │
-│ The CSV also lists the LR ranges + MP values per element. Calibrated for     │
-│ PBE(-sol)/PAW — do NOT reuse with SCAN/R2SCAN or HSE06 without revalidation. │
-│ LMAXMIX (4 d / 6 f) is set automatically with LDAU.                          │
-│                                                                               │
-│ Disable:   GGA_U: OFF        (or:  no GGA+U  /  without GGA+U)               │
-│ Override:  Methods: GGA+U with U=4.0 on Fe-d    (explicit always wins)       │
-│ Intermetallics included (no anion needed). Not applied with R2SCAN/HSE06.    │
+│ Optional flag in instructions.txt:                                            │
+│   (no flag)   GGA+U only if the POSCAR has O, S, Se or Te (oxide /            │
+│               chalcogenide); otherwise U = 0                                  │
+│   GGA_U: ON   U on every tabulated d/f element, any compound                  │
+│   GGA_U: OFF  never  (also: no GGA+U / without GGA+U)                         │
+│   Methods: GGA+U with U=4.0 on Fe-d    explicit values always win             │
+│ Dudarev (LDAUTYPE=2): LDAUU = U_eff from  hubbard_u_defaults.csv  (repo       │
+│ root; element, orbital, U_eff = U - J, ...; edit/extend it), LDAUJ = 0.       │
+│ Same U block in every step; LMAXMIX 4 (d) / 6 (f) set with it.                │
+│ Rows with U_eff = 0 (Zn, Cd) get no U.  Never automatic with R2SCAN/HSE06.    │
+│ GUI: Default Hubbard U auto/on/off.   HT drivers: --gga-u auto|on|off.        │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ EXPLICIT VASP KEYWORDS (any INCAR tag) ───────────────────────────────────────┐

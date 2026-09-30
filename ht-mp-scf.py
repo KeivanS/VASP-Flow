@@ -176,7 +176,7 @@ def write_poscar(structure, path):
 
 def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=None,
                        lobster=True, kpra=None, kpar=None, ncore=None,
-                       relax=True, relax_kpra=None):
+                       relax=True, relax_kpra=None, gga_u='auto'):
     """Write a minimal (relax +) SCF + ELF instructions.txt for one material."""
     tasks = (("structure relaxation, " if relax else "") + "SCF calculation"
              + (", LOBSTER COHP/COBI analysis" if lobster else ""))
@@ -212,6 +212,8 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=No
                   "END_INCAR"]
         if not kmesh:
             lines.append(f"RELAX_KMESH_DENSITY: {relax_kpra or kpra or 'coarse'}")
+    if gga_u in ('on', 'off'):
+        lines.append(f"GGA_U: {gga_u.upper()}   # default (no flag): U only for oxides/chalcogenides")
     if kpar:
         lines.append(f"KPAR: {kpar}")
     if ncore:
@@ -381,6 +383,10 @@ def main():
     ap.add_argument('--relax-kpra', default=None,
                     help="k-point density of the relaxation (default: same as --kpra, "
                          "so the SCF can reuse the relaxed WAVECAR)")
+    ap.add_argument('--gga-u', choices=['auto', 'on', 'off'], default='auto',
+                    help="GGA+U with the tabulated U_eff: auto (default) = only for "
+                         "oxides/chalcogenides (O, S, Se, Te present); on = every "
+                         "tabulated d/f element; off = never")
     ap.add_argument('--kmesh', default=None,
                     help="fixed SCF Gamma k-mesh for every material, e.g. '8 8 8'; "
                          "overrides --kpra (not recommended for mixed cell shapes)")
@@ -452,7 +458,8 @@ def main():
                            mp_id, args.functional, args.mpi, args.encut, slurm_opts,
                            kmesh=args.kmesh, lobster=args.lobster,
                            kpra=args.kpra, kpar=args.kpar, ncore=args.ncore,
-                           relax=args.relax, relax_kpra=args.relax_kpra)
+                           relax=args.relax, relax_kpra=args.relax_kpra,
+                           gga_u=args.gga_u)
         nat = len(structure)
         els = sorted({str(s) for s in structure.composition.elements},
                      key=lambda s: ELEMENT_Z.get(s, 999))

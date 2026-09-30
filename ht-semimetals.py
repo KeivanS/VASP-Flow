@@ -235,7 +235,7 @@ def magmom_string(struct):
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
                        ntasks_per_node, walltime, partition, account,
                        functional='PBE', kpra=None, kpar=None, ncore=None,
-                       relax=True):
+                       relax=True, gga_u='auto'):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
 
     Task keywords are matched as substrings over the whole file by
@@ -276,6 +276,8 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "# Turn it back on only if ELFCAR is wanted, and expect a much slower SCF.",
         "ELF: off",
         "",
+        *([f"GGA_U: {gga_u.upper()}   # default (no flag): U only for oxides/chalcogenides"]
+          if gga_u in ('on', 'off') else []),
         *([f"KPAR: {kpar}"] if kpar else []),
         *([f"NCORE: {ncore}"] if ncore else []),
         f"NODES: {nodes}",
@@ -1172,6 +1174,10 @@ def main():
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition (walltime still tiered by size); no multi-node tier')
+    ap.add_argument('--gga-u', choices=['auto', 'on', 'off'], default='auto',
+                    help='GGA+U with the tabulated U_eff: auto (default) = only for '
+                         'oxides/chalcogenides (O, S, Se, Te present); on = every '
+                         'tabulated d/f element; off = never')
     ap.add_argument('--relax', dest='relax', action='store_true', default=True,
                     help='first relax cell + ions (01_relax, IBRION=2, ISIF=3); default on')
     ap.add_argument('--no-relax', dest='relax', action='store_false',
@@ -1285,7 +1291,8 @@ def main():
         write_instructions(os.path.join(stage, 'instructions.txt'), mp_id,
                            struct, mesh, pinfo['encut'], nodes, ntpn, walltime,
                            partition, args.account, args.functional, kpra=args.kpra,
-                           kpar=args.kpar, ncore=args.ncore, relax=args.relax)
+                           kpar=args.kpar, ncore=args.ncore, relax=args.relax,
+                           gga_u=args.gga_u)
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
         env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir)

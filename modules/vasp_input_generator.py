@@ -23,42 +23,59 @@ _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster')
 # ── Default Hubbard U lookup ─────────────────────────────────────────────────
 # Values live in hubbard_u_defaults.csv (repo root) with full references;
 # this hard-coded fallback mirrors the CSV so generation works without it.
-# Applied automatically (Dudarev GGA+U) to every tabulated d/f element in the
-# structure, magnetic or not, with or without an anion — disable with
-# 'GGA_U: OFF', override with explicit 'GGA+U with U=... on El-orb'.
-_U_FALLBACK = {
-    'V': ('d', 3.25, 0.0), 'Cr': ('d', 3.7, 0.0),  'Mn': ('d', 3.9, 0.0),
-    'Fe': ('d', 5.3, 0.0), 'Co': ('d', 3.32, 0.0), 'Ni': ('d', 6.2, 0.0),
-    'Cu': ('d', 4.75, 0.0), 'Mo': ('d', 4.38, 0.0), 'W': ('d', 6.2, 0.0),
-    'La': ('f', 10.3, 1.0), 'Ce': ('f', 5.0, 0.0),  'Pr': ('f', 5.25, 0.0),
-    'Nd': ('f', 5.75, 0.0), 'Sm': ('f', 6.25, 0.0), 'Eu': ('f', 6.5, 0.0),
-    'Gd': ('f', 6.7, 0.7),  'Th': ('f', 3.0, 0.0),  'U': ('f', 4.5, 0.54),
-    'Pu': ('f', 4.75, 0.0),
-    **{_el: ('f', 6.0, 0.0) for _el in
-       ('Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb')},
+# Used (Dudarev GGA+U) by default only for oxides/chalcogenides (O, S, Se, Te
+# present); 'GGA_U: ON' applies it to every tabulated element, 'GGA_U: OFF'
+# never; explicit 'GGA+U with U=... on El-orb' always wins.  See _u_lines().
+_U_CHALCOGENS = ('O', 'S', 'Se', 'Te')   # default GGA+U only for these compounds
+_U_FALLBACK = {   # mirror of hubbard_u_defaults.csv: (orbital, U_eff, J=0)
+    'Sc': ('d', 2.0, 0.0), 'Ti': ('d', 3.0, 0.0), 'V': ('d', 3.1, 0.0), 'Cr': ('d', 2.4, 0.0),
+    'Mn': ('d', 4.1, 0.0), 'Fe': ('d', 4.1, 0.0), 'Co': ('d', 4.4, 0.0), 'Ni': ('d', 5.3, 0.0),
+    'Cu': ('d', 5.0, 0.0), 'Y': ('d', 2.0, 0.0), 'Zr': ('d', 2.0, 0.0), 'Nb': ('d', 2.0, 0.0),
+    'Mo': ('d', 1.9, 0.0), 'Tc': ('d', 3.0, 0.0), 'Ru': ('d', 3.0, 0.0), 'Rh': ('d', 3.0, 0.0),
+    'Pd': ('d', 3.0, 0.0), 'Ag': ('d', 3.0, 0.0), 'Hf': ('d', 2.0, 0.0), 'Ta': ('d', 2.0, 0.0),
+    'W': ('d', 1.5, 0.0), 'Re': ('d', 2.5, 0.0), 'Os': ('d', 2.5, 0.0), 'Ir': ('d', 2.5, 0.0),
+    'Pt': ('d', 2.0, 0.0), 'Au': ('d', 2.0, 0.0), 'La': ('f', 10.3, 0.0), 'Ce': ('f', 5.0, 0.0),
+    'Pr': ('f', 5.25, 0.0), 'Nd': ('f', 5.75, 0.0), 'Sm': ('f', 6.25, 0.0), 'Eu': ('f', 6.5, 0.0),
+    'Gd': ('f', 6.7, 0.0), 'Tb': ('f', 6.0, 0.0), 'Dy': ('f', 6.0, 0.0), 'Ho': ('f', 6.0, 0.0),
+    'Er': ('f', 6.0, 0.0), 'Tm': ('f', 6.0, 0.0), 'Yb': ('f', 6.0, 0.0), 'Th': ('f', 3.0, 0.0),
+    'U': ('f', 4.5, 0.0),
 }
 
 
 def load_u_defaults():
-    """{element: {'orbital','U','J'}} read from hubbard_u_defaults.csv next to
-    the repo root (lines starting with '#' are metadata and skipped); falls
-    back to the built-in mirror if the CSV is missing."""
+    """{element: {'orbital', 'U', 'J'}} from hubbard_u_defaults.csv (repo root).
+
+    The file is a whitespace/tab-separated table; lines starting with '#' are
+    comments.  Only the first three columns are used:
+        element   orbital (3d, 4d, 5d, 4f, 5f or d/f)   U_eff = U - J (eV)
+    Dudarev's scheme (LDAUTYPE = 2) depends on U - J only, so the INCAR gets
+    LDAUU = U_eff and LDAUJ = 0; the J column is informational.  Rows with
+    U_eff = 0 (e.g. Zn, Cd) get no correction.  Falls back to the built-in
+    mirror only if the file is missing or unreadable.
+    """
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         '..', 'hubbard_u_defaults.csv')
     out = {}
     try:
-        import csv
-        with open(path, newline='') as fh:
-            rows = [ln for ln in fh if not ln.lstrip().startswith('#')]
-        for r in csv.DictReader(rows):
-            out[r['element'].strip()] = {'orbital': r['orbital'].strip(),
-                                         'U': float(r['U_eV']),
-                                         'J': float(r['J_eV'])}
-    except Exception:
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            for ln in fh:
+                if not ln.strip() or ln.lstrip().startswith('#'):
+                    continue
+                tok = ln.replace(',', ' ').split()
+                if len(tok) < 3 or not tok[0][:1].isupper():
+                    continue
+                orb = tok[1].strip().lower()[-1:]
+                try:
+                    u = float(tok[2])
+                except ValueError:
+                    continue
+                if orb in 'spdf' and u > 0:
+                    out[tok[0]] = {'orbital': orb, 'U': u, 'J': 0.0}
+    except OSError:
         pass
     if not out:
-        out = {el: {'orbital': o, 'U': u, 'J': j}
-               for el, (o, u, j) in _U_FALLBACK.items()}
+        out = {el: {'orbital': o, 'U': u, 'J': 0.0}
+               for el, (o, u, _j) in _U_FALLBACK.items()}
     return out
 
 
@@ -1998,30 +2015,30 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 + self._magmom_tag(values) + [""])
 
     def _u_lines(self) -> list:
-        """Generate GGA+U INCAR lines.
+        """GGA+U INCAR lines (Dudarev, LDAUTYPE=2), identical in every step.
 
-        Explicit user entries (instructions 'GGA+U with U=... on El-orb')
-        always win. Otherwise the DEFAULT U values from hubbard_u_defaults.csv
-        are applied to every tabulated d/f element in the structure (V, Cr,
-        Mn, Fe, Co, Ni, Cu, Mo, W and the lanthanides/actinides), magnetic or
-        not, with or without an anion -- so every step of every such
-        structure is GGA+U.  Not under R2SCAN/HSE06.  Disable with
-        'GGA_U: OFF' in the instructions.
+        1. Explicit 'GGA+U with U=... on El-orb' entries always win.
+        2. Otherwise the tabulated U_eff (hubbard_u_defaults.csv) is used
+           according to the GGA_U flag in the instructions:
+             GGA_U: ON   -> every tabulated d/f element gets its U
+             GGA_U: OFF  -> no U
+             no flag     -> U only if the compound is an oxide/chalcogenide
+                            (contains O, S, Se or Te); otherwise U = 0,
+                            since the table values were fitted for those.
+           Never automatic under R2SCAN/HSE06 (already reduce the
+           self-interaction error).
         """
         u_info = self.instructions.get('gga_u', {})
         els  = u_info.get('elements', {}) if u_info.get('enabled') else {}
+        mode = self.instructions.get('gga_u_mode', 'auto')
         auto = False
-        if not els and self.instructions.get('gga_u_auto', True):
-            # The tabulated U values are calibrated for PBE(-sol) GGA — never
-            # auto-apply them under meta-GGA/hybrid functionals, which already
-            # reduce the self-interaction error (explicit entries still win).
-            func_ok = self.instructions.get('functional', 'PBE') not in \
-                      ('R2SCAN', 'HSE06')
-            if func_ok:
+        if not els and mode != 'off':
+            func_ok = self.instructions.get('functional', 'PBE') not in ('R2SCAN', 'HSE06')
+            chalc = any(a in (self.elements or []) for a in _U_CHALCOGENS)
+            if func_ok and (mode == 'on' or chalc):
                 table = load_u_defaults()
-                els = {el: table[el] for el in (self.elements or [])
-                       if el in table}
-                auto = bool(els)
+                els = {el: table[el] for el in (self.elements or []) if el in table}
+                auto = 'on' if mode == 'on' else 'auto'
         if not els:
             return []
         # Build LDAUL, LDAUU, LDAUJ arrays in species order
@@ -2040,10 +2057,11 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lmax = 6 if any(els[e].get('orbital') == 'f' for e in els) else 4
         head = ["# GGA+U (Dudarev, LDAUTYPE=2)"]
         if auto:
-            head = ["# GGA+U (Dudarev, LDAUTYPE=2) — DEFAULT U from the lookup",
-                    "# table hubbard_u_defaults.csv (applied to every tabulated d/f element).",
-                    "# Disable with 'GGA_U: OFF' or override with",
-                    "# 'GGA+U with U=<val> on <El>-<orb>' in the instructions."]
+            why = ("GGA_U: ON" if auto == 'on' else
+                   "oxide/chalcogenide (O/S/Se/Te present), no GGA_U flag")
+            head = ["# GGA+U (Dudarev, LDAUTYPE=2) — U_eff from hubbard_u_defaults.csv",
+                    f"# because: {why}.",
+                    "# 'GGA_U: OFF' disables it; 'GGA+U with U=<val> on <El>-<orb>' overrides."]
         return head + [
                 "LDAU = .TRUE.", "LDAUTYPE = 2",
                 f"LDAUL = {' '.join(ldaul)}",
