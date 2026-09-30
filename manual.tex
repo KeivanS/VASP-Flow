@@ -589,6 +589,17 @@ inputs and then runs or submits each job.  Each SCF uses the automatic
 \texttt{KMESH\_DENSITY} in \texttt{\_ht\_inputs/<id>/instructions.txt}, or give
 a fixed \texttt{-{}-kmesh} grid.
 
+\textbf{Relaxation first (default).}  Each material starts with
+\texttt{01\_relax}: a full relaxation of cell shape, volume and ions
+(\texttt{IBRION = 2}, \texttt{ISIF = 3}), because the Materials Project cell
+was relaxed with a different functional/setup.  It uses the same k-point
+density as the SCF (\texttt{-{}-relax-kpra} to change it), so the SCF starts
+from the relaxed \texttt{CONTCAR}, \texttt{CHGCAR} and \texttt{WAVECAR}
+(Relax $\to$ SCF hand-off, \texttt{copy\_from\_relax.sh}).
+\texttt{-{}-no-relax} runs the SCF on the downloaded structure.  With
+\texttt{ISIF = 3} give a generous \texttt{-{}-encut} (about $1.3\times$ the
+largest ENMAX) to keep the Pulay stress small.
+
 \textbf{ELF in two steps (default).}  The instructions carry
 \texttt{ELF: separate}: the SCF runs with the automatic KPAR/NCORE (full
 k-point parallelism), then a short KPAR${}={}$1 restart in
@@ -632,6 +643,10 @@ Option & Meaning \\ \midrule
   different cell shapes (the mesh is then not uniform). \\
 \texttt{-{}-kpra} & k-point density (default \texttt{coarse} = 1000):
   \texttt{coarse}, \texttt{fine} (5000) or an integer (e.g.\ \texttt{8000}). \\
+\texttt{-{}-relax} / \texttt{-{}-no-relax} & Relax cell + ions first
+  (\texttt{01\_relax}, IBRION = 2, ISIF = 3); default on. \\
+\texttt{-{}-relax-kpra} & k-point density of the relaxation (default: same as
+  \texttt{-{}-kpra}). \\
 \texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR and/or NCORE in the SCF
   (default: automatic; give one and the other is derived).  The ELF pass always
   uses KPAR${}={}$1. \\
@@ -1970,6 +1985,9 @@ Band plot empty or not shown &
     New \texttt{ELF: separate}: SCF at full KPAR, then a short KPAR = 1
     restart writes ELFCAR (default in \texttt{ht-mp-scf.py}, which also gains
     \texttt{-{}-kpra} (default coarse), \texttt{-{}-kpar}, \texttt{-{}-ncore}).
+    \texttt{ht-mp-scf.py}: \texttt{01\_relax} (IBRION = 2, ISIF = 3) before
+    the SCF by default (\texttt{-{}-no-relax}, \texttt{-{}-relax-kpra}); SLURM
+    chaining now submits every step of a material, not only the SCF.
     \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
     built automatically, DFPT step removed; each job runs \texttt{analyze.sh}
     at the end (\texttt{ANALYSIS\_PYTHON} in \texttt{env.sh}), plus
@@ -1985,7 +2003,8 @@ Band plot empty or not shown &
 
 Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
 Section~\ref{sec:highthroughput}).  For each Materials Project ID it
-downloads the \textbf{primitive} cell, stages an SCF calculation (automatic
+downloads the \textbf{primitive} cell, relaxes cell and ions
+(\texttt{01\_relax}, ISIF = 3), then stages an SCF calculation (automatic
 KPAR/NCORE) followed by a short KPAR${}={}$1 ELF restart ($\rightarrow$
 \texttt{ELFCAR}) on a uniform coarse $\Gamma$-mesh (1000~kpra default;
 override with \texttt{-{}-kpra}, \texttt{KMESH\_DENSITY} or

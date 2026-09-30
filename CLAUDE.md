@@ -16,7 +16,7 @@ modules/
   vasp_input_generator.py    # Generates INCAR, KPOINTS, POTCAR, run.sh per step
 ```
 
-**High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (SCF task + `INCAR scf:` block with `LELF=.TRUE.` for ELF), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). SLURM runs are chained across materials via `--dependency=afterok` by default (`--no-chain` to submit independently).
+**High-throughput (`ht-mp-scf.py`):** reads `highthrouput_list` (one mp-ID per line), downloads each **primitive** cell from Materials Project (`mp-api`/`pymatgen`, needs `MP_API_KEY`), stages `_ht_inputs/<id>/{POSCAR,instructions.txt}` (relax task with an `INCAR relax:` block IBRION=2/ISIF=3 and `RELAX_KMESH_DENSITY` = SCF density unless `--no-relax`; SCF task with `ELF: separate`; optional LOBSTER), and writes `runall.sh` that calls `vasp-agent.py` (local, sequential) or `vasp-agent-slurm.py` (SLURM). SLURM runs chain every step of every material (relax → scf → lobster, then the next material) via `--dependency=afterok` by default (`--no-chain` to submit independently).
 
 **Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons, 08_lobster}
 
