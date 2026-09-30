@@ -10,6 +10,7 @@
 - `ht-semimetals.py`: relaxation first (`01_relax`, ISIF = 3), one SLURM job per step chained with afterok.
 - SLURM walltime per step (relax 8 h, SCF 4 h, bands/DOS 2 h, LOBSTER 4 h; `<STEP>_WALLTIME` / `WALLTIME` / `TIME_*` in env.sh override). A step that reaches its limit is stopped cleanly 15 min before the end and requeued (same job id): relaxations continue from CONTCAR or the last XDATCAR frame, LOBSTER reruns only the binary once its NSCF is done.
 - HT drivers never re-download a structure: `_ht_inputs/<id>/POSCAR` is reused, and `--poscar-dir <folder>` takes POSCARs from another (e.g. older highthroughput) folder; no MP key needed then.
+- `ht-semimetals.py --jobs N`: materials prepared in parallel (default min(8, CPUs)); walltimes only in `env.sh` (not in each `instructions.txt`).
 - NumPy 2 compatibility: `np.trapz` → `np.trapezoid` in `cohp_plot.py` and `lobster_postprocess.py`.
 
 ## v2.1 — 2026-09-30 · Simpler k-mesh and parallel rules; two-step ELF

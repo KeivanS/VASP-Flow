@@ -779,6 +779,8 @@ Option & Meaning \\ \midrule
 \texttt{-{}-include-potcars} & Ship assembled POTCARs in the directory. \\
 \texttt{-{}-poscar-dir DIR} & Reuse downloaded POSCARs (see above). \\
 \texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-modules},
+\texttt{-{}-jobs N} & Prepare N materials in parallel (default
+  $\min(8,\ \mathrm{CPUs})$). \\
   \texttt{-{}-vasp-std}, \texttt{-{}-lobster-bin},
   \texttt{-{}-hpc-potcar-dir} & Cluster settings, written into \texttt{env.sh}
   and the job scripts. \\
@@ -1612,7 +1614,8 @@ others & the profile time \\
 Priority: \texttt{<STEP>\_WALLTIME} $>$ \texttt{WALLTIME} $>$ these defaults
 $>$ \texttt{profiles/slurm.json}.  In \texttt{ht-semimetals.py} directories
 the same defaults sit in \texttt{env.sh} (\texttt{TIME\_RELAX} \ldots;
-\texttt{retune.sh -{}-time-relax \ldots}).
+\texttt{retune.sh -{}-time-relax \ldots}); that is the only place to change
+them --- the per-material \texttt{instructions.txt} carry no walltime.
 
 \textbf{A step that reaches its limit is continued, not lost.}  Every step
 script asks SLURM for a warning 15~min before the limit

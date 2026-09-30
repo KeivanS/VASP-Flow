@@ -284,8 +284,8 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         *([f"NCORE: {ncore}"] if ncore else []),
         f"NODES: {nodes}",
         f"NTASKS_PER_NODE: {ntasks_per_node}",
-        *[f"{st.upper()}_WALLTIME: {t}" for st, t in STEP_WALLTIME.items()
-          if st in ('relax', 'scf', 'bands', 'lobster')],
+        "# Walltimes are NOT set here: each step's limit is TIME_RELAX / TIME_SCF /",
+        "# TIME_BANDS / TIME_LOBSTER in <highthroughput>/env.sh (./retune.sh).",
         f"PARTITION: {partition}",
         f"ACCOUNT: {account}",
     ]
@@ -1257,6 +1257,8 @@ def main():
                     help='folder with already-downloaded POSCARs (<dir>/<id>/POSCAR, '
                          '<dir>/materials/<id>/POSCAR, <dir>/_ht_inputs/<id>/POSCAR, '
                          '<dir>/<id>.vasp); repeatable.  <out>/_ht_inputs is always reused')
+    ap.add_argument('--jobs', type=int, default=min(8, os.cpu_count() or 1),
+                    help='materials prepared in parallel (default: min(8, CPUs))')
     ap.add_argument('--api-key', default=None)
     args = ap.parse_args()
 
@@ -1286,11 +1288,12 @@ def main():
     manifest = {'kspacing': args.kspacing, 'kpra': args.kpra, 'potcar_dir_local': potcar_dir,
                 'materials': {}}
 
+    # ── 1. structures (serial: the only network step; existing POSCARs are reused)
+    todo = []
     for n, mp_id in enumerate(ids, 1):
         stage = os.path.join(stage_root, mp_id)
         os.makedirs(stage, exist_ok=True)
         poscar = os.path.join(stage, 'POSCAR')
-
         local = None if os.path.isfile(poscar) else \
             ht.find_local_poscar(mp_id, args.poscar_dir or [])
         if local:                               # already downloaded elsewhere
@@ -1298,34 +1301,33 @@ def main():
         if not os.path.isfile(poscar):          # resume: keep what we have
             try:
                 api_key = api_key or ht.get_api_key(args.api_key)
+                print(f"[{n}/{len(ids)}] {mp_id}: downloading ...", flush=True)
                 structure = ht.fetch_primitive_structure(mp_id, api_key)
                 ht.write_poscar(structure, poscar)
             except Exception as e:
                 print(f"[{n}/{len(ids)}] {mp_id}: DOWNLOAD FAILED ({e})")
                 failed.append(mp_id)
                 continue
+        todo.append((n, mp_id))
 
+    # ── 2. inputs for each material (independent -> run --jobs at a time)
+    def build_one(n, mp_id):
+        """Returns (status, message, extra) with status ok | skip | fail."""
+        stage = os.path.join(stage_root, mp_id)
+        poscar = os.path.join(stage, 'POSCAR')
         try:
             struct = read_poscar(poscar)
         except Exception as e:
-            print(f"[{n}/{len(ids)}] {mp_id}: bad POSCAR ({e})")
-            failed.append(mp_id)
-            continue
-
+            return 'fail', f"[{n}/{len(ids)}] {mp_id}: bad POSCAR ({e})", None
         # Hard atom-count filter, applied to the PRIMITIVE cell that will
         # actually be run (not to the Materials Project nsites field).
         if struct['natoms'] > args.max_atoms:
-            print(f"[{n}/{len(ids)}] {mp_id}: SKIP — {struct['natoms']} atoms "
-                  f"> {args.max_atoms}")
-            skipped.append((mp_id, struct['natoms']))
-            continue
-
+            return 'skip', (f"[{n}/{len(ids)}] {mp_id}: SKIP — {struct['natoms']} atoms "
+                            f"> {args.max_atoms}"), struct['natoms']
         try:
             pinfo = material_potcar_info(struct, potcar_dir)
         except Exception as e:
-            print(f"[{n}/{len(ids)}] {mp_id}: {e}")
-            failed.append(mp_id)
-            continue
+            return 'fail', f"[{n}/{len(ids)}] {mp_id}: {e}", None
 
         if args.kpra:
             from vasp_input_generator import VASPInputGenerator
@@ -1337,7 +1339,6 @@ def main():
                   for b, _n, _c, _p in TIERS] if args.single_node else None)
         nodes, ntpn, partition, W = size_job(
             pinfo['nelect'], nk_full, tiers=tiers, max_nodes=args.max_nodes)
-
         formula = ''.join(f"{el}{cnt if cnt > 1 else ''}"
                           for el, cnt in zip(struct['species'], struct['counts']))
 
@@ -1356,40 +1357,31 @@ def main():
             cwd=materials, env=env, capture_output=True, text=True)
         proj = os.path.join(materials, mp_id)
         if proc.returncode != 0 or not os.path.isdir(proj):
-            print(f"[{n}/{len(ids)}] {mp_id}: AGENT FAILED")
-            print('    ' + (proc.stderr or proc.stdout or '').strip()[-500:].replace('\n', '\n    '))
-            failed.append(mp_id)
-            continue
+            return 'fail', (f"[{n}/{len(ids)}] {mp_id}: AGENT FAILED\n    " +
+                            (proc.stderr or proc.stdout or '').strip()[-500:]
+                            .replace('\n', '\n    ')), None
 
         expected = (['01_relax'] if args.relax else []) + ['02_scf', '03_bands', '08_lobster']
         got = [d for d in expected if os.path.isdir(os.path.join(proj, d))]
         if got != expected:
-            print(f"[{n}/{len(ids)}] {mp_id}: WRONG STEPS {got}")
-            failed.append(mp_id)
-            continue
+            return 'fail', f"[{n}/{len(ids)}] {mp_id}: WRONG STEPS {got}", None
 
         cap_lobster_mesh(proj)
         localise_analyze_sh(proj, '../../tools')
         for step in expected:
             make_run_sh_portable(os.path.join(proj, step))
-
-        manifest['materials'][mp_id] = {
-            'potcars': [[v] + list(potcar_props(potcar_dir, v))
-                        for v in pinfo['variants']],
-            'encut': pinfo['encut'], 'natoms': struct['natoms'],
-        }
+        man = {'potcars': [[v] + list(potcar_props(potcar_dir, v))
+                           for v in pinfo['variants']],
+               'encut': pinfo['encut'], 'natoms': struct['natoms']}
         if not args.include_potcars:
             strip_potcars(proj)
-
         # The agent also writes a per-material submit_all.sh chaining its own step
         # scripts; job.sbatch (below) is the single entry point here, so drop it.
         _sa = os.path.join(proj, 'submit_all.sh')
         if os.path.exists(_sa):
             os.remove(_sa)
-
         # Local copies so the cluster side is self-describing.
         shutil.copy(os.path.join(stage, 'instructions.txt'), proj)
-
         meta = {'formula': formula, 'natoms': struct['natoms'],
                 'nelect': pinfo['nelect'], 'encut': pinfo['encut'],
                 'mesh': mesh, 'nk_full': nk_full, 'W': W, 'nodes': nodes,
@@ -1397,12 +1389,33 @@ def main():
                 'ispin': magmom_string(struct) is not None,
                 'partition': partition, 'variants': pinfo['variants']}
         write_job_script(proj, mp_id, meta, partition, args.account)
-        metas[mp_id] = meta
-        ok.append(mp_id)
+        msg = (f"[{n}/{len(ids)}] {mp_id:<12} {formula:<12} "
+               f"{struct['natoms']:>3} at  {'x'.join(str(x) for x in mesh):>10}  "
+               f"ENCUT={pinfo['encut']:<4} W={W:7.1f}  {nodes}n x {ntpn}")
+        return 'ok', msg, (meta, man)
 
-        print(f"[{n}/{len(ids)}] {mp_id:<12} {formula:<12} "
-              f"{struct['natoms']:>3} at  {'x'.join(str(x) for x in mesh):>10}  "
-              f"ENCUT={pinfo['encut']:<4} W={W:7.1f}  {nodes}n x {ntpn}")
+    from concurrent.futures import ThreadPoolExecutor
+    results = {}
+    print(f"  building inputs for {len(todo)} material(s), {args.jobs} at a time ...\n")
+    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+        futs = {pool.submit(build_one, n, mp_id): mp_id for n, mp_id in todo}
+        from concurrent.futures import as_completed
+        for fut in as_completed(futs):
+            mp_id = futs[fut]
+            try:
+                results[mp_id] = fut.result()
+            except Exception as e:                      # noqa: BLE001
+                results[mp_id] = ('fail', f"{mp_id}: {e}", None)
+            print(results[mp_id][1], flush=True)
+    for _n, mp_id in todo:                             # keep the list order
+        status, _msg, extra = results[mp_id]
+        if status == 'ok':
+            metas[mp_id], manifest['materials'][mp_id] = extra
+            ok.append(mp_id)
+        elif status == 'skip':
+            skipped.append((mp_id, extra))
+        else:
+            failed.append(mp_id)
 
     if not ok:
         sys.exit("\nERROR: no materials staged.")
