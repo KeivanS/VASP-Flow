@@ -5,9 +5,11 @@ High-Throughput MP -> SCF + ELF driver
 Reads a list of Materials Project IDs (one per line) from an input file,
 downloads the PRIMITIVE-cell POSCAR for each from the Materials Project,
 and stages a per-material SCF calculation that also computes the electron
-localization function (ELF -> ELFCAR, via LELF = .TRUE.).  Each SCF uses a
-medium 10x10x10 Gamma k-mesh by default, which the user can edit (per
-material in _ht_inputs/<id>/instructions.txt, or globally via --kmesh).
+localization function (ELF -> ELFCAR).  The SCF runs with automatic
+KPAR/NCORE; a short KPAR = 1 restart in 02_scf/elf then writes ELFCAR (LELF
+needs KPAR = 1).  k-points: --kpra density (default coarse = 1000 kpra,
+uniform mesh), or a fixed --kmesh; editable per material in
+_ht_inputs/<id>/instructions.txt.
 
 Folder/input construction and job execution are delegated to the existing
 agents:
@@ -171,7 +173,7 @@ def write_poscar(structure, path):
 
 
 def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=None,
-                       lobster=True, kpra=None, ncore=None):
+                       lobster=True, kpra=None, kpar=None, ncore=None):
     """Write a minimal SCF+ELF instructions.txt for one material."""
     tasks = "SCF calculation" + (", LOBSTER COHP/COBI analysis" if lobster else "")
     lines = [
@@ -181,20 +183,22 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=No
         "",
         f"Tasks: {tasks}",
         "",
-        "# Electron localization function -> ELFCAR (raw INCAR passthrough)",
-        "INCAR scf:",
-        "   LELF = .TRUE.",
-        "   KPAR = 1         ! ELF (LELF) is not implemented for KPAR>1 in VASP",
-        "END_INCAR",
+        "# ELF in two steps: the SCF runs with full k-point parallelism (auto",
+        "# KPAR/NCORE), then a short restart in 02_scf/elf reads its converged",
+        "# WAVECAR+CHGCAR with KPAR = 1 (required by LELF) and writes ELFCAR.",
+        "# Use 'ELF: on' for the old single run (LELF in the SCF, KPAR = 1).",
+        "ELF: separate",
         "",
         f"MPI: {mpi}",
     ]
-    if kpra:
+    if kmesh:
+        lines.append("# Fixed k-mesh (--kmesh); replace by KMESH_DENSITY for a uniform mesh")
+        lines.append(f"KMESH: {kmesh}")
+    elif kpra:
         lines.append("# k-point density (kpra): N_i proportional to |b_i*|, uniform spacing")
         lines.append(f"KMESH_DENSITY: {kpra}")
-    elif kmesh:
-        lines.append("# Medium k-mesh by default; edit this line to change density")
-        lines.append(f"KMESH: {kmesh}")
+    if kpar:
+        lines.append(f"KPAR: {kpar}")
     if ncore:
         lines.append(f"NCORE: {ncore}")
     if encut:
@@ -354,15 +358,16 @@ def main():
                     help="add a LOBSTER (08_lobster) bonding-analysis step (default on)")
     ap.add_argument('--no-lobster', dest='lobster', action='store_false',
                     help="do not add the LOBSTER step")
-    ap.add_argument('--kmesh', default='10 10 10',
-                    help="SCF Gamma k-mesh, e.g. '8 8 8' or '12' (cubic). "
-                         "Default: medium 10x10x10 grid. Edit per material in "
-                         "_ht_inputs/<id>/instructions.txt, or override here.")
-    ap.add_argument('--kpra', default=None,
-                    help="k-point density instead of --kmesh: 'coarse' (1000), 'fine' "
+    ap.add_argument('--kmesh', default=None,
+                    help="fixed SCF Gamma k-mesh for every material, e.g. '8 8 8'; "
+                         "overrides --kpra (not recommended for mixed cell shapes)")
+    ap.add_argument('--kpar', type=int, default=None,
+                    help="force KPAR in the SCF (default: auto; the ELF pass always uses KPAR=1)")
+    ap.add_argument('--kpra', default='coarse',
+                    help="k-point density (default coarse): 'coarse' (1000), 'fine' "
                          "(5000) or an integer k-points per reciprocal atom, e.g. 8000")
     ap.add_argument('--ncore', type=int, default=None,
-                    help="force NCORE in the SCF INCAR (KPAR stays 1: ELF needs it)")
+                    help="force NCORE (KPAR is then derived; the ELF pass always uses KPAR=1)")
     ap.add_argument('--profile', default='slurm',
                     help="agent profile name (SLURM); default 'slurm'")
     ap.add_argument('--chain', dest='chain', action='store_true', default=True,
@@ -397,7 +402,9 @@ def main():
     print(f"\nHigh-throughput SCF + ELF setup")
     print(f"  agent      : {agent_kind}")
     print(f"  functional : {args.functional}")
-    print(f"  k-mesh     : {args.kmesh}  (medium default; editable per material)")
+    print(f"  k-points   : " + (f"fixed mesh {args.kmesh}" if args.kmesh
+                                  else f"density {args.kpra} (kpra, uniform mesh)"))
+    print(f"  ELF        : two-step (SCF at auto KPAR, then KPAR=1 ELF pass in 02_scf/elf)")
     print(f"  IDs        : {len(ids)}  ({args.list})\n")
 
     stage_root = os.path.join(os.getcwd(), STAGE_DIR)
@@ -419,7 +426,7 @@ def main():
         write_instructions(os.path.join(d, 'instructions.txt'),
                            mp_id, args.functional, args.mpi, args.encut, slurm_opts,
                            kmesh=args.kmesh, lobster=args.lobster,
-                           kpra=args.kpra, ncore=args.ncore)
+                           kpra=args.kpra, kpar=args.kpar, ncore=args.ncore)
         nat = len(structure)
         els = sorted({str(s) for s in structure.composition.elements},
                      key=lambda s: ELEMENT_Z.get(s, 999))

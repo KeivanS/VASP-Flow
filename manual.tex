@@ -119,7 +119,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v2.0 $\cdot$ September 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v2.1 $\cdot$ September 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -548,9 +548,18 @@ from Materials Project IDs.  For every \texttt{mp-id} in the file \texttt{highth
 setting \texttt{LELF = .TRUE.} for the electron localization function),
 and writes a \texttt{runall.sh} that calls the chosen agent to build the
 inputs and then runs or submits each job.  Each SCF uses the automatic
-\texttt{coarse} density (1000~kpra, cell-aware) by default; override via
-\texttt{KMESH\_DENSITY: fine} in \texttt{\_ht\_inputs/<id>/instructions.txt}
-or supply an explicit \texttt{-{}-kmesh} grid.
+\texttt{coarse} density (1000~kpra, uniform mesh) by default; change it with
+\texttt{-{}-kpra} (\texttt{fine}, or an integer such as 8000), per material via
+\texttt{KMESH\_DENSITY} in \texttt{\_ht\_inputs/<id>/instructions.txt}, or give
+a fixed \texttt{-{}-kmesh} grid.
+
+\textbf{ELF in two steps (default).}  The instructions carry
+\texttt{ELF: separate}: the SCF runs with the automatic KPAR/NCORE (full
+k-point parallelism), then a short KPAR${}={}$1 restart in
+\texttt{02\_scf/elf/} reads the converged WAVECAR/CHGCAR and writes
+\texttt{ELFCAR}, copied back to \texttt{02\_scf/ELFCAR}
+(Section~\ref{sec:elf-separate}).  Previously the whole SCF ran with
+KPAR${}={}$1 because of \texttt{LELF}.
 
 \begin{lstlisting}[language=bash]
 pip install pymatgen mp-api          # MP download + primitive standardisation
@@ -579,18 +588,17 @@ Option & Meaning \\ \midrule
   (vasp-agent-slurm.py); prompts if omitted. \\
 \texttt{-{}-list} & ID file; default \texttt{highthrouput\_list}. \\
 \texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
-\texttt{-{}-mpi} & MPI tasks per job. \\
+\texttt{-{}-mpi} & MPI tasks per job (workstation; SLURM uses nodes $\times$
+  ntasks-per-node). \\
 \texttt{-{}-encut} & Optional ENCUT override (eV). \\
-\texttt{-{}-kmesh} & Explicit SCF $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'} or
-  \texttt{'12'} (cubic); overrides the automatic density.  Without this flag,
-  the cell-aware coarse (1000~kpra) density is used.  Per-material overrides
-  via the \texttt{KMESH} or \texttt{KMESH\_DENSITY} line in
-  \texttt{instructions.txt}. \\
-\texttt{-{}-kpra} & k-point density instead of \texttt{-{}-kmesh}:
-  \texttt{coarse} (1000), \texttt{fine} (5000) or an integer
-  (e.g.\ \texttt{8000}). \\
-\texttt{-{}-ncore} & Force \texttt{NCORE} in the SCF INCAR.  \texttt{KPAR}
-  stays 1 because ELF (\texttt{LELF}) requires it. \\
+\texttt{-{}-kmesh} & Fixed SCF $\Gamma$-mesh for every material, e.g.\
+  \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}.  Not recommended for a set of
+  different cell shapes (the mesh is then not uniform). \\
+\texttt{-{}-kpra} & k-point density (default \texttt{coarse} = 1000):
+  \texttt{coarse}, \texttt{fine} (5000) or an integer (e.g.\ \texttt{8000}). \\
+\texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR and/or NCORE in the SCF
+  (default: automatic; give one and the other is derived).  The ELF pass always
+  uses KPAR${}={}$1. \\
 \texttt{-{}-nodes}, \texttt{-{}-ntasks-per-node}, \texttt{-{}-partition},
   \texttt{-{}-walltime}, \texttt{-{}-account} & SLURM overrides written into
   each \texttt{instructions.txt}. \\
@@ -599,7 +607,10 @@ Option & Meaning \\ \midrule
 \end{tabularx}
 
 \begin{lstlisting}[language=bash]
-# example: SLURM, 1 node x 40 cores, density 8000, NCORE=2
+# example: SLURM, 1 node x 40 cores, density 8000, automatic KPAR/NCORE
+./ht-mp-scf.py --agent slurm --nodes 1 --ntasks-per-node 40 \
+    --kpra 8000 --walltime 12:00:00 --account elmgroup
+# same, but force NCORE=2 (KPAR is derived: 20)
 ./ht-mp-scf.py --agent slurm --nodes 1 --ntasks-per-node 40 \
     --kpra 8000 --ncore 2 --walltime 12:00:00 --account elmgroup
 \end{lstlisting}
@@ -869,22 +880,24 @@ Tier & kpra & Typical use & Notes \\ \midrule
 \medskip
 \textbf{kpra} (k-points per reciprocal atom) $= N_x N_y N_z \times N_\mathrm{atoms}$.
 Given a target kpra and the reciprocal lattice vectors $\mathbf{b}_i^*$
-(columns of $2\pi(\mathbf{A}^{-1})^\top$), the algorithm solves
+(columns of $2\pi(\mathbf{A}^{-1})^\top$), the mesh follows from one formula,
+with no search:
 
 \[
-  N_i = \lceil \alpha \, |\mathbf{b}_i^*| \rceil_{\text{even}}, \qquad
-  \alpha = \left(\frac{N_k}{|\mathbf{b}_1^*||\mathbf{b}_2^*||\mathbf{b}_3^*|}\right)^{1/3},
-  \quad N_k = \mathrm{kpra}/N_\mathrm{atoms}.
+  N_i = \mathrm{round}_{2}\bigl(s \, |\mathbf{b}_i^*|\bigr), \qquad
+  s = \left(\frac{N_k}{|\mathbf{b}_1^*||\mathbf{b}_2^*||\mathbf{b}_3^*|}\right)^{1/3},
+  \quad N_k = \mathrm{kpra}/N_\mathrm{atoms},
 \]
 
-Every $N_i$ is an \emph{even} integer so that BZ boundary points ($k = 1/2$)
-are always included.  Even rounding is done by trying the two nearest even
-integers on each axis and keeping the combination whose total k-point count is
-closest to the target, so the mesh reflects the requested kpra (rounding every
-axis up used to overshoot by up to ${\sim}50\,\%$).  Axes whose $|\mathbf{b}_i^*|$
-agree (cubic, tetragonal, hexagonal cells) always receive the same $N_i$, so
-the mesh never breaks the crystal symmetry.  This holds for every cell type,
-hexagonal included.  For hexagonal lattices ($a=b$, $\gamma=120^\circ$, detected from the POSCAR) the in-plane $N$ is a multiple of 6 ($6,12,18,\dots$) so that $K$ and $M$ lie on the mesh.  Spacing uniformity $|\mathbf{b}_i^*|/N_i$ is preferred first, the kpra target second.  For 2-D slabs $N_z = 1$ and the in-plane mesh carries the
+where $\mathrm{round}_2$ rounds to the nearest \emph{even} integer (minimum 2),
+so that BZ boundary points ($k = 1/2$) are on the mesh.  Because every axis
+uses the same $s$, the spacing $|\mathbf{b}_i^*|/N_i$ is the same along all
+three axes up to that rounding (a uniform mesh), axes with equal
+$|\mathbf{b}_i^*|$ get equal $N_i$, and $N_1N_2N_3N_\mathrm{atoms}\approx$ kpra.
+For hexagonal lattices ($a=b$, $\gamma=120^\circ$, detected from the POSCAR)
+the two in-plane $N$ are rounded to multiples of 6 ($6,12,18,\dots$) so that
+$K$ and $M$ lie on the mesh.  For 2-D slabs the same formula is used in the
+plane (square root instead of cube root) and $N_z = 1$, so the in-plane mesh carries the
 whole target.  The first line of each generated KPOINTS reports the mesh and
 the kpra actually reached.  Any integer may be given instead of
 \texttt{coarse}/\texttt{fine} (\texttt{KMESH\_DENSITY: 3000}); the relaxation
@@ -1211,6 +1224,37 @@ rather than producing a blank plot --- re-run the SCF \emph{without} SOC to get
 ELF.
 \end{notebox}
 
+\subsection{Two-step ELF (\texttt{ELF: separate})}
+\label{sec:elf-separate}
+
+\texttt{LELF} only works with KPAR${}={}$1, which removes the k-point
+parallelism that makes an SCF on a small cell fast.  With
+\begin{lstlisting}
+ELF: separate        # or  ELF: two-step
+\end{lstlisting}
+the ELF is produced in two steps inside \texttt{02\_scf}, in the same job:
+\begin{enumerate}
+\item The SCF runs normally --- automatic KPAR/NCORE, no \texttt{LELF},
+  \texttt{LWAVE}/\texttt{LCHARG=.TRUE.}.
+\item \texttt{run\_elf.sh} (called by \texttt{run.sh} after VASP) copies the
+  converged \texttt{WAVECAR}, \texttt{CHGCAR}, \texttt{POSCAR},
+  \texttt{KPOINTS} and \texttt{POTCAR} into \texttt{02\_scf/elf/} and runs
+  VASP there with \texttt{02\_scf/elf/INCAR}: the SCF INCAR (same ENCUT,
+  smearing, MAGMOM, $+U$, user overrides) plus \texttt{ISTART=1},
+  \texttt{ICHARG=1}, \texttt{LELF=.TRUE.}, \texttt{LWAVE}/\texttt{LCHARG=.FALSE.},
+  KPAR${}={}$1 and NCORE from the rule for one k-group.  \texttt{NBANDS} is
+  set at run time to the value the SCF used (read from its \texttt{OUTCAR}),
+  so the WAVECAR is read as is.  Starting from converged wavefunctions, this
+  restart needs only a few electronic steps.
+\item \texttt{ELFCAR} is copied back to \texttt{02\_scf/ELFCAR}, where
+  \texttt{analyze.sh}, \texttt{elf\_bonds.py} and the GUI look for it; the
+  copied WAVECAR/CHGCAR in \texttt{elf/} are deleted.
+\end{enumerate}
+If the SCF left no WAVECAR/CHGCAR, the ELF pass is skipped with a message.
+The DOS, bands and LOBSTER steps still read \texttt{02\_scf/CHGCAR}, which the
+ELF pass does not touch.  \texttt{ht-mp-scf.py} uses this mode by default;
+write \texttt{ELF: on} in \texttt{instructions.txt} for the old single run.
+
 % ============================================================
 \section{Convergence Tests}
 % ============================================================
@@ -1287,44 +1331,48 @@ issued.  Thresholds can be overridden:
 
 \subsection{Auto-defaults}
 
-When KPAR/NCORE are not specified they are derived \emph{per step} from the
-work that step actually has: its irreducible k-point count $n_k$ and its band
-count $n_b$, against the total task count $N$.
-
-$n_k$ is the spglib reduction of that step's own mesh --- so the $2\times$ DOS
-mesh gives a larger $n_k$ than the SCF, and the LOBSTER NSCF, which runs
-\texttt{ISYM=0} and gets no symmetry reduction at all, uses the full mesh.
-$n_b$ comes from the POTCAR ZVALs ($N_\mathrm{elect}/2 + N_\mathrm{ions}/2$,
-doubled for SOC); when pymatgen or the POTCAR is unavailable a deliberately low
-estimate is used, which can only make the layout more conservative.
+When KPAR/NCORE are not specified they are set \emph{per step} from two
+numbers only: the total MPI rank count $N$ and that step's irreducible
+k-point count $n_k$ (the spglib reduction of the step's own KPOINTS; the
+LOBSTER NSCF runs \texttt{ISYM=0}, so its full mesh counts).
 
 \begin{tabularx}{\linewidth}{@{}lX@{}}
 \thead
 Quantity & Rule \\ \midrule
-KPAR & largest divisor of $N$ with KPAR${}\le n_k$ and $N/$KPAR${}\le n_b$.
-  k-point parallelism scales near-linearly with little communication, so it is
-  maximised first; a group needs at least one k-point, and the ranks left
-  inside a group must not outnumber the bands they divide. \\
-NCORE & divisor of the remaining ranks-per-group $r=N/$KPAR that leaves no
-  idle band group.  The target is 1 for narrow groups (maximum band
-  parallelism) but ${\sim}\sqrt{r}$ once $r>4$, since NCORE${}=1$ there turns
-  every band FFT into a group-wide communication. \\
+KPAR & the largest divisor of $N$ that is ${}\le n_k$.  k-point groups scale
+  almost perfectly, so use as many as there are k-points; a divisor, so no rank
+  is idle. \\
+NCORE & the largest divisor of $r = N/\mathrm{KPAR}$ (ranks per k-group) that
+  is ${}\le \sqrt{r}$, VASP's own recommendation (NCORE${}=1$ for 1--3 ranks
+  per group). \\
 \bottomrule
 \end{tabularx}
 
-A small cell with many k-points therefore lands near KPAR${}=N$,
-NCORE${}=1$, while a large cell with few k-points keeps KPAR small and puts the
-ranks into NCORE.  Two steps opt out: \textbf{DFPT} is forced to
-KPAR${}={}$NCORE${}={}$1 (linear response / PEAD supports neither), and
-\textbf{phonons} is pinned to KPAR${}={}$1 because the supercell displacements
-already run as independent jobs, so k-group replication would only cost memory.
+Examples with $N=40$: $n_k \ge 40 \Rightarrow$ KPAR${}=40$, NCORE${}=1$;
+$n_k=20 \Rightarrow 20/1$; $n_k=7 \Rightarrow 5/2$; $n_k=1 \Rightarrow 1/5$.
+If only one of the pair is given (instruction key, per-step key or an
+\texttt{INCAR} block), it is kept --- snapped down to a divisor of $N$ --- and
+the other is derived from it: a fixed KPAR gets NCORE from the rule above; a
+fixed NCORE gets the largest KPAR${}\le n_k$ that leaves a multiple of NCORE
+ranks per group.  Priority, highest first: ELF pin (KPAR${}=1$) $>$
+\texttt{INCAR} block $>$ per-step key (\texttt{SCF\_KPAR}, \ldots) $>$ global
+\texttt{KPAR}/\texttt{NCORE} $>$ the rule.
+
+Three steps opt out: \textbf{DFPT} is always KPAR${}={}$NCORE${}={}$1 (linear
+response supports neither); \textbf{phonons} and \textbf{Wannier90} default to
+KPAR${}={}$1 (independent supercell jobs / the Wannier interface), with NCORE
+from the rule.  With 40 ranks and the dense meshes of a small cell
+(${\le}\,20$ atoms, hundreds of irreducible k-points), KPAR${}=40$,
+NCORE${}=1$ is therefore the expected, correct result; it costs one copy of
+the wavefunctions per rank, which is small for such cells.
 
 \begin{notebox}
-KPAR $\times$ NCORE must divide $N$ evenly.  The agent rounds down
-automatically to the nearest valid value.  Note that \texttt{LELF=.TRUE.}
-forces KPAR${}={}$1 on that step: if you need k-point parallelism in the
-production SCF, turn ELF off.  Convergence tests drop \texttt{LELF}
-automatically for exactly this reason.
+\texttt{LELF=.TRUE.} requires KPAR${}={}$1.  With \texttt{ELF: on} (the
+default) the SCF itself runs LELF and is pinned to KPAR${}={}$1.  With
+\texttt{ELF: separate} the SCF keeps the automatic KPAR and a short
+KPAR${}={}$1 restart writes the ELFCAR afterwards
+(Section~\ref{sec:elf-separate}).  Convergence tests drop \texttt{LELF}
+automatically.
 \end{notebox}
 
 \subsection{Manual overrides}
@@ -1861,6 +1909,18 @@ Band plot empty or not shown &
     New \texttt{check\_agent\_consistency.py} compares GUI, workstation and
     SLURM outputs.  New \texttt{ht-semimetals.py} builds the
     \texttt{highthroughput\_*} SCF/bands/DFPT/LOBSTER screening sets from list files.
+  \item[\textcolor{mainblue}{v2.1} (2026-09-30)]
+    \textit{Simpler k-mesh and parallel rules; two-step ELF.}
+    k-mesh: one formula, $N_i$ = nearest even (hexagonal in-plane: multiple of
+    6) of $s|\mathbf{b}_i^*|$, replacing the tolerance search.
+    KPAR = largest divisor of the ranks ${}\le n_k$; NCORE = largest divisor of
+    the ranks per k-group ${}\le$ its square root.  Wannier90 and phonons now
+    really default to KPAR = 1, and LOBSTER uses its own (ISYM=0) k-count.
+    New \texttt{ELF: separate}: SCF at full KPAR, then a short KPAR = 1
+    restart writes ELFCAR (default in \texttt{ht-mp-scf.py}, which also gains
+    \texttt{-{}-kpra} (default coarse), \texttt{-{}-kpar}, \texttt{-{}-ncore}).
+    \texttt{ht-semimetals.py}: \texttt{-{}-kpar}/\texttt{-{}-ncore}, POTCARs
+    built automatically.
 \end{description}
 
 % ============================================================
@@ -1871,10 +1931,10 @@ Band plot empty or not shown &
 
 Cheat-sheet for \texttt{ht-mp-scf.py} (full description in
 Section~\ref{sec:highthroughput}).  For each Materials Project ID it
-downloads the \textbf{primitive} cell, stages an SCF calculation that also
-writes the electron localization function (\texttt{LELF = .TRUE.}
-$\rightarrow$ \texttt{ELFCAR}) on a cell-aware coarse $\Gamma$-mesh
-(1000~kpra default; override with \texttt{KMESH\_DENSITY} or
+downloads the \textbf{primitive} cell, stages an SCF calculation (automatic
+KPAR/NCORE) followed by a short KPAR${}={}$1 ELF restart ($\rightarrow$
+\texttt{ELFCAR}) on a uniform coarse $\Gamma$-mesh (1000~kpra default;
+override with \texttt{-{}-kpra}, \texttt{KMESH\_DENSITY} or
 \texttt{-{}-kmesh}), and builds a \texttt{runall.sh}.
 
 \begin{lstlisting}[language=bash]
@@ -1887,6 +1947,7 @@ printf 'mp-149\nmp-2534\n' > highthrouput_list   # one mp-id per line
 ./ht-mp-scf.py --agent local  --mpi 16           # workstation, sequential
 ./ht-mp-scf.py --agent slurm  --profile slurm    # cluster, afterok-chained
 ./ht-mp-scf.py --agent slurm  --no-chain         # cluster, independent
+./ht-mp-scf.py --agent slurm  --kpra 8000 --nodes 1 --ntasks-per-node 40
 
 ./runall.sh                      # build inputs + run/submit each SCF
 \end{lstlisting}
@@ -1894,7 +1955,8 @@ printf 'mp-149\nmp-2534\n' > highthrouput_list   # one mp-id per line
 \begin{tabularx}{\linewidth}{@{}lX@{}}
 \thead
 Output & Location \\ \midrule
-ELFCAR (electron localization) & \texttt{<mp-id>/02\_scf/ELFCAR} \\
+ELFCAR (electron localization) & \texttt{<mp-id>/02\_scf/ELFCAR}
+  (ELF pass in \texttt{02\_scf/elf/}) \\
 Staged inputs (POSCAR + instructions) & \texttt{\_ht\_inputs/<mp-id>/} \\
 Element / $Z$ table & \texttt{\_ht\_inputs/elements\_Z.txt} \\
 \bottomrule

@@ -426,11 +426,17 @@ class VASPInputGenerator:
             f.write(job_script)
         os.chmod(f"{output_dir}/run.sh", 0o755)
     
+    def _elf_mode(self) -> str:
+        """'off', 'inline' (LELF in the SCF itself, KPAR = 1) or 'separate'
+        (SCF at full KPAR, then a short KPAR = 1 restart in 02_scf/elf that
+        only writes ELFCAR).  VASP computes no ELF for SOC/non-collinear runs."""
+        if not self.instructions.get('elf', True) or self.instructions.get('soc', False):
+            return 'off'
+        return 'separate' if self.instructions.get('elf_mode') == 'separate' else 'inline'
+
     def _scf_force_kpar(self):
-        """1 when the production SCF runs LELF (ELF needs KPAR = 1), else None."""
-        elf = (self.instructions.get('elf', True)
-               and not self.instructions.get('soc', False))
-        return 1 if elf else None
+        """1 when the SCF itself runs LELF (ELF needs KPAR = 1), else None."""
+        return 1 if self._elf_mode() == 'inline' else None
 
     def _ncore_for(self, step: str, force_kpar: int = None, incar_step: str = None) -> int:
         """Parse the NCORE value the parallel block would emit for `step`."""
@@ -531,12 +537,78 @@ class VASPInputGenerator:
                 f.write(self._relax_restart_snippet())
             os.chmod(f"{output_dir}/copy_from_relax.sh", 0o755)
         
+        # Separate ELF pass (see _elf_mode): elf/INCAR + run_elf.sh
+        elf_dir = os.path.join(output_dir, 'elf')
+        if self._elf_mode() == 'separate':
+            os.makedirs(elf_dir, exist_ok=True)
+            with open(os.path.join(elf_dir, 'INCAR'), 'w') as f:
+                f.write(self._generate_incar_elf(incar_content))
+            with open(os.path.join(output_dir, 'run_elf.sh'), 'w') as f:
+                f.write(self._RUN_ELF_SH)
+            os.chmod(os.path.join(output_dir, 'run_elf.sh'), 0o755)
+        elif os.path.exists(os.path.join(output_dir, 'run_elf.sh')):
+            os.remove(os.path.join(output_dir, 'run_elf.sh'))
+
         # Job script
         job_script = self._generate_job_script('scf', self._get_vasp_exec())
         with open(f"{output_dir}/run.sh", 'w') as f:
             f.write(job_script)
         os.chmod(f"{output_dir}/run.sh", 0o755)
-    
+
+    def _generate_incar_elf(self, scf_incar: str) -> str:
+        """INCAR for the ELF pass: the SCF INCAR (same physics, same user
+        overrides) restarted from its converged WAVECAR/CHGCAR, with KPAR = 1
+        (LELF needs it) and only ELFCAR written.  NBANDS is set at run time
+        to the value the SCF used (run_elf.sh), so the WAVECAR is read as is."""
+        par = {l.split('=')[0].strip(): l.split('=')[1].strip()
+               for l in self._get_parallel_lines('scf', force_kpar=1) if '=' in l}
+        drop = {'KPAR', 'NCORE', 'NPAR', 'ISTART', 'ICHARG', 'LWAVE', 'LCHARG',
+                'LORBIT', 'LELF', 'NBANDS'}
+        keep = [l for l in scf_incar.splitlines()
+                if self._incar_tag_name(l) not in drop
+                and l.strip() not in ('# MPI parallelization', '# Output')]
+        keep[0:1] = ["# ELF pass: restart from the converged 02_scf run (KPAR = 1 for LELF)"]
+        keep += ["",
+                 "# Restart from the converged SCF -> converges in a few steps",
+                 "ISTART = 1",
+                 "ICHARG = 1",
+                 "LELF = .TRUE.   # electron localization function -> ELFCAR",
+                 "LWAVE = .FALSE.",
+                 "LCHARG = .FALSE.",
+                 "",
+                 "# MPI parallelization (LELF requires KPAR = 1)",
+                 "KPAR  = 1"]
+        if 'NCORE' in par:
+            keep.append(f"NCORE = {par['NCORE']}")
+        return '\n'.join(keep) + '\n'
+
+    _RUN_ELF_SH = r'''#!/bin/bash
+# ELF pass, run after the SCF in this folder:  bash run_elf.sh <launch command>
+# The SCF ran with full k-point parallelism (no LELF).  This short restart
+# reads its converged WAVECAR + CHGCAR with KPAR = 1 (required by LELF) and
+# writes ELFCAR, which is copied back next to the SCF output.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+E="$HERE/elf"
+if [ ! -s "$HERE/WAVECAR" ] || [ ! -s "$HERE/CHGCAR" ]; then
+    echo "ELF pass skipped: no WAVECAR/CHGCAR in $HERE"; exit 0
+fi
+cd "$E" || exit 1
+for f in POSCAR KPOINTS WAVECAR CHGCAR; do cp "$HERE/$f" .; done
+cp -L "$HERE/POTCAR" POTCAR
+# Same NBANDS as the SCF, so its WAVECAR is read without band changes.
+NB=$(awk '/NBANDS=/{print $NF; exit}' "$HERE/OUTCAR" 2>/dev/null)
+sed -i.bak '/^ *NBANDS *=/d' INCAR && rm -f INCAR.bak
+[ -n "$NB" ] && echo "NBANDS = $NB" >> INCAR
+echo "Starting ELF pass (KPAR=1) at $(date)"
+"$@" > vasp.out 2>&1
+if [ -s ELFCAR ]; then
+    cp ELFCAR "$HERE/ELFCAR"; echo "  OK: ELFCAR written"
+else
+    echo "  WARNING: no ELFCAR -- see $E/vasp.out"
+fi
+rm -f WAVECAR CHGCAR
+'''
+
     # Bash appended to copy_from_relax.sh.  Decided at RUN time (not generation
     # time) so that k-meshes patched or edited after generation are honoured.
     _RELAX_RESTART_SH = r'''
@@ -688,7 +760,7 @@ fi
 
         # NBANDS from the project-level POTCAR (built one level up before steps).
         potcar_path = os.path.join(os.path.dirname(os.path.abspath(output_dir)), 'POTCAR')
-        nbands = self._lobster_nbands(potcar_path, self._ncore_for('scf', incar_step='lobster'))
+        nbands = self._lobster_nbands(potcar_path, self._ncore_for('lobster'))
 
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
@@ -800,7 +872,7 @@ fi
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('bands', incar_step='wannier'))  # KPAR=1 for Wannier
+        lines.extend(self._get_parallel_lines('wannier'))  # KPAR=1 for Wannier
         lines.extend(["# Output", "LWAVE = .FALSE.", "LCHARG = .FALSE.", "LORBIT = 11"])
         lines = self._apply_incar_overrides(lines, 'wannier')
         return '\n'.join(lines) + '\n'
@@ -1376,7 +1448,7 @@ echo "DFPT done. See born_charges.txt and BORN (phonopy NAC format)."
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('scf', incar_step='phonons'))
+        lines.extend(self._get_parallel_lines('phonons'))
         lines.extend(["LWAVE  = .FALSE.", "LCHARG = .FALSE."])
         lines = self._apply_incar_overrides(lines, 'phonons')
         return '\n'.join(lines) + '\n'
@@ -1586,119 +1658,72 @@ echo "      Data:  band.yaml  FORCE_SETS"
         return max(1, 2 * n_atoms)                 # conservative fallback
 
     @staticmethod
-    def _auto_kpar_ncore(np_ranks: int, n_k: int, n_bands: int,
+    def _auto_kpar_ncore(np_ranks: int, n_k: int, n_bands: int = None,
                          kpar: int = None, ncore: int = None) -> tuple:
-        """(KPAR, NCORE) for n_k k-points and n_bands bands on np_ranks ranks.
+        """(KPAR, NCORE) for np_ranks MPI ranks and n_k irreducible k-points.
 
-        KPAR splits k-points across groups -- near-linear scaling and little
-        communication -- so it is maximised first, subject to two limits: a
-        group needs at least one k-point, and the ranks left inside a group
-        must not outnumber the bands they divide.  KPAR must divide np_ranks
-        or VASP leaves ranks idle.
+        The rule, in plain words:
+          KPAR  = the largest divisor of np_ranks that is <= n_k
+                  (k-point groups scale almost perfectly, so use as many as
+                  there are k-points; a divisor so no rank is left idle)
+          NCORE = the largest divisor of (np_ranks / KPAR) that is <= its
+                  square root (VASP's own recommendation for the ranks
+                  inside one k-group; 1 when a group has 1-3 ranks)
 
-        NCORE then splits each band over the ranks left inside a group.  Only
-        divisors that leave no idle band group are eligible; among those the
-        target is 1 for narrow groups (maximum band parallelism) but ~sqrt(rpg)
-        once a group is wide, since NCORE=1 there makes every band FFT a
-        group-wide communication.
-
-        *kpar* / *ncore*, when given (user instruction, or KPAR pinned to 1 by
-        an ELF run), are respected and the other value is derived FOR THAT
-        choice: NCORE is chosen for the ranks-per-group that the fixed KPAR
-        leaves, and KPAR for the ranks-per-group that a fixed NCORE needs.
-        Requested values are snapped down to a divisor of the rank count.
+        A user-given KPAR or NCORE is kept (snapped down to a divisor) and only
+        the other one is derived: with a fixed NCORE, KPAR is the largest
+        divisor <= n_k that leaves a multiple of NCORE ranks per group.
+        n_bands is accepted for backward compatibility and not used.
         """
         import math
-        n_k, n_bands = max(1, n_k), max(1, n_bands)
-        divisors = [d for d in range(1, np_ranks + 1) if np_ranks % d == 0]
-
+        n_k = max(1, int(n_k))
+        divs = lambda n: [d for d in range(1, n + 1) if n % d == 0]
         if kpar:
-            kpar = max([d for d in divisors if d <= kpar] or [1])
+            kpar = max(d for d in divs(np_ranks) if d <= kpar)
         elif ncore:
-            ncore = max([d for d in divisors if d <= ncore] or [1])
-            ok = [d for d in divisors                # each k-group must hold whole NCORE blocks
-                  if (np_ranks // d) % ncore == 0 and d <= n_k]
-            kpar = max(ok or [1])
+            ncore = max(d for d in divs(np_ranks) if d <= ncore)
+            kpar = max([d for d in divs(np_ranks)
+                        if d <= n_k and (np_ranks // d) % ncore == 0] or [1])
         else:
-            kpar = 1
-            for d in divisors:                      # ascending -> keeps largest valid
-                if d <= n_k and (np_ranks // d) <= n_bands:
-                    kpar = d
-
-        rpg = max(1, np_ranks // kpar)              # ranks per k-group
+            kpar = max(d for d in divs(np_ranks) if d <= n_k)
+        rpg = np_ranks // kpar                       # ranks per k-group
         if ncore:
-            ncore = max([d for d in range(1, rpg + 1)
-                         if rpg % d == 0 and d <= ncore] or [1])
+            ncore = max(d for d in divs(rpg) if d <= ncore)
         else:
-            target = 1 if rpg <= 4 else int(round(math.sqrt(rpg)))
-            eligible = [d for d in range(1, rpg + 1)
-                        if rpg % d == 0 and (rpg // d) <= n_bands]
-            ncore = min(eligible, key=lambda d: (abs(d - target), d)) if eligible else rpg
+            ncore = max(d for d in divs(rpg) if d <= math.sqrt(rpg))
         return kpar, ncore
 
     def _get_parallel_lines(self, calc_type: str = 'scf', force_kpar: int = None,
                             incar_step: str = None) -> list:
-        """Return INCAR lines for MPI parallelization.
+        """INCAR KPAR / NCORE lines for step *calc_type* (see _auto_kpar_ncore).
 
-        Smart defaults scale with mpi_np (N = total MPI tasks):
-
-        The layout is derived per step from the work it actually has: the
-        irreducible k-point count of that step's mesh (_estimate_nkpts) and the
-        band count (_estimate_nbands), against N ranks -- see
-        _auto_kpar_ncore.  A k-point-heavy step on a small cell therefore ends
-        up near KPAR = N / NCORE = 1, while a large cell with few k-points
-        keeps KPAR small and puts the ranks into NCORE.
-
-        phonons is pinned to KPAR = 1: the supercell displacements are already
-        run as independent jobs, so k-group replication only costs memory.
-        The DFPT step never uses this: linear response / PEAD supports
-        neither KPAR nor NCORE, so _generate_incar_dfpt() hard-codes 1/1.
-
-        Per-task overrides in instructions.txt (e.g. SCF_KPAR, DOS_NCORE)
-        take priority over the global KPAR / NCORE keys, which in turn
-        take priority over the computed defaults.  When only one of the two is
-        given, the other is derived to suit it (not left at the value that
-        was optimal for a different layout).
-
-        force_kpar pins KPAR (ELF/LELF runs need KPAR = 1); NCORE is then
-        re-derived for the ranks that remain in the single k-group instead of
-        keeping the value chosen for the unconstrained layout.
-
-        KPAR / NCORE written by the user in an `INCAR` block (global or for
-        *incar_step*, default = calc_type) count as user choices too, so the
-        companion value is derived to suit them.
+        n_k is the irreducible k-point count of that step's own KPOINTS
+        (_estimate_nkpts).  Priority, highest first:
+          force_kpar (ELF: LELF needs KPAR = 1)
+          > KPAR/NCORE inside an INCAR block for the step (or unnamed block)
+          > per-step keys (SCF_KPAR, DOS_NCORE, ...) > global KPAR / NCORE
+          > the automatic rule.
+        When only one of the pair is set, the other is derived for it.
+        phonons and wannier default to KPAR = 1.  DFPT never calls this
+        (linear response supports neither tag; it writes KPAR = NCORE = 1).
         """
-        import math
         np = self.instructions.get('mpi_np', 1) or 1
         if np <= 1:
             return []
-
-        soc = self.instructions.get('soc', False)
-        n_k     = self._estimate_nkpts(calc_type)
-        n_bands = self._estimate_nbands()
-        if soc:
-            # NCL doubles memory per band; halve the k-group replication.
-            n_k = max(1, n_k // 2)
 
         blk = self._incar_block_ints(incar_step or calc_type, ('KPAR', 'NCORE'))
         u_ncore = (blk.get('NCORE')
                    or self.instructions.get(f'{calc_type}_ncore')
                    or self.instructions.get('ncore'))
-        if force_kpar:
-            u_kpar = force_kpar
-        else:
-            u_kpar = (blk.get('KPAR')
-                      or self.instructions.get(f'{calc_type}_kpar')
-                      or self.instructions.get('kpar'))
-
-        if calc_type == 'phonons':
-            kpar, ncore = self._auto_kpar_ncore(
-                np, 1, n_bands, kpar=u_kpar or 1,
-                ncore=u_ncore or max(1, int(math.floor(math.sqrt(np)))))
-        else:
-            kpar, ncore = self._auto_kpar_ncore(np, n_k, n_bands,
-                                                kpar=u_kpar, ncore=u_ncore)
-
+        u_kpar  = (force_kpar
+                   or blk.get('KPAR')
+                   or self.instructions.get(f'{calc_type}_kpar')
+                   or self.instructions.get('kpar'))
+        # Phonon supercells and the Wannier90 interface run with one k-group.
+        if calc_type in ('phonons', 'wannier') and not u_kpar:
+            u_kpar = 1
+        kpar, ncore = self._auto_kpar_ncore(np, self._estimate_nkpts(calc_type),
+                                            kpar=u_kpar, ncore=u_ncore)
         return [
             "",
             "# MPI parallelization",
@@ -2137,9 +2162,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
 
         # Electron localization function (ELFCAR): on by default; VASP does not
         # compute ELF for SOC/non-collinear runs, and LELF requires KPAR=1.
-        elf = (self.instructions.get('elf', True)
-               and not self.instructions.get('soc', False)
-               and not for_convergence)
+        elf = self._elf_mode() == 'inline' and not for_convergence
 
         # LELF needs KPAR = 1: pin it and let NCORE be derived for the single
         # k-group of all ranks (not left at the value that suited KPAR > 1).
@@ -2278,7 +2301,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         lines += self._mag_lines()
         lines += self._soc_lines()
         lines += self._u_lines()
-        lines.extend(self._get_parallel_lines('scf', incar_step='lobster'))
+        lines.extend(self._get_parallel_lines('lobster'))
         lines.extend([
             "# Output (WAVECAR is read by LOBSTER; dense DOSCAR for the energy window)",
             "LORBIT = 11",
@@ -2419,18 +2442,18 @@ echo "      Data:  band.yaml  FORCE_SETS"
         return self._kpoints_from_kpra(self._kpra_of(density))
 
     def _kpoints_from_kpra(self, kpra: int) -> tuple:
-        """(Nx, Ny, Nz) Gamma mesh whose k-point count best matches *kpra*.
+        """(Nx, Ny, Nz) Gamma mesh for a density of *kpra* k-points per
+        reciprocal atom.  One formula, no search:
 
-        Subdivisions are proportional to the reciprocal lattice vector
-        magnitudes |b1*|, |b2*|, |b3*| (Nx*a = Ny*b = Nz*c for orthogonal
-        cells; the right generalisation for monoclinic/triclinic/hexagonal
-        cells).  All N_i are EVEN so the BZ boundary (k = 1/2) is sampled.
-        Even rounding used to be applied as "round, then bump odd values up",
-        which overshoots the target by up to ~50 %; here every combination of
-        the two nearest even integers per axis is tried and the one whose
-        total k-point count is closest to kpra / N_atoms is kept.  For 2-D
-        slabs Nz = 1 and the in-plane mesh carries the whole target.
+            s   = ( kpra / N_atoms / (|b1*| |b2*| |b3*|) )^(1/3)
+            N_i = s * |b_i*|  rounded to the nearest multiple of 2 (minimum 2)
+
+        so the spacing |b_i*|/N_i is the same along every axis (uniform mesh)
+        up to that rounding, and N1*N2*N3*N_atoms ~ kpra.  Hexagonal cells round
+        the two in-plane N to multiples of 6 (K and M on the mesh); 2-D slabs
+        use the in-plane version of the formula and Nz = 1.
         """
+        import math
         try:
             with open(self.poscar) as f:
                 lines = f.readlines()
@@ -2438,63 +2461,18 @@ echo "      Data:  band.yaml  FORCE_SETS"
             A = np.array([[float(x) * scale for x in lines[i].split()[:3]]
                           for i in range(2, 5)])
             b = np.linalg.norm(2 * np.pi * np.linalg.inv(A).T, axis=1)
-            n_atoms = self._kpra_atoms()
         except Exception:
             return (6, 6, 6)
-
-        import itertools, math
-        n_k  = max(1.0, kpra / n_atoms)
+        n_k  = max(1.0, kpra / self._kpra_atoms())
         flat = bool(self.instructions.get('is_2d', False))
-        if flat:
-            alpha  = math.sqrt(n_k / max(b[0] * b[1], 1e-12))
-            target = [alpha * b[0], alpha * b[1]]
-        else:
-            alpha  = (n_k / max(b[0] * b[1] * b[2], 1e-12)) ** (1.0 / 3.0)
-            target = [alpha * b[0], alpha * b[1], alpha * b[2]]
-
-        # Uniform k-space sampling: N_i must be proportional to |b_i*| so the
-        # spacing |b_i*|/N_i is the same along every axis.  Even integers cannot
-        # follow that exactly, so scan the scale s in N_i = nearest-even(s|b_i*|)
-        # and keep the mesh that is most uniform (spacing ratio max/min) while
-        # staying close to the kpra target.  Equal-|b_i*| axes automatically get
-        # equal N_i (same s|b_i*|, same rounding), which preserves symmetry.
-        bb = b[:2] if flat else b[:3]
-
-        # Hexagonal cells (a = b, gamma = 120 deg): the in-plane mesh is a
-        # multiple of 6 (6, 12, 18, ...) so the K and M points lie on the mesh
-        # and the 6-fold symmetry is kept; out of plane stays even.
-        hexa  = self._is_hex_lattice()
-        steps = [6 if (hexa and i < 2) else 2 for i in range(len(bb))]
-
-        def nearest_step(x, st):
-            return max(st, st * int(round(x / float(st))))
-
-        cands, seen = [], set()
-        for k in range(0, 901):
-            sc = alpha * math.exp(math.log(9.0) * (k / 900.0 - 0.5))   # alpha/3 .. 3 alpha
-            combo = tuple(nearest_step(sc * x, st) for x, st in zip(bb, steps))
-            if combo in seen:
-                continue
-            seen.add(combo)
-            spacing = [x / c for x, c in zip(bb, combo)]
-            ratio   = max(spacing) / min(spacing)                       # 1 = perfectly uniform
-            dev     = abs(math.log(float(np.prod(combo)) / n_k))
-            cands.append((ratio, dev, combo))
-        # Uniformity first: tighten-to-loosen tolerance on the spacing ratio,
-        # taking the first tier that has a mesh within 50 % of the kpra target,
-        # and inside it the mesh closest to the target.
-        best = None
-        for devtol in (1.5, 2.0, 3.0):         # multiples of 6 can force a wider miss
-            for tol in (1.05, 1.10, 1.20, 1.35, 1.6, 2.0, 1e9):
-                ok = [c for c in cands if c[0] <= tol and c[1] <= math.log(devtol)]
-                if ok:
-                    best = min(ok, key=lambda c: (c[1], c[0]))[2]
-                    break
-            if best:
-                break
-        if best is None:                       # nothing near the target: most uniform wins
-            best = min(cands, key=lambda c: (c[0], c[1]))[2]
-        return tuple(best) + ((1,) if flat else ())
+        bb   = b[:2] if flat else b[:3]
+        s    = (n_k / float(np.prod(bb))) ** (1.0 / len(bb))
+        hexa = self._is_hex_lattice()
+        mesh = []
+        for i, x in enumerate(bb):
+            step = 6 if (hexa and i < 2) else 2
+            mesh.append(max(step, step * int(math.floor(s * x / step + 0.5))))
+        return tuple(mesh) + ((1,) if flat else ())
 
     def _spacing_note(self, mesh) -> str:
         """', spacing 0.100-0.104 1/A' — |b_i*|/N_i range (uniformity check)."""
@@ -2783,6 +2761,13 @@ if grep -q "reached required accuracy" OUTCAR 2>/dev/null; then
     echo "  OK: converged at $(date)"
 else
     echo "  WARNING: may not have converged -- check OUTCAR"
+fi
+"""
+        if calc_type == 'scf':
+            script += f"""
+# Separate ELF pass (KPAR = 1), when set up
+if [ -f "$HERE/run_elf.sh" ]; then
+    bash "$HERE/run_elf.sh" {launch_cmd}
 fi
 """
         return script

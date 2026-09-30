@@ -151,8 +151,10 @@ class SLURMVASPAgent:
         # ── KPAR / NCORE: instruction → auto-computed by generator later ──
         kpar  = inst.get('kpar')
         ncore = inst.get('ncore')
-        kpar_note  = f"{kpar} (from instructions)" if kpar  else f"auto ({self.nodes}, one per node)"
-        ncore_note = f"{ncore} (from instructions)" if ncore else f"auto (√{self.ntasks_per_node} ≈ {self._default_ncore()})"
+        kpar_note  = (f"{kpar} (from instructions)" if kpar else
+                      "auto per step: largest divisor of ranks <= irreducible k-points")
+        ncore_note = (f"{ncore} (from instructions)" if ncore else
+                      "auto per step: largest divisor of ranks/KPAR <= its square root")
 
         print(f"\n  SLURM settings (instructions override profile):")
         print(f"    partition        : {self.partition}")
@@ -173,16 +175,6 @@ class SLURMVASPAgent:
         os.makedirs(self.project_dir, exist_ok=True)
         shutil.copy(self.inst_file,   self.project_dir)
         shutil.copy(self.poscar_file, os.path.join(self.project_dir, 'POSCAR'))
-
-    def _default_ncore(self) -> int:
-        """Return the nearest power-of-2 ≤ sqrt(ntasks_per_node), minimum 1."""
-        import math
-        s = int(math.floor(math.sqrt(self.ntasks_per_node)))
-        # round down to nearest power of 2
-        p = 1
-        while p * 2 <= s:
-            p *= 2
-        return max(1, p)
 
     # ── SLURM script builders ─────────────────────────────────────────────
 
@@ -237,6 +229,9 @@ class SLURMVASPAgent:
                     f.write(f'bash {abs_dir}/{copy_script}\n\n')
             f.write(f"{self._vasp_run_line()}\n")
             f.write('\necho "Exit status: $?"\n')
+            if os.path.isfile(os.path.join(step_dir, 'run_elf.sh')):
+                f.write(f'\n# Separate ELF pass (KPAR = 1)\n'
+                        f'bash {abs_dir}/run_elf.sh {self._vasp_run_line()}\n')
             if post:
                 f.write("\n" + post + "\n")
         chmod_x(script)

@@ -512,14 +512,17 @@
 │   --agent local|slurm   which agent (prompts if omitted)                      │
 │   --functional PBE      PBE (default) / PBEsol / R2SCAN / ...                 │
 │   --encut 600           optional ENCUT override (eV)                          │
-│   --kmesh '10 10 10'   explicit SCF Gamma-mesh; overrides KMESH_DENSITY       │
+│   --kpra coarse|fine|N  k-point density (default coarse = 1000 kpra)          │
+│   --kmesh '8 8 8'       fixed SCF Gamma-mesh; overrides --kpra                │
+│   --kpar N / --ncore N  force KPAR/NCORE in the SCF (default auto)            │
 │   --chain / --no-chain  SLURM: afterok-chain materials (default on)           │
 │                                                                               │
 │ Output:                                                                       │
 │   <mp-id>/02_scf/ELFCAR        electron localization function                 │
 │   _ht_inputs/elements_Z.txt    elements in the set + atomic numbers Z         │
 │                                                                               │
-│ ELF tag (auto-added via raw INCAR passthrough):  LELF = .TRUE.                │
+│ ELF: separate  SCF at auto KPAR, then a short KPAR=1 restart in               │
+│                02_scf/elf writes ELFCAR (copied to 02_scf/)                   │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐

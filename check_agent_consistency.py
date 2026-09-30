@@ -65,7 +65,7 @@ STUB_POTCARS = {'Fe': (8, 267.9), 'O': (6, 400.0), 'Mo': (6, 224.6), 'S': (6, 25
 STEP_KEYS = {'01_relax': 'relax', '02_scf': 'scf', '03_bands': 'bands',
              '04_dos': 'dos', '06_dfpt': 'dfpt', '08_lobster': 'lobster'}
 COMPARE = ('INCAR', 'KPOINTS', 'copy_from_relax.sh', 'copy_from_scf.sh',
-           '.explicit_kpoints')
+           '.explicit_kpoints', 'elf/INCAR', 'run_elf.sh')
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -156,6 +156,10 @@ def cases():
                    "Tasks: structure relaxation, SCF calculation, DOS\nMPI: 16\n"
                    "ELF: off\nSCF_NCORE: 8\nINCAR dos:\n   KPAR = 2\nEND_INCAR\n"),
              expect=dict(text_parallel=True)),
+        dict(name='text-elf-separate', poscar=POSCAR_AFM, form=None,
+             text=("Project: elf2\nMethods: PBE functional\n"
+                   "Tasks: SCF calculation\nMPI: 16\nELF: separate\n"),
+             expect=dict(elf_separate=True)),
     ]
 
 
@@ -331,6 +335,25 @@ def check_semantics(case, out_dir, instr):
         if 'KPAR' not in t:
             bad.append("01_relax: KPAR missing")
 
+    if ex.get('elf_separate'):
+        t = incar_tags(steps['02_scf'] / 'INCAR')
+        e = steps['02_scf'] / 'elf' / 'INCAR'
+        if 'LELF' in t:
+            bad.append("02_scf: LELF must not be in the SCF INCAR with ELF: separate")
+        if not e.exists() or not (steps['02_scf'] / 'run_elf.sh').exists():
+            bad.append("02_scf: elf/INCAR or run_elf.sh missing")
+        else:
+            te = incar_tags(e)
+            want = {'LELF': '.TRUE.', 'KPAR': '1', 'ISTART': '1', 'ICHARG': '1', 'LWAVE': '.FALSE.'}
+            for k, v in want.items():
+                if te.get(k) != v:
+                    bad.append(f"02_scf/elf/INCAR: {k}={te.get(k)} (want {v})")
+            for k in ('ENCUT', 'ISMEAR', 'SIGMA'):
+                if te.get(k) != t.get(k):
+                    bad.append(f"02_scf/elf/INCAR: {k} differs from the SCF")
+            if 'run_elf.sh' not in (steps['02_scf'] / 'run.sh').read_text():
+                bad.append("02_scf/run.sh never calls run_elf.sh")
+
     if ex.get('blocks'):
         r, s_, b, dd = (incar_tags(steps[k] / 'INCAR') for k in ('01_relax', '02_scf', '03_bands', '04_dos'))
         checks = [
@@ -352,6 +375,27 @@ def check_semantics(case, out_dir, instr):
 
 
 # ── main ────────────────────────────────────────────────────────────────────
+def check_parallel_rule():
+    """The plain KPAR/NCORE rule on hand-worked examples."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'modules'))
+    from vasp_input_generator import VASPInputGenerator as G
+    cases = {  # (ranks, n_k, kpar, ncore) -> expected (KPAR, NCORE)
+        (40, 500, None, None): (40, 1),   # plenty of k-points: one per rank
+        (40, 20, None, None):  (20, 1),   # 2 ranks/group -> NCORE 1
+        (40, 7, None, None):   (5, 2),    # 8 ranks/group -> NCORE 2 (<= sqrt 8)
+        (40, 1, None, None):   (1, 5),    # 40 ranks/group -> NCORE 5 (<= sqrt 40)
+        (40, 500, 1, None):    (1, 5),    # ELF: KPAR pinned to 1
+        (40, 500, None, 2):    (20, 2),   # NCORE given -> KPAR derived
+        (40, 500, 12, None):   (10, 2),   # KPAR snapped down to a divisor
+    }
+    bad = []
+    for (n, k, kp, nc), want in cases.items():
+        got = G._auto_kpar_ncore(n, k, kpar=kp, ncore=nc)
+        if got != want:
+            bad.append(f"_auto_kpar_ncore{(n, k, kp, nc)} = {got}, want {want}")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('-k', '--filter', default='', help='only cases whose name contains this')
@@ -389,6 +433,12 @@ def main():
         for p in problems:
             print(f"        - {p}")
         total_bad += len(problems)
+
+    rule = check_parallel_rule()
+    print(f"[{'ok  ' if not rule else 'FAIL'}] {'kpar-ncore-rule':<28} (generator)")
+    for p in rule:
+        print(f"        - {p}")
+    total_bad += len(rule)
 
     print(f"\n{'ALL CONSISTENT' if not total_bad else str(total_bad) + ' problem(s)'}"
           f"   (work dir: {work}{'' if args.keep else ' — removed'})")

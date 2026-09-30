@@ -118,6 +118,7 @@ class InstructionParser:
                                     r'ACCOUNT\s*[:,=]\s*(\S+)', default=None),
             # ELF (ELFCAR): on by default; disable with "ELF: off" / "no ELF"
             'elf':            self._extract_elf(content),
+            'elf_mode':       self._extract_elf_mode(content),
             # Geometry hints
             'is_2d':          self._extract_bool_key(content, r'\b2[Dd]\b|\bmonolayer\b|\bslab\b'),
             'is_hex':         self._extract_bool_key(content, r'\bhex\w*\b|\btrigonal\b|\bhexagonal\b'),
@@ -171,12 +172,19 @@ class InstructionParser:
     def _extract_elf(self, content: str) -> bool:
         """ELFCAR computation flag. Default ON; disabled by an explicit
         'ELF: off/false/no' key or a 'no ELF' / 'disable ELF' phrase."""
-        m = re.search(r'ELF\s*[:=]\s*(on|off|true|false|yes|no)', content, re.IGNORECASE)
+        m = re.search(r'\bELF\s*[:=]\s*(on|off|true|false|yes|no|separate|two-?step)\b',
+                      content, re.IGNORECASE)
         if m:
-            return m.group(1).lower() in ('on', 'true', 'yes')
+            return m.group(1).lower() not in ('off', 'false', 'no')
         if re.search(r'\b(no|disable|without)\s+elf\b', content, re.IGNORECASE):
             return False
         return True
+
+    def _extract_elf_mode(self, content: str) -> str:
+        """'separate' for `ELF: separate` / `ELF: two-step` (SCF at full KPAR,
+        then a short KPAR = 1 ELF restart), else 'inline' (LELF in the SCF)."""
+        m = re.search(r'\bELF\s*[:=]\s*(separate|two-?step)\b', content, re.IGNORECASE)
+        return 'separate' if m else 'inline'
 
     def _extract_project_name(self, content: str) -> str:
         """Extract project name — tolerates stray leading characters before 'Project:'"""
