@@ -1253,11 +1253,15 @@ def main():
                          'sbatch is available, i.e. on the cluster)')
     ap.add_argument('--no-build-potcars', dest='build_potcars', action='store_false',
                     help='do not build POTCARs after generation (e.g. generating on a Mac to rsync)')
+    ap.add_argument('--poscar-dir', action='append', default=None,
+                    help='folder with already-downloaded POSCARs (<dir>/<id>/POSCAR, '
+                         '<dir>/materials/<id>/POSCAR, <dir>/_ht_inputs/<id>/POSCAR, '
+                         '<dir>/<id>.vasp); repeatable.  <out>/_ht_inputs is always reused')
     ap.add_argument('--api-key', default=None)
     args = ap.parse_args()
 
     ht = _load_module('ht_mp_scf', 'ht-mp-scf.py')
-    api_key    = ht.get_api_key(args.api_key)
+    api_key    = None            # asked for only if something must be downloaded
     potcar_dir = os.path.expanduser(os.environ.get('VASP_POTCAR_DIR', ''))
     if not os.path.isdir(potcar_dir):
         sys.exit("ERROR: VASP_POTCAR_DIR is not set or does not exist "
@@ -1287,8 +1291,13 @@ def main():
         os.makedirs(stage, exist_ok=True)
         poscar = os.path.join(stage, 'POSCAR')
 
+        local = None if os.path.isfile(poscar) else \
+            ht.find_local_poscar(mp_id, args.poscar_dir or [])
+        if local:                               # already downloaded elsewhere
+            shutil.copy(local, poscar)
         if not os.path.isfile(poscar):          # resume: keep what we have
             try:
+                api_key = api_key or ht.get_api_key(args.api_key)
                 structure = ht.fetch_primitive_structure(mp_id, api_key)
                 ht.write_poscar(structure, poscar)
             except Exception as e:

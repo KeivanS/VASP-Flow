@@ -52,7 +52,7 @@ Requirements
     pip install pymatgen mp-api        # MP download + primitive-cell standardisation
 """
 
-import os
+import os, shutil
 import sys
 import argparse
 import textwrap
@@ -113,6 +113,22 @@ def get_api_key(cli_key):
               (get a key at https://materialsproject.org/api)
               or pass --api-key on the command line."""))
     return key
+
+
+def find_local_poscar(mp_id, dirs):
+    """An already-downloaded POSCAR for *mp_id*, or None.  Each dir in *dirs*
+    is searched as <dir>/<id>/POSCAR, <dir>/materials/<id>/POSCAR,
+    <dir>/_ht_inputs/<id>/POSCAR and <dir>/<id>.vasp / <dir>/POSCAR_<id>."""
+    for d in dirs or []:
+        d = os.path.expanduser(d)
+        for cand in (os.path.join(d, mp_id, 'POSCAR'),
+                     os.path.join(d, 'materials', mp_id, 'POSCAR'),
+                     os.path.join(d, '_ht_inputs', mp_id, 'POSCAR'),
+                     os.path.join(d, f'{mp_id}.vasp'),
+                     os.path.join(d, f'POSCAR_{mp_id}')):
+            if os.path.isfile(cand) and os.path.getsize(cand) > 0:
+                return cand
+    return None
 
 
 def fetch_primitive_structure(mp_id, api_key):
@@ -405,6 +421,11 @@ def main():
                          "(sequential on the cluster). Default on.")
     ap.add_argument('--no-chain', dest='chain', action='store_false',
                     help="SLURM: submit each material independently (parallel).")
+    ap.add_argument('--poscar-dir', action='append', default=None,
+                    help="folder with already-downloaded POSCARs (<dir>/<id>/POSCAR, "
+                         "<dir>/materials/<id>/POSCAR, <dir>/_ht_inputs/<id>/POSCAR, "
+                         "<dir>/<id>.vasp); repeatable.  _ht_inputs/ here is always "
+                         "checked first, so a rerun never re-downloads")
     ap.add_argument('--api-key', default=None,
                     help="Materials Project API key (else $MP_API_KEY / $PMG_MAPI_KEY)")
     # optional SLURM per-project overrides written into each instructions.txt
@@ -416,7 +437,7 @@ def main():
     args = ap.parse_args()
 
     agent_kind = choose_agent(args.agent)
-    api_key    = get_api_key(args.api_key)
+    api_key    = None            # asked for only if something must be downloaded
     ids        = read_id_list(args.list)
 
     slurm_opts = {}
@@ -445,16 +466,25 @@ def main():
     ok, failed = [], []
     material_elements = {}
     for mp_id in ids:
-        print(f"  fetching {mp_id} ...", end=" ", flush=True)
+        d = os.path.join(stage_root, mp_id)
+        os.makedirs(d, exist_ok=True)
+        local = find_local_poscar(mp_id, [stage_root] + (args.poscar_dir or []))
         try:
-            structure = fetch_primitive_structure(mp_id, api_key)
+            if local:
+                print(f"  {mp_id}: using {os.path.relpath(local)} (no download) ...", end=" ")
+                from pymatgen.core import Structure
+                structure = Structure.from_file(local)
+                if os.path.abspath(local) != os.path.abspath(os.path.join(d, 'POSCAR')):
+                    shutil.copy(local, os.path.join(d, 'POSCAR'))
+            else:
+                print(f"  fetching {mp_id} ...", end=" ", flush=True)
+                api_key = api_key or get_api_key(args.api_key)
+                structure = fetch_primitive_structure(mp_id, api_key)
+                write_poscar(structure, os.path.join(d, 'POSCAR'))
         except Exception as e:
             print(f"FAILED ({e})")
             failed.append(mp_id)
             continue
-        d = os.path.join(stage_root, mp_id)
-        os.makedirs(d, exist_ok=True)
-        write_poscar(structure, os.path.join(d, 'POSCAR'))
         write_instructions(os.path.join(d, 'instructions.txt'),
                            mp_id, args.functional, args.mpi, args.encut, slurm_opts,
                            kmesh=args.kmesh, lobster=args.lobster,

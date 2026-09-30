@@ -9,6 +9,7 @@
 - GGA+U flag `GGA_U: ON|OFF` in `instructions.txt` (GUI: auto/on/off; HT drivers: `--gga_u`). Without it the U_eff of `hubbard_u_defaults.csv` (now the only source of U values; LDAUU = U_eff, LDAUJ = 0) is applied only when the POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I); same U block in every step.
 - `ht-semimetals.py`: relaxation first (`01_relax`, ISIF = 3), one SLURM job per step chained with afterok.
 - SLURM walltime per step (relax 8 h, SCF 4 h, bands/DOS 2 h, LOBSTER 4 h; `<STEP>_WALLTIME` / `WALLTIME` / `TIME_*` in env.sh override). A step that reaches its limit is stopped cleanly 15 min before the end and requeued (same job id): relaxations continue from CONTCAR or the last XDATCAR frame, LOBSTER reruns only the binary once its NSCF is done.
+- HT drivers never re-download a structure: `_ht_inputs/<id>/POSCAR` is reused, and `--poscar-dir <folder>` takes POSCARs from another (e.g. older highthroughput) folder; no MP key needed then.
 - NumPy 2 compatibility: `np.trapz` → `np.trapezoid` in `cohp_plot.py` and `lobster_postprocess.py`.
 
 ## v2.1 — 2026-09-30 · Simpler k-mesh and parallel rules; two-step ELF

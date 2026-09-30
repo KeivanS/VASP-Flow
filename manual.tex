@@ -637,6 +637,20 @@ Choose \texttt{-{}-encut} as about $1.3\times$ the largest ENMAX in the set
 (chained) runs everything one after another, and one failed step then blocks
 all later jobs.
 
+\textbf{POSCARs already downloaded?}  Neither driver downloads a structure
+it already has.  \texttt{ht-semimetals.py} reuses
+\texttt{<out>/\_ht\_inputs/<id>/POSCAR}, \texttt{ht-mp-scf.py} the
+\texttt{\_ht\_inputs/} of the current directory.  To take them from another
+folder --- e.g.\ an older highthroughput directory --- add
+\texttt{-{}-poscar-dir <folder>} (repeatable; it looks for
+\texttt{<id>/POSCAR}, \texttt{materials/<id>/POSCAR},
+\texttt{\_ht\_inputs/<id>/POSCAR} or \texttt{<id>.vasp}).  No MP key or
+internet is needed then; only missing structures are downloaded.
+\begin{lstlisting}[language=bash]
+python3 ./ht-semimetals.py --list lists/mylist.txt --out highthroughput_new \
+    --poscar-dir highthroughput_mylist --kpra 8000 --single-node
+\end{lstlisting}
+
 \textbf{4. Test first.}  Run two or three materials before a long list, then
 read the timings and look at the plots (the per-step walltimes of
 Section~\ref{sec:slurm-time} are defaults; steps that hit them continue
@@ -682,6 +696,7 @@ Option & Meaning \\ \midrule
 \texttt{-l}, \texttt{-{}-list} & ID file (default \texttt{highthrouput\_list}
   in the current directory). \\
 \texttt{-{}-agent} & \texttt{local} or \texttt{slurm}; prompts if omitted. \\
+\texttt{-{}-poscar-dir DIR} & Reuse downloaded POSCARs (see above). \\
 \texttt{-{}-chain} / \texttt{-{}-no-chain} & SLURM: chain every step of every
   material with \texttt{afterok} (default), or submit each material
   independently (its own relax $\to$ SCF $\to$ LOBSTER chain).  Local runs are
@@ -762,6 +777,7 @@ Option & Meaning \\ \midrule
 \texttt{-{}-build-potcars} / \texttt{-{}-no-build-potcars} & Build POTCARs
   right after generation (default: when \texttt{sbatch} exists). \\
 \texttt{-{}-include-potcars} & Ship assembled POTCARs in the directory. \\
+\texttt{-{}-poscar-dir DIR} & Reuse downloaded POSCARs (see above). \\
 \texttt{-{}-partition}, \texttt{-{}-account}, \texttt{-{}-modules},
   \texttt{-{}-vasp-std}, \texttt{-{}-lobster-bin},
   \texttt{-{}-hpc-potcar-dir} & Cluster settings, written into \texttt{env.sh}
