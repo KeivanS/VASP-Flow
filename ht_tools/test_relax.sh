@@ -10,6 +10,11 @@
 #    ORIGINAL input cell (materials/<id>/POSCAR); each "TAG=VALUE" replaces that tag in the
 #    INCAR (or is appended).  Submitted with the run's env.sh, partition and account.
 #    Afterwards:  bash ../ht_tools/test_relax.sh --report tests/<mp-id>_<tag>
+#
+# Small, short jobs start sooner (SLURM backfills them into gaps): defaults are
+# 8 cores on a shared node, 15 min.  Override with
+#   T_NTASKS=40 T_TIME=01:00:00 T_PARTITION=standard bash ../ht_tools/test_relax.sh ...
+# KPAR is set to T_NTASKS (NCORE = 1) so the parallel layout fits the core count.
 set -u
 HERE="$(cd "${HT_DIR:-$PWD}" && pwd)"
 
@@ -34,6 +39,8 @@ mkdir -p "$dst"
 cp "$src/01_relax/INCAR" "$src/01_relax/KPOINTS" "$dst/"
 cp -L "$src/POTCAR" "$dst/POTCAR"
 cp "$src/POSCAR" "$dst/POSCAR"
+NT=${T_NTASKS:-8}
+mods="KPAR=$NT; NCORE=1; $mods"
 IFS=';' read -ra kv <<< "$mods"
 for x in "${kv[@]}"; do
     t=$(echo "${x%%=*}" | tr -d ' '); v=$(echo "${x#*=}" | sed 's/^ *//')
@@ -44,16 +51,16 @@ for x in "${kv[@]}"; do
         echo "$t = $v   ! test_relax $tag" >> "$dst/INCAR"
     fi
 done
-part=$(sed -n 's/^#SBATCH --partition=//p' "$src/job.sbatch"); acct=$(sed -n 's/^#SBATCH --account=//p' "$src/job.sbatch")
-ntpn=$(sed -n 's/^#SBATCH --ntasks-per-node=//p' "$src/job.sbatch")
+part=${T_PARTITION:-$(sed -n 's/^#SBATCH --partition=//p' "$src/job.sbatch")}
+acct=$(sed -n 's/^#SBATCH --account=//p' "$src/job.sbatch")
 cat > "$dst/run.sbatch" <<EOF
 #!/bin/bash
 #SBATCH --job-name=test_${id}_$tag
 #SBATCH --partition=${part:-standard}
 #SBATCH --account=${acct:-elmgroup}
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=${ntpn:-40}
-#SBATCH --time=02:00:00
+#SBATCH --ntasks=$NT
+#SBATCH --time=${T_TIME:-00:15:00}
 #SBATCH --output=slurm-%j.out
 VASPFLOW_NO_CHECK=1 source "$HERE/env.sh" >/dev/null 2>&1
 cd "$dst"
