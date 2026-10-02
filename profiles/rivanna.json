@@ -1,0 +1,20 @@
+{
+  "_comment": "UVA Rivanna. Reconstructed 2026-10-02 from HT_1-500/env.sh and job.sbatch after the local edits to slurm.json were lost; check modules/account. Use: --profile rivanna",
+  "name": "Rivanna (UVA)",
+  "vasp_std": "vasp_std",
+  "vasp_ncl": "vasp_ncl",
+  "vasp_gam": "vasp_gam",
+  "wannier90_x": "wannier90.x",
+  "mpi_cmd": "srun",
+  "mpi_np": 40,
+  "modules": ["vasp/5.4.4"],
+  "slurm": {
+    "partition": "standard",
+    "nodes": 1,
+    "ntasks_per_node": 40,
+    "time": "12:00:00",
+    "account": "elmgroup",
+    "output": "slurm-%j.out",
+    "error": "slurm-%j.err"
+  }
+}
