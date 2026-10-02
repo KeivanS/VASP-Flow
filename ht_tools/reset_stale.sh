@@ -11,6 +11,10 @@
 #      is empty or truncated (WAVECAR is already deleted) -> rerun the 08_lobster step.
 #   C  bands_blank       : 03_bands/EIGENVAL missing or all-zero -> rerun bands (+ LOBSTER
 #      is untouched).
+#   D  relax_after_downstream : the relax finished (converged) AFTER SCF/bands/LOBSTER
+#      ran, e.g. a relax added or resubmitted later -- they used the unrelaxed cell and
+#      submit_all.sh would never redo them.  The converged relax is kept; SCF, bands and
+#      LOBSTER outputs are moved aside so they rerun from its CONTCAR.
 #
 # Nothing is deleted: moved files go to <material>/stale_<date>/<step>/.
 # Materials with jobs in the queue are skipped (cancel them first, see below).
@@ -62,7 +66,7 @@ newest_contcar() {   # print the path of the newest CONTCAR with all atom lines
     return 1
 }
 
-nA=0; nB=0; nC=0; busyA=""
+nA=0; nB=0; nC=0; nD=0; busyA=""
 cd "$HERE/materials" || { echo "no materials/ under $HERE"; exit 1; }
 for d in mp-*/; do
     m=${d%/}
@@ -70,6 +74,7 @@ for d in mp-*/; do
     if printf '%s\n' "$QUEUE" | grep -q "^${m}_"; then
         # case-A materials with a (stale) relax-only job queued: must be cancelled first
         if ! relaxed "$m" && finished "$m" 02_scf; then busyA="$busyA ${m}_relax"; fi
+        # (a running relax for such a material shows up as case D once it has finished)
         continue
     fi
 
@@ -90,6 +95,15 @@ for d in mp-*/; do
         [ $APPLY = 1 ] && rm -f "$m/.done" "$m/.vf_collected"
         nA=$((nA + 1)); continue
     fi
+    if relaxed "$m" && finished "$m" 02_scf && [ "$m/01_relax/OUTCAR" -nt "$m/02_scf/OUTCAR" ]; then
+        echo "D $m: relax finished after SCF/bands/LOBSTER ran (they used the unrelaxed cell); redo them"
+        stash "$m" 02_scf   OUTCAR OSZICAR CONTCAR vasprun.xml
+        stash "$m" 03_bands OUTCAR EIGENVAL vasprun.xml
+        stash "$m" 08_lobster OUTCAR lobster.out lobsterout ICOHPLIST.lobster ICOBILIST.lobster \
+              ICOOPLIST.lobster COHPCAR.lobster COBICAR.lobster COOPCAR.lobster lobster_summary.csv
+        [ $APPLY = 1 ] && rm -f "$m/.done" "$m/.vf_collected" "$m"/0[238]_*/.vf_resume
+        nD=$((nD + 1)); continue
+    fi
     if lob_done "$m" && ! car_ok "$m"; then
         echo "B $m: LOBSTER curve files truncated; redo the 08_lobster step"
         stash "$m" 08_lobster OUTCAR lobster.out lobsterout ICOHPLIST.lobster ICOBILIST.lobster \
@@ -106,7 +120,7 @@ for d in mp-*/; do
 done
 
 echo ""
-echo "A relax unconverged: $nA   B LOBSTER truncated: $nB   C bands blank: $nC"
+echo "A relax unconverged: $nA   D relax newer than SCF: $nD   B LOBSTER truncated: $nB   C bands blank: $nC"
 if [ -n "$busyA" ]; then
     echo ""
     echo "$(echo $busyA | wc -w) unconverged-relax material(s) have a relax-only job queued (would"
