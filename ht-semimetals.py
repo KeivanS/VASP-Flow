@@ -278,6 +278,12 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "# Turn it back on only if ELFCAR is wanted, and expect a much slower SCF.",
         "ELF: off",
         "",
+        "# Lean outputs: bands and LOBSTER read only the SCF CHGCAR, so the SCF",
+        "# WAVECAR (needed by DFPT/ELF only) is not written.",
+        "INCAR scf:",
+        "   LWAVE = .FALSE.",
+        "END_INCAR",
+        "",
         *([f"GGA_U: {gga_u.upper()}   # default (no flag): U only for chalcogenides/halides"]
           if gga_u in ('on', 'off') else []),
         *([f"KPAR: {kpar}"] if kpar else []),
@@ -493,7 +499,7 @@ do_lobster() {      # symmetry-off NSCF, then the LOBSTER binary
 }
 do_final() {        # clean up, plots, .done
     if [ "${KEEP_LARGE_FILES:-0}" != "1" ]; then
-        rm -f 03_bands/CHGCAR 08_lobster/CHGCAR
+        rm -f 03_bands/CHGCAR 08_lobster/CHGCAR 02_scf/WAVECAR 02_scf/CHG 03_bands/WAVECAR 03_bands/CHG 08_lobster/CHG
         rm -f 01_relax/WAVECAR 01_relax/CHGCAR 01_relax/CHG
     fi
     if [ "${RUN_ANALYSIS:-1}" = "1" ] && [ -f analyze.sh ]; then
