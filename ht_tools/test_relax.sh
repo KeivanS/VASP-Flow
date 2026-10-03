@@ -12,7 +12,7 @@
 #    Afterwards:  bash ../ht_tools/test_relax.sh --report tests/<mp-id>_<tag>
 #
 # Small, short jobs start sooner (SLURM backfills them into gaps): defaults are
-# 8 cores on a shared node, 15 min.  Override with
+# 8 cores on a shared node, 1 h (an 8-atom magnetic cell needed ~40 min).  Override with
 #   T_NTASKS=40 T_TIME=01:00:00 T_PARTITION=standard bash ../ht_tools/test_relax.sh ...
 # KPAR is set to T_NTASKS (NCORE = 1) so the parallel layout fits the core count.
 set -u
@@ -60,7 +60,7 @@ cat > "$dst/run.sbatch" <<EOF
 #SBATCH --account=${acct:-elmgroup}
 #SBATCH --nodes=1
 #SBATCH --ntasks=$NT
-#SBATCH --time=${T_TIME:-00:15:00}
+#SBATCH --time=${T_TIME:-01:00:00}
 #SBATCH --output=slurm-%j.out
 VASPFLOW_NO_CHECK=1 source "$HERE/env.sh" >/dev/null 2>&1
 cd "$dst"

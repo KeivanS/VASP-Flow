@@ -4,7 +4,7 @@ High-Throughput MP -> SCF + ELF driver
 ======================================
 Reads a list of Materials Project IDs (one per line) from an input file,
 downloads the PRIMITIVE-cell POSCAR for each from the Materials Project,
-and stages a per-material relaxation (01_relax: cell + ions, IBRION = 2,
+and stages a per-material relaxation (01_relax: cell + ions, IBRION = 1,
 ISIF = 3, so the structure matches this functional; --no-relax skips it)
 followed by an SCF that also computes the electron localization function
 (ELF -> ELFCAR).  The SCF runs with automatic
@@ -219,11 +219,11 @@ def write_instructions(path, mp_id, functional, mpi, encut, slurm_opts, kmesh=No
         lines.append(f"KMESH_DENSITY: {kpra}")
     if relax:
         lines += ["# 01_relax: full relaxation of cell shape, volume and ions",
-                  "# (IBRION = 2, ISIF = 3) with this functional -- the MP cell was",
+                  "# (IBRION = 1, ISIF = 3) with this functional -- the MP cell was",
                   "# relaxed with a different setup.  The SCF starts from its CONTCAR",
                   "# and CHGCAR (+ WAVECAR when the k-mesh is the same).",
                   "INCAR relax:",
-                  "   IBRION = 2",
+                  "   IBRION = 1   # quasi-Newton: IBRION=2 line search fails (ZBRENT) once a cell is converged",
                   "   ISIF = 3",
                   "END_INCAR"]
         if not kmesh:
@@ -393,7 +393,7 @@ def main():
     ap.add_argument('--no-lobster', dest='lobster', action='store_false',
                     help="do not add the LOBSTER step")
     ap.add_argument('--relax', dest='relax', action='store_true', default=True,
-                    help="first relax cell + ions (01_relax, IBRION=2, ISIF=3); default on")
+                    help="first relax cell + ions (01_relax, IBRION=1, ISIF=3); default on")
     ap.add_argument('--no-relax', dest='relax', action='store_false',
                     help="skip the relaxation; SCF on the MP structure as downloaded")
     ap.add_argument('--relax-kpra', default=None,
@@ -455,7 +455,7 @@ def main():
     print(f"  functional : {args.functional}")
     print(f"  k-points   : " + (f"fixed mesh {args.kmesh}" if args.kmesh
                                   else f"density {args.kpra} (kpra, uniform mesh)"))
-    print(f"  relaxation : " + ("01_relax, IBRION=2 ISIF=3 (cell + ions), density "
+    print(f"  relaxation : " + ("01_relax, IBRION=1 ISIF=3 (cell + ions), density "
                                  f"{args.relax_kpra or args.kpra}" if args.relax else "off"))
     print(f"  ELF        : two-step (SCF at auto KPAR, then KPAR=1 ELF pass in 02_scf/elf)")
     print(f"  IDs        : {len(ids)}  ({args.list})\n")

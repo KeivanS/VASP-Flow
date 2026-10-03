@@ -674,7 +674,7 @@ and writes \texttt{runall.sh}, which calls \texttt{vasp-agent.py} (local) or
 submits each material.  \texttt{runall.sh} downloads nothing.
 
 \textbf{Relaxation first.}  \texttt{01\_relax} relaxes cell shape, volume and
-ions (\texttt{IBRION = 2}, \texttt{ISIF = 3}), because the MP cell was relaxed
+ions (\texttt{IBRION = 1}, \texttt{ISIF = 3}), because the MP cell was relaxed
 with a different functional/setup.  It uses the SCF k-point density
 (\texttt{-{}-relax-kpra} to change it), so the SCF starts from the relaxed
 \texttt{CONTCAR}, \texttt{CHGCAR} and \texttt{WAVECAR}
@@ -748,7 +748,7 @@ submits it once per step (\texttt{relax}, \texttt{scf}, \texttt{bands},
 \texttt{TIME\_RELAX}/\texttt{TIME\_SCF}/\texttt{TIME\_BANDS}/\texttt{TIME\_LOBSTER}
 of \texttt{env.sh}, and steps that reach their limit continue automatically
 (Section~\ref{sec:slurm-time}).  The steps are the relaxation
-(\texttt{01\_relax}, IBRION = 2, ISIF = 3, same k-density as the SCF; if the
+(\texttt{01\_relax}, IBRION = 1, ISIF = 3, same k-density as the SCF; if the
 first pass does not reach the force criterion it is restarted once from its
 CONTCAR), the SCF from the relaxed structure, bands and the LOBSTER NSCF +
 LOBSTER (finished steps are skipped on resubmission); the LOBSTER job ends and ends with \texttt{analyze.sh} (plots and
