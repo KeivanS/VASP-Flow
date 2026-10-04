@@ -8,6 +8,7 @@ bash ../ht_tools/reset_stale.sh            # dry run
 bash ../ht_tools/reset_stale.sh --apply    # then ./submit_all.sh
 bash ../ht_tools/collect_lobster.sh        # tarball of new/changed finished materials
 bash ../ht_tools/cleanup_large.sh          # dry run; --apply frees WAVECAR/CHGCAR no step still needs
+bash ../ht_tools/fix_failed.sh             # dry run; --apply repairs + resubmits broken chains
 ```
 
 | Script | Purpose |
@@ -18,3 +19,4 @@ bash ../ht_tools/cleanup_large.sh          # dry run; --apply frees WAVECAR/CHGC
 | `patch_lean_outputs.sh` | For a run generated before the lean-output fix: sets `LWAVE = .FALSE.` in `02_scf/INCAR` of materials whose SCF has not run (applies to queued jobs too) and extends the final clean-up in each `job.sbatch` to delete `02_scf/WAVECAR`, `02_scf/CHG` and the empty bands/LOBSTER placeholders (applies to new submissions). Idempotent; dry run by default. |
 | `test_relax.sh` | Test relaxation of one material with modified INCAR tags in `tests/<id>_<tag>/` (outside `materials/`), from the original input cell; `--report` prints energy/volume/pressure/max force per step and ZBRENT/convergence lines. |
 | `patch_relax_ibrion.sh` | Switches unconverged relaxations of an existing run from IBRION = 2 to 1 (applies to queued jobs too) and resets ZBRENT-aborted relaxes to the input cell (aborted files kept in `01_relax/zbrent_<date>/`). Skips converged and running relaxes; dry run by default. |
+| `fix_failed.sh` | Materials whose chain broke (a step FAILED/TIMEOUT/OUT_OF_MEMORY, the rest pending as `DependencyNeverSatisfied`; auto-detected, or pass ids): classifies the failure from sacct + logs + OUTCAR/OSZICAR — timeout (walltime ×2, relax continues from CONTCAR), oom (`--mem=0`, KPAR ≤ 8), wavecar (SCF crashed reading the relax WAVECAR → CHGCAR-only start), scf_unconv (SCF hit NELM → rerun with ALGO = All), bands_diverged (NBANDS ≥ 1.3× SCF, EDIFF 1E-5, ALGO Normal) — cancels the dead jobs, stashes partial outputs in `stale_<date>/`, resubmits from that step with LOBSTER `afterany` on bands. Unknown causes are only printed (`--retry-unknown` resubmits them unchanged). Dry run by default. |
