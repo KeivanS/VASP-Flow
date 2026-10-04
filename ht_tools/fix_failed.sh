@@ -10,7 +10,7 @@
 #     <step> -> ... -> scf -> bands -(afterany)-> lobster
 # LOBSTER only needs the SCF CHGCAR, so a failed bands step no longer blocks it.
 #
-#   timeout         walltime x2 for that step (a relax continues from its CONTCAR)
+#   timeout         walltime x2 of the limit it had (a relax continues from its CONTCAR)
 #   oom             whole-node memory (--mem=0) and KPAR capped at 8 in the INCARs
 #                   (with KPAR = #ranks every rank holds a full copy of the problem)
 #   wavecar         SCF died reading the relax WAVECAR (NBANDS / lattice changed):
@@ -168,7 +168,7 @@ for m in "${IDS[@]}"; do
     for st in "${STEPS[@]}"; do T[$st]=$(step_time "$st"); done
     case "$cls" in
         timeout)
-            T[$first]=$(from_sec $(( $(to_sec "$(step_time "$first")") * 2 )))
+            T[$first]=$(from_sec $(( $(to_sec "${tlim:-$(step_time "$first")}") * 2 )))
             echo "   fix: walltime $first ${T[$first]}"
             if [ "$first" = relax ] && c=$(newest_contcar "$m"); then
                 echo "   fix: relax continues from $(basename "$c")"
@@ -200,7 +200,7 @@ for m in "${IDS[@]}"; do
             nb=$(( (${nb_scf:-${nb_cur:-0}} * 13 + 9) / 10 ))
             [ -n "$nb_cur" ] && [ "$nb_cur" -gt "$nb" ] && nb=$nb_cur
             echo "   fix: 03_bands NBANDS ${nb_cur:-default} -> $nb (SCF had ${nb_scf:-?}), EDIFF 1E-5, ALGO Normal"
-            [[ $state == TIMEOUT* ]] && { T[bands]=$(from_sec $(( $(to_sec "$(step_time bands)") * 2 ))); echo "   fix: walltime bands ${T[bands]}"; }
+            [[ $state == TIMEOUT* ]] && { T[bands]=$(from_sec $(( $(to_sec "${tlim:-$(step_time bands)}") * 2 ))); echo "   fix: walltime bands ${T[bands]}"; }
             if [ $APPLY = 1 ]; then
                 f="$m/03_bands/INCAR"
                 [ "$nb" -gt 0 ] && set_incar_tag "$f" NBANDS "$nb"
@@ -211,7 +211,13 @@ for m in "${IDS[@]}"; do
 
     # clean up, cancel the dead chain, resubmit
     chain=(); on=0
-    for st in "${STEPS[@]}"; do [ "$st" = "$start" ] && on=1; [ $on = 1 ] && chain+=("$st"); done
+    for st in "${STEPS[@]}"; do
+        [ "$st" = "$start" ] && on=1
+        [ $on = 1 ] || continue
+        # bands and LOBSTER are independent: redoing bands keeps a finished LOBSTER
+        if [ "$st" != "$start" ] && [ "$start" = bands ] && step_done "$m" "$st"; then continue; fi
+        chain+=("$st")
+    done
     dead=$(printf '%s\n' "$QUEUE" | awk -F'|' -v p="${m}_" 'index($2,p)==1{print $1}' | xargs)
     echo "   resubmit: ${chain[*]}${dead:+   (cancel: $dead)}"
     [ $APPLY = 1 ] || continue
