@@ -13,6 +13,7 @@
 #   08_lobster/lobsterin lobsterout lobster.out CHARGE.lobster MadelungEnergies.lobster
 #   08_lobster/lobster_summary.csv  analysis/analyze.log
 #   03_bands/EIGENVAL           band gap / band edges (skip with NO_EIGENVAL=1)
+#   02_scf/EIGENVAL             uniform-mesh eigenvalues -> our own DOS moments (NO_EIGENVAL=1 skips too)
 #   <step>/OUTCAR.trim          key OUTCAR lines only (E-fermi, NELECT, ISPIN, energies, ...)
 # and two tables at the top level:
 #   _status.tsv   per material (ALL materials): which steps finished (same tests as
@@ -29,6 +30,9 @@
 #   MAX_FILE_SIZE  default: 50M
 #   ALL=1                     repack everything finished (ignore .vf_collected)
 #   NO_CARS=1 NO_EIGENVAL=1   for a minimal archive
+#   SCF_EIG_ONLY=1            one-off backfill: ONLY 02_scf/EIGENVAL + 02_scf/OUTCAR.trim of every
+#                             finished material (ignores and does not touch .vf_collected); on the Mac:
+#                             update_database.py <collection> --refresh-dos-own
 set -u
 ROOT=${1:-$PWD/materials}
 MAX=${2:-50M}
@@ -77,17 +81,25 @@ for d in mp-*/; do
     a=$([ -f "$m/.done" ] && echo 1 || echo 0)
     ni=$(grep -c '^ *[0-9]' "$m/08_lobster/ICOHPLIST.lobster" 2>/dev/null); ni=${ni:-0}
     n=$((n + 1))
-    p=0; [ "$l" = 1 ] && changed "$m" && p=1
+    p=0
+    if [ "${SCF_EIG_ONLY:-0}" = 1 ]; then [ "$s" = 1 ] && [ -f "$m/02_scf/EIGENVAL" ] && p=1
+    else [ "$l" = 1 ] && changed "$m" && p=1; fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$m" "$r" "$s" "$b" "$l" "$a" "$ni" "$p" >> "$STAGE/_status.tsv"
     [ "$p" = 1 ] || continue
     echo "$m" >> "$PACKED"; np=$((np + 1))
+    if [ "${SCF_EIG_ONLY:-0}" = 1 ]; then
+        take "$m/02_scf/EIGENVAL"
+        mkdir -p "$STAGE/$m/02_scf"
+        grep -E "$OUTCAR_KEYS" "$m/02_scf/OUTCAR" > "$STAGE/$m/02_scf/OUTCAR.trim"
+        continue
+    fi
 
     take "$m/POSCAR"
     take "$m/01_relax/CONTCAR"
     take "$m/02_scf/INCAR"
     take "$m/analysis/analyze.log"
     for f in $LOB_FILES; do take "$m/08_lobster/$f"; done
-    [ "${NO_EIGENVAL:-0}" = 1 ] || take "$m/03_bands/EIGENVAL"
+    [ "${NO_EIGENVAL:-0}" = 1 ] || { take "$m/03_bands/EIGENVAL"; take "$m/02_scf/EIGENVAL"; }
     for st in 01_relax 02_scf 03_bands 08_lobster; do
         [ -f "$m/$st/OUTCAR" ] || continue
         mkdir -p "$STAGE/$m/$st"
@@ -96,7 +108,7 @@ for d in mp-*/; do
 done
 
 if tar -czf "$OUT" -C "$WORK" "lobster_collect_$STAMP"; then
-    while read -r m; do touch "$m/.vf_collected"; done < "$PACKED"
+    [ "${SCF_EIG_ONLY:-0}" = 1 ] || while read -r m; do touch "$m/.vf_collected"; done < "$PACKED"
 else
     echo "ERROR: tar failed - markers not updated"; rm -rf "$WORK"; exit 1
 fi
