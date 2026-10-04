@@ -11,7 +11,7 @@
 # LOBSTER only needs the SCF CHGCAR, so a failed bands step no longer blocks it.
 #
 #   timeout         walltime x2 of the limit it had (a relax continues from its CONTCAR)
-#   oom             whole-node memory (--mem=0) and KPAR capped at 8 in the INCARs
+#   oom             (incl. UCX "Cannot allocate memory") whole-node memory (--mem=0) and KPAR capped at 8 in the INCARs
 #                   (with KPAR = #ranks every rank holds a full copy of the problem)
 #   wavecar         SCF died reading the relax WAVECAR (NBANDS / lattice changed):
 #                   the SCF starts from the relaxed CHGCAR alone
@@ -137,7 +137,7 @@ for m in "${IDS[@]}"; do
     # classify
     cls=unknown
     if [[ $state == OUT_OF_MEMORY* || $steps_state == *OUT_OF_MEMORY* ]] \
-            || grep -qiE 'oom[-_ ]kill|out of memory' "$err" 2>/dev/null; then cls=oom
+            || grep -qiE 'oom[-_ ]kill|out of memory|cannot allocate memory' "$err" 2>/dev/null; then cls=oom
     elif [ "$first" = scf ] && grep -qE 'number of bands has changed|different cutoff or change in lattice' "$out" 2>/dev/null; then cls=wavecar
     elif { [ "$first" = bands ] || [ "$first" = lobster ]; } && scf_unconverged "$m"; then cls=scf_unconv
     elif [ "$first" = bands ] && bands_diverged "$m"; then cls=bands_diverged
