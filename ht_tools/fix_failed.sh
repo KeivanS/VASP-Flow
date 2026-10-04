@@ -137,7 +137,7 @@ for m in "${IDS[@]}"; do
     # classify
     cls=unknown
     if [[ $state == OUT_OF_MEMORY* || $steps_state == *OUT_OF_MEMORY* ]] \
-            || grep -qiE 'oom[-_ ]kill|out of memory|cannot allocate memory' "$err" 2>/dev/null; then cls=oom
+            || grep -qiE 'oom[-_ ]kill|out of memory|cannot allocate memory' "$err" "$out" 2>/dev/null; then cls=oom
     elif [ "$first" = scf ] && grep -qE 'number of bands has changed|different cutoff or change in lattice' "$out" 2>/dev/null; then cls=wavecar
     elif { [ "$first" = bands ] || [ "$first" = lobster ]; } && scf_unconverged "$m"; then cls=scf_unconv
     elif [ "$first" = bands ] && bands_diverged "$m"; then cls=bands_diverged
