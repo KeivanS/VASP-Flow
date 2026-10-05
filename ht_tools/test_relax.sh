@@ -8,6 +8,8 @@
 #
 # -> tests/<mp-id>_<tag>/ with the material's 01_relax INCAR/KPOINTS, its POTCAR and the
 #    ORIGINAL input cell (materials/<id>/POSCAR); each "TAG=VALUE" replaces that tag in the
+#    INCAR (or is appended); "TAG=" with no value removes it, e.g. "NSW=0; IBRION=-1; ISIF="
+#   (an SCF-only test).  Original wording:
 #    INCAR (or is appended).  Submitted with the run's env.sh, partition and account.
 #    Afterwards:  bash ../ht_tools/test_relax.sh --report tests/<mp-id>_<tag>
 #
@@ -45,6 +47,9 @@ IFS=';' read -ra kv <<< "$mods"
 for x in "${kv[@]}"; do
     t=$(echo "${x%%=*}" | tr -d ' '); v=$(echo "${x#*=}" | sed 's/^ *//')
     [ -z "$t" ] && continue
+    if [ -z "$v" ]; then                     # "TAG=" with no value: remove the tag
+        sed -i -E "/^[[:space:]]*$t[[:space:]]*=/Id" "$dst/INCAR"; continue
+    fi
     if grep -qiE "^[[:space:]]*$t[[:space:]]*=" "$dst/INCAR"; then
         sed -i -E "s|^[[:space:]]*$t[[:space:]]*=.*|$t = $v   ! test_relax $tag|I" "$dst/INCAR"
     else
