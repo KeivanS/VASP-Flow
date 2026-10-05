@@ -9,8 +9,7 @@
 # -> tests/<mp-id>_<tag>/ with the material's 01_relax INCAR/KPOINTS, its POTCAR and the
 #    ORIGINAL input cell (materials/<id>/POSCAR); each "TAG=VALUE" replaces that tag in the
 #    INCAR (or is appended); "TAG=" with no value removes it, e.g. "NSW=0; IBRION=-1; ISIF="
-#   (an SCF-only test).  Original wording:
-#    INCAR (or is appended).  Submitted with the run's env.sh, partition and account.
+#    for an SCF-only test.  Submitted with the run's env.sh, partition and account.
 #    Afterwards:  bash ../ht_tools/test_relax.sh --report tests/<mp-id>_<tag>
 #
 # Small, short jobs start sooner (SLURM backfills them into gaps): defaults are
