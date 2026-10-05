@@ -104,6 +104,15 @@ MAGNETIC_3D = {'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni'}
 HIGH_MOMENT = 5.0
 LOW_MOMENT  = 0.6
 
+# NBANDS for relax / SCF / bands (2026-10-05): 1.2 x VASP's own default, rounded up to even.
+# VASP's default, max((NELECT+2)/2 + max(NIONS/2, 3), 0.6 NELECT) (+ half the starting moment
+# when spin-polarised), leaves only a few empty bands; for narrow-band d compounds (Ba2YReO6:
+# 37 occupied, 44 bands) the electron count then drifts between SCF steps (BRMIX "old and
+# new charge density differ"), Davidson goes non-hermitian and the SCF diverges.  The same
+# value goes into relax, SCF and bands (the relax WAVECAR then fits the SCF, and bands never
+# has fewer bands than the SCF).  LOBSTER sets its own, larger NBANDS.
+NBANDS_FACTOR = 1.2
+
 STAGE_DIR = '_ht_inputs'
 
 
@@ -234,10 +243,23 @@ def magmom_string(struct):
     return ' '.join(parts)
 
 
+def robust_nbands(nelect, struct):
+    """NBANDS = NBANDS_FACTOR x VASP's default NBANDS, rounded up to even."""
+    import math
+    nions = sum(struct['counts'])
+    default = max(math.ceil((nelect + 2) / 2) + max(nions // 2, 3), int(0.6 * nelect))
+    if any(el in MAGNETIC_3D for el in struct['species']):          # ISPIN = 2 start
+        moment = sum(n * (HIGH_MOMENT if el in MAGNETIC_3D else LOW_MOMENT)
+                     for el, n in zip(struct['species'], struct['counts']))
+        default += math.ceil(moment / 2)
+    nb = math.ceil(NBANDS_FACTOR * default)
+    return nb + (nb % 2)
+
+
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
                        ntasks_per_node, partition, account,
                        functional='PBE', kpra=None, kpar=None, ncore=None,
-                       relax=True, gga_u='auto'):
+                       relax=True, gga_u='auto', nbands=None):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
 
     Task keywords are matched as substrings over the whole file by
@@ -262,6 +284,7 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
            "INCAR relax:",
            "   IBRION = 1   # quasi-Newton: IBRION=2 line search fails (ZBRENT) once a cell is converged",
            "   ISIF = 3",
+           *([f"   NBANDS = {nbands}   # 1.2 x VASP default; same as SCF and bands"] if nbands else []),
            "END_INCAR",
            *([f"RELAX_KMESH_DENSITY: {kpra}"] if kpra else []),
            ""] if relax else []),
@@ -282,8 +305,13 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
         "# WAVECAR (needed by DFPT/ELF only) is not written.",
         "INCAR scf:",
         "   LWAVE = .FALSE.",
+        *([f"   NBANDS = {nbands}   # 1.2 x VASP default (enough empty bands for narrow d/f bands)"] if nbands else []),
         "END_INCAR",
         "",
+        *(["INCAR bands:",
+           f"   NBANDS = {nbands}   # same as SCF (never fewer)",
+           "END_INCAR",
+           ""] if nbands else []),
         *([f"GGA_U: {gga_u.upper()}   # default (no flag): U only for chalcogenides/halides"]
           if gga_u in ('on', 'off') else []),
         *([f"KPAR: {kpar}"] if kpar else []),
@@ -1354,7 +1382,7 @@ def main():
                            struct, mesh, pinfo['encut'], nodes, ntpn,
                            partition, args.account, args.functional, kpra=args.kpra,
                            kpar=args.kpar, ncore=args.ncore, relax=args.relax,
-                           gga_u=args.gga_u)
+                           gga_u=args.gga_u, nbands=robust_nbands(pinfo['nelect'], struct))
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
         env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir)
