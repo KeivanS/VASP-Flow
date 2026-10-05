@@ -17,7 +17,7 @@
 #                   the SCF starts from the relaxed CHGCAR alone
 #   scf_unconv      bands/LOBSTER sit on an SCF that hit NELM: SCF rerun, ALGO = All
 #   bands_diverged  NSCF Davidson blew up (|E| > 1e6 eV): NBANDS >= 1.3 x SCF NBANDS,
-#                   EDIFF = 1E-5, ALGO = Normal
+#                   ALGO = Normal (EDIFF is never changed: 1E-6 is the loosest allowed)
 #   unknown         error lines are printed; resubmitted unchanged only with
 #                   --retry-unknown (a crash that is not one of the above usually
 #                   needs a look first)
@@ -199,12 +199,11 @@ for m in "${IDS[@]}"; do
             nb_scf=$(outcar_nbands "$m/02_scf/OUTCAR"); nb_cur=$(incar_val "$m/03_bands/INCAR" NBANDS)
             nb=$(( (${nb_scf:-${nb_cur:-0}} * 13 + 9) / 10 ))
             [ -n "$nb_cur" ] && [ "$nb_cur" -gt "$nb" ] && nb=$nb_cur
-            echo "   fix: 03_bands NBANDS ${nb_cur:-default} -> $nb (SCF had ${nb_scf:-?}), EDIFF 1E-5, ALGO Normal"
+            echo "   fix: 03_bands NBANDS ${nb_cur:-default} -> $nb (SCF had ${nb_scf:-?}), ALGO Normal (EDIFF unchanged)"
             [[ $state == TIMEOUT* ]] && { T[bands]=$(from_sec $(( $(to_sec "${tlim:-$(step_time bands)}") * 2 ))); echo "   fix: walltime bands ${T[bands]}"; }
             if [ $APPLY = 1 ]; then
                 f="$m/03_bands/INCAR"
                 [ "$nb" -gt 0 ] && set_incar_tag "$f" NBANDS "$nb"
-                set_incar_tag "$f" EDIFF 1E-5
                 set_incar_tag "$f" ALGO Normal
             fi ;;
     esac

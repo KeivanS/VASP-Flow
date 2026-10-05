@@ -439,6 +439,7 @@ JOB_TEMPLATE = r'''#!/bin/bash
 #SBATCH --account=@ACCOUNT@
 #SBATCH --output=@ID@-%x-%j.out
 #SBATCH --error=@ID@-%x-%j.err
+#SBATCH --mem=0
 #SBATCH --signal=B:USR1@900
 #SBATCH --requeue
 #SBATCH --open-mode=append

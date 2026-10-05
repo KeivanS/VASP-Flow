@@ -755,6 +755,17 @@ LOBSTER (finished steps are skipped on resubmission); the LOBSTER job ends and e
 \texttt{lobster\_summary.csv} in \texttt{analysis/}).  ENCUT and the LOBSTER
 NBANDS come from the POTCARs at generation time and are checked against
 \texttt{potcar\_manifest.json} when the POTCARs are built on the cluster.
+POTCAR variants follow the Materials Project choices by default
+(\texttt{-{}-potcar-set mp}: e.g.\ Re\_pv, Ti\_pv, Ga\_d, Li\_sv, taken from
+pymatgen's \texttt{MPRelaxSet}); the older ``plain element first'' rule
+(\texttt{-{}-potcar-set minimal}) gave minimal-valence POTCARs, and
+Ba$_2$YReO$_6$/Sr$_2$YReO$_6$ with plain Re collapsed into an unphysical state.
+Relax, SCF and bands use the same \texttt{NBANDS} $= 1.2\times$ VASP's default
+(from NELECT, NIONS and the starting moment; rounded up to even): VASP's default
+leaves too few empty bands for narrow d bands, the electron count then drifts
+between SCF steps (\texttt{BRMIX: very serious problems}) and the SCF diverges.
+The bands step never uses fewer bands than its SCF.  Every job requests the
+whole node's memory (\texttt{\#SBATCH -{}-mem=0}).
 3d elements (V--Ni) start spin-polarised.  GGA+U follows the default rule
 (only chalcogenides/halides, Section~\ref{sec:ggau}) unless
 \texttt{-{}-gga\_u on|off} is given.  There is no DFPT step (dielectric
@@ -769,6 +780,8 @@ Option & Meaning \\ \midrule
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-gga\_u auto|on|off} & GGA+U flag written into every
   \texttt{instructions.txt} (default \texttt{auto}: only chalcogenides/halides). \\
+\texttt{-{}-potcar-set mp|minimal} & POTCAR variants: Materials Project choices
+  (default) or plain element first, then \_sv/\_pv/\_d. \\
 \texttt{-{}-single-node} & Every material on one node with
   \texttt{-{}-cores-per-node} (default 40) ranks; otherwise large cells get
   more nodes. \\
@@ -807,6 +820,45 @@ Script (in the directory) & Purpose \\ \midrule
 \texttt{postprocess\_all.sh} & Per-material and combined LOBSTER bond tables. \\
 \texttt{collect\_results.sh} & Small \texttt{screen\_results.tar.gz} with the
   per-step layout (trimmed OUTCARs; \texttt{FULL\_OUTCAR=1} for full). \\
+\bottomrule
+\end{tabularx}
+
+\subsubsection*{Maintenance tools (\texttt{ht\_tools/})}
+Run them from the highthroughput directory:
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow/HT_1-500
+bash ../ht_tools/fix_failed.sh            # dry run
+bash ../ht_tools/fix_failed.sh --apply    # do it
+\end{lstlisting}
+All of them are dry runs unless \texttt{-{}-apply} is given, skip materials with
+queued jobs, and never delete outputs: they are moved into a
+\texttt{stale\_<date>} folder of the material.  Full descriptions are in
+\texttt{ht\_tools/README.md}.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}X@{}}
+\thead
+Script & Purpose \\ \midrule
+\texttt{fix\_failed.sh [ids]} & Finds broken chains (a step FAILED / TIMEOUT /
+  OUT\_OF\_MEMORY, the rest \texttt{DependencyNeverSatisfied}), classifies the
+  cause from sacct, the job logs and OUTCAR/OSZICAR, applies the matching fix
+  (timeout: walltime $\times2$; out of memory: whole node, KPAR $\le 8$; WAVECAR
+  read crash: start from CHGCAR; diverged bands: more bands), cancels the dead
+  jobs and resubmits from the failed step.  EDIFF is never changed.  Unknown
+  causes are only reported (\texttt{-{}-retry-unknown} resubmits them). \\
+\texttt{test\_relax.sh id tag "TAG=VAL; ..."} & Test copy of one material in
+  \texttt{tests/<id>\_<tag>/} with changed INCAR tags (\texttt{TAG=} with no value
+  removes a tag, e.g.\ \texttt{"NSW=0; IBRION=-1; ISIF="} for an SCF-only test);
+  small short jobs (\texttt{T\_NTASKS}, \texttt{T\_TIME}) start sooner.
+  \texttt{-{}-report tests/<dir>} summarises the result. \\
+\texttt{collect\_lobster.sh} & Tarball of the data the descriptor database needs
+  (raw LOBSTER files, structures, EIGENVALs, trimmed OUTCARs, \texttt{\_status.tsv});
+  incremental.  \texttt{SCF\_EIG\_ONLY=1} packs only the SCF EIGENVALs of all
+  finished materials (own DOS moments). \\
+\texttt{reset\_stale.sh} & Redo steps whose inputs changed (relax unconverged
+  or finished after the SCF, truncated LOBSTER files, blank EIGENVAL). \\
+\texttt{cleanup\_large.sh} & Delete WAVECAR/CHGCAR no remaining step needs. \\
+\texttt{patch\_relax\_ibrion.sh}, \texttt{patch\_lean\_outputs.sh} & One-off
+  patches of a directory generated before those fixes. \\
 \bottomrule
 \end{tabularx}
 
@@ -2169,6 +2221,13 @@ Band plot empty or not shown &
     submits one job per step.
     \texttt{ht-semimetals.py} relaxes cell + ions first (\texttt{01\_relax},
     ISIF = 3).
+  \item[\textcolor{mainblue}{v2.3} (2026-10-05)]
+    \texttt{ht-semimetals.py}: Materials Project POTCAR choices by default
+    (\texttt{-{}-potcar-set mp}); \texttt{NBANDS} $= 1.2\times$ VASP default in
+    relax/SCF/bands, bands never below the SCF; \texttt{\#SBATCH -{}-mem=0};
+    relaxation with IBRION = 1.  Maintenance tools in \texttt{ht\_tools/}
+    (\texttt{fix\_failed.sh}, \texttt{test\_relax.sh}, \texttt{collect\_lobster.sh},
+    \texttt{reset\_stale.sh}, \texttt{cleanup\_large.sh}).
 \end{description}
 
 \vfill
