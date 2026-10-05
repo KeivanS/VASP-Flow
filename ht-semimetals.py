@@ -197,11 +197,23 @@ def potcar_props(potcar_dir, variant):
     return float(enmax.group(1)), float(zval.group(1))
 
 
-def material_potcar_info(struct, potcar_dir):
+def mp_potcar_choices():
+    """Materials Project's POTCAR variant per element (pymatgen MPRelaxSet), e.g. Re -> Re_pv,
+    Ti -> Ti_pv, Ga -> Ga_d, Li -> Li_sv.  The plain-element-first rule picks minimal-valence
+    POTCARs instead; for high-valent transition-metal oxides with short M-O bonds (Ba2YReO6,
+    Sr2YReO6 with plain Re) the SCF collapsed into an unphysical state (2026-10-05)."""
+    try:
+        from pymatgen.io.vasp.sets import MPRelaxSet
+    except Exception as e:
+        raise SystemExit(f"--potcar-set mp needs pymatgen ({e}); install it or use --potcar-set minimal")
+    return dict(MPRelaxSet.CONFIG['POTCAR'])
+
+
+def material_potcar_info(struct, potcar_dir, choices=None):
     """Resolve POTCAR variants and derive ENCUT and NELECT for one material."""
     variants, enmaxes, nelect = [], [], 0.0
     for el, n in zip(struct['species'], struct['counts']):
-        v = potcar_variant(el, potcar_dir)
+        v = potcar_variant(el, potcar_dir, choices)
         if v is None:
             raise ValueError(f"no POTCAR for element '{el}' in {potcar_dir}")
         enmax, zval = potcar_props(potcar_dir, v)
@@ -1253,6 +1265,10 @@ def main():
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition; no multi-node tier')
+    ap.add_argument('--potcar-set', dest='potcar_set', choices=['mp', 'minimal'], default='mp',
+                    help="POTCAR variants: 'mp' = Materials Project's choices (pymatgen MPRelaxSet; "
+                         "default since 2026-10-05) | 'minimal' = plain element first, then "
+                         "_sv/_pv/_d (the rule used for HT_1-500)")
     ap.add_argument('--gga_u', '--gga-u', '--gga+u', '--GGA_U', '--GGA-U', '--GGA+U',
                     dest='gga_u', type=str.lower, choices=['auto', 'on', 'off'], default='auto',
                     help='GGA+U with the tabulated U_eff: auto (default) = only if a '
@@ -1321,8 +1337,20 @@ def main():
     print(f"  account    : {args.account}   partition: {args.partition}\n")
 
     metas, ok, skipped, failed = {}, [], [], []
+    # POTCAR variants: one mapping for this driver (ENCUT/NELECT), the SLURM agent (reads
+    # potcar_choices.json from its cwd = materials/) and make_potcars.sh (the manifest).
+    potcar_choices = mp_potcar_choices() if args.potcar_set == 'mp' else {}
+    os.makedirs(materials, exist_ok=True)
+    pc_file = os.path.join(materials, 'potcar_choices.json')
+    if potcar_choices:
+        with open(pc_file, 'w') as f:
+            json.dump(potcar_choices, f, indent=1, sort_keys=True)
+    elif os.path.isfile(pc_file):
+        os.remove(pc_file)
+    print(f"  POTCARs    : {args.potcar_set}" + ("  (Materials Project choices)" if potcar_choices else
+                                                 "  (plain element first, then _sv/_pv/_d)"))
     manifest = {'kspacing': args.kspacing, 'kpra': args.kpra, 'potcar_dir_local': potcar_dir,
-                'materials': {}}
+                'potcar_set': args.potcar_set, 'materials': {}}
 
     # ── 1. structures (serial: the only network step; existing POSCARs are reused)
     todo = []
@@ -1361,7 +1389,7 @@ def main():
             return 'skip', (f"[{n}/{len(ids)}] {mp_id}: SKIP — {struct['natoms']} atoms "
                             f"> {args.max_atoms}"), struct['natoms']
         try:
-            pinfo = material_potcar_info(struct, potcar_dir)
+            pinfo = material_potcar_info(struct, potcar_dir, potcar_choices)
         except Exception as e:
             return 'fail', f"[{n}/{len(ids)}] {mp_id}: {e}", None
 
