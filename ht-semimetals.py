@@ -1270,6 +1270,9 @@ def main():
                     help="POTCAR variants: 'mp' = Materials Project's choices (pymatgen MPRelaxSet; "
                          "default since 2026-10-05) | 'minimal' = plain element first, then "
                          "_sv/_pv/_d (the rule used for HT_1-500)")
+    ap.add_argument('--potcar-override', dest='potcar_override', action='append', metavar='EL=VARIANT',
+                    help="force one element's POTCAR on top of --potcar-set, e.g. W=W_sv "
+                         "(repeatable or comma-separated)")
     ap.add_argument('--gga_u', '--gga-u', '--gga+u', '--GGA_U', '--GGA-U', '--GGA+U',
                     dest='gga_u', type=str.lower, choices=['auto', 'on', 'off'], default='auto',
                     help='GGA+U with the tabulated U_eff: auto (default) = only if a '
@@ -1341,6 +1344,12 @@ def main():
     # POTCAR variants: one mapping for this driver (ENCUT/NELECT), the SLURM agent (reads
     # potcar_choices.json from its cwd = materials/) and make_potcars.sh (the manifest).
     potcar_choices = mp_potcar_choices() if args.potcar_set == 'mp' else {}
+    for item in args.potcar_override or []:            # e.g. W=W_sv (variant missing in the library)
+        for pair in item.split(','):
+            el, _, var = pair.partition('=')
+            if not el.strip() or not var.strip():
+                raise SystemExit(f"--potcar-override: expected EL=VARIANT, got '{pair}'")
+            potcar_choices[el.strip()] = var.strip()
     os.makedirs(materials, exist_ok=True)
     pc_file = os.path.join(materials, 'potcar_choices.json')
     if potcar_choices:
@@ -1348,10 +1357,12 @@ def main():
             json.dump(potcar_choices, f, indent=1, sort_keys=True)
     elif os.path.isfile(pc_file):
         os.remove(pc_file)
-    print(f"  POTCARs    : {args.potcar_set}" + ("  (Materials Project choices)" if potcar_choices else
-                                                 "  (plain element first, then _sv/_pv/_d)"))
+    print(f"  POTCARs    : {args.potcar_set}" + ("  (Materials Project choices)" if args.potcar_set == 'mp' else
+                                                 "  (plain element first, then _sv/_pv/_d)")
+          + (f"; overrides: {', '.join(args.potcar_override)}" if args.potcar_override else ""))
     manifest = {'kspacing': args.kspacing, 'kpra': args.kpra, 'potcar_dir_local': potcar_dir,
-                'potcar_set': args.potcar_set, 'materials': {}}
+                'potcar_set': args.potcar_set, 'potcar_override': args.potcar_override or [],
+                'materials': {}}
 
     # ── 1. structures (serial: the only network step; existing POSCARs are reused)
     todo = []
