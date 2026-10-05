@@ -115,6 +115,9 @@ if [ ${#IDS[@]} -eq 0 ]; then
         sacct -u "$USER_NAME" -S "$SINCE" -X -n -P -o JobName,State 2>/dev/null \
             | awk -F'|' '$2 ~ /^(FAILED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL)/{print $1}'
     } | sed -E 's/_(relax|scf|bands|lobster)$//' | grep '^mp-' | sort -u )
+    # sacct/squeue list jobs of EVERY highthroughput directory; keep this directory's materials
+    mine=(); for m in "${IDS[@]}"; do [ -d "$HERE/materials/$m" ] && mine+=("$m"); done
+    IDS=("${mine[@]}")
 fi
 cd "$HERE/materials" || exit 1
 
