@@ -323,9 +323,11 @@ The repaired materials now show \cmd{ok}.  The ones that failed again get a new
 diagnosis and a new script.  Repeat until only \cmd{ok} (and cases you accept,
 such as \cmd{spilling_high}) are left.
 
-\subsection{The material it could not diagnose}
+\subsection{Materials held back for review}
 
-For \cmd{unknown} cases, read the error lines at the top of the script.
+Two kinds of scripts are held back: \cmd{unknown} causes, and failures whose usual repair is already
+in the INCAR (shown as \cmd{(fix already in INCAR)} --- running the same repair again would fail
+the same way).  For these, read the error lines at the top of the script.
 Then either repair the run by hand, or let the script run as it is: open
 \cmd{submit_all_fixes.sh}, where these scripts appear at the end as commented-out
 lines, and remove the \texttt{\#}.  To submit all unknown cases without editing, diagnose again with
@@ -426,7 +428,8 @@ a \textbf{material name} --- any folder name: \cmd{mp-149}, \cmd{GaAs}, \cmd{Bi2
   the folders of that name in \emph{R}, \emph{R}\cmd{/*/} or \emph{R}\cmd{/*/materials/},
   where \emph{R} is the folder holding the list file, and each \opt{root} \\
 a \textbf{material or project folder} (has \cmd{00_convergence}, \cmd{01_relax}, \dots) & that folder \\
-a \textbf{high-throughput run folder} (has \cmd{materials/}) & every material in \cmd{materials/} \\
+a \textbf{high-throughput run folder} (has \cmd{materials/}) & every material in \cmd{materials/};
+  if the run has a \cmd{material_list.txt}, only the materials in it (other folders are named and skipped) \\
 any \textbf{other folder} & every sub-folder that is a material/project folder \\
 \bottomrule
 \end{tabularx}
@@ -488,7 +491,12 @@ repair script and the report line.
 
 For a step that is not OK, the cause is read from the step's newest SLURM logs,
 \cmd{vasp.out}, the end of OUTCAR and the SLURM job record (state, run time,
-time limit).
+time limit).  The job record wins: a job SLURM ended for its time limit is a
+\cmd{timeout}, whatever else is in the logs.  So is a VASP run stopped by the STOPCAR
+that the VASP-Flow scripts write shortly before the time limit (\cmd{hard stop encountered},
+\cmd{soft stop encountered}).  Messages after which VASP carries on, such as
+\cmd{Sub-Space-Matrix is not hermitian} or \cmd{The number of bands has changed}, are
+shown in the script header but never taken as the cause.
 
 \subsection{Failure causes and their repairs}\label{sec:classes}
 
@@ -518,6 +526,8 @@ quota & disk full / quota exceeded & resubmitted unchanged --- \textbf{free spac
 mpi\_init & MPI failed to start (bad node) & resubmitted unchanged \\
 not\_run & never ran (e.g.\ an earlier step failed) & submitted \\
 unknown & none of the above & script written but held back for review \\
+\emph{(any)} \dots\ \cmd{(fix already in INCAR)} & the repair for this cause is already in the INCAR, so it did not help &
+  script written but held back for review \\
 \midrule
 spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & none (report only) \\
 missing & a listed name has no folder & none (report only) \\

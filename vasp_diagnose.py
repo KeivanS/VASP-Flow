@@ -92,21 +92,25 @@ DEFAULT_TIME = {'conv': '08:00:00', 'relax': '08:00:00', 'scf': '04:00:00', 'ban
                 'dos': '02:00:00', 'dfpt': '08:00:00', 'lobster': '04:00:00'}
 HT_TIME_KEY = {'relax': 'TIME_RELAX', 'scf': 'TIME_SCF', 'bands': 'TIME_BANDS',
                'lobster': 'TIME_LOBSTER'}
-HT_STEPS = ('relax', 'scf', 'bands', 'lobster')     # what job.sbatch understands
+HT_STEPS = ('relax', 'scf', 'bands', 'lobster')
+INCAR_FIX = ('scf_nelm', 'nscf_diverged', 'nscf_unconv', 'edddav', 'zbrent', 'symmetry')     # what job.sbatch understands
 
 PAT = [   # (class, regex) -- first match wins; searched in the job logs (+ OUTCAR tail)
     ('quota',    r'Disk quota exceeded|No space left on device|error during write'),
     ('oom',      r'insufficient virtual memory|cannot allocate memory|out of memory|'
                  r'oom[-_ ]kill|ud_ep\.c.*unhandled timeout'),
     ('mpi_init', r'PMPI_Init|MPI_Init_thread|MPIDI_OFI_mpi_init'),
-    ('wavecar',  r'number of bands has changed|different cutoff or change in lattice|'
-                 r'while reading WAVECAR'),
+    ('wavecar',  r'ERROR.*while reading WAVECAR|plane wave coefficients changed'),
     ('chgcar',   r'end of record during read.*CHGCAR|charge density could not be read'),
     ('zbrent',   r'ZBRENT: fatal error'),
     ('symmetry', r'inverse of rotation matrix was not found|POSMAP internal error|'
                  r'internal error in subroutine SGRCON|PRICELV|RHOSYG'),
-    ('edddav',   r'Error EDDDAV|ZHEGV failed|Sub-Space-Matrix is not hermitian'),
+    ('edddav',   r'Error EDDDAV|ZHEGV failed'),
 ]
+# VASP prints these and carries on - they are not the cause of a failure:
+#   'Sub-Space-Matrix is not hermitian' (warning), 'The number of bands has changed ...
+#   orbitals not found in the WAVECAR will be initialized ...' (info)
+STOPPED = r'hard stop encountered|soft stop encountered'   # STOPCAR of the walltime guard
 ERRLINE = re.compile(r'error|bad news|severe|abort|killed|memory|quota|segmentation|'
                      r'cannot|not found|exit code|fatal|warning', re.I)
 ERRSKIP = re.compile(r'IBZKPT|Often results|\(SIGTERM\)|^Image|Unknown  |Stack trace|'
@@ -405,17 +409,22 @@ def classify(m, step, rec, provisional, point=None):
             seen.add(line)
             errs.append(line[:160])
     state = rec['state'] if rec else ''
+    # the job record of the last attempt is the most reliable source
+    if state.startswith('TIMEOUT'):
+        return 'timeout', errs[:6]
+    if state.startswith('OUT_OF_ME'):
+        return 'oom', errs[:6]
+    # VASP stopped by the STOPCAR the walltime guard writes before the limit
+    stopped = re.search(STOPPED, read(outcar, tail=200000), re.I)
     if provisional in ('relax_unconv', 'scf_nelm', 'nscf_unconv', 'nscf_diverged', 'lobster_fail') \
-            and not state.startswith(('TIMEOUT', 'OUT_OF_ME')):
+            and not stopped:
         return provisional, errs[:6]
     for cls, rx in PAT:
         if re.search(rx, text, re.I):
             if cls == 'edddav' and step in NSCF:
                 return 'nscf_diverged', errs[:6]
             return cls, errs[:6]
-    if state.startswith('OUT_OF_ME'):
-        return 'oom', errs[:6]
-    if state.startswith('TIMEOUT') or re.search(r'DUE TO TIME LIMIT|time limit hit', text):
+    if stopped or re.search(r'DUE TO TIME LIMIT|time limit hit', text):
         return 'timeout', errs[:6]
     if step in NSCF and nscf_diverged(m, step):
         return 'nscf_diverged', errs[:6]
@@ -579,6 +588,14 @@ def plan(m, status, cls_of, recs, args):
     def say(t):
         lines.append('echo "  %s"' % t.replace('"', "'"))
 
+    changed = set()      # step dirs whose INCAR really changes
+
+    def tag(d, key, val):
+        cur = incar(os.path.join(m.path, d, 'INCAR')).get(key)
+        if cur is None or cur.strip().upper() != str(val).upper():
+            lines.append('set_tag %s/INCAR %s %s' % (d, key, val))
+            changed.add(d)
+
     # memory: cap KPAR in every step that will run
     if 'oom' in reasons:
         for s in redo:
@@ -605,14 +622,14 @@ def plan(m, status, cls_of, recs, args):
     c_relax, c_scf = cls_of.get('relax'), cls_of.get('scf')
     if 'relax' in redo:
         if c_relax == 'zbrent' and incar(m.f('relax', 'INCAR')).get('IBRION', '').strip() == '2':
-            lines.append('set_tag 01_relax/INCAR IBRION 1')
+            tag('01_relax', 'IBRION', 1)
             say('relax: IBRION 2 -> 1 (ZBRENT)')
         if c_relax == 'symmetry':
             tags = incar(m.f('relax', 'INCAR'))
-            lines.append('set_tag 01_relax/INCAR ISYM 0' if 'SYMPREC' in tags else 'set_tag 01_relax/INCAR SYMPREC 1E-4')
+            tag('01_relax', *(('ISYM', 0) if 'SYMPREC' in tags else ('SYMPREC', '1E-4')))
             say('relax: symmetry error -> %s' % ('ISYM = 0' if 'SYMPREC' in tags else 'SYMPREC = 1E-4'))
         if c_relax == 'edddav':
-            lines.append('set_tag 01_relax/INCAR ALGO Normal')
+            tag('01_relax', 'ALGO', 'Normal')
             say('relax: ALGO = Normal (EDDDAV)')
         lines.append('continue_relax')
         if c_relax == 'wavecar':
@@ -620,12 +637,12 @@ def plan(m, status, cls_of, recs, args):
     if 'scf' in redo:
         tags = incar(m.f('scf', 'INCAR'))
         if c_scf in ('scf_nelm', 'edddav'):
-            lines.append('set_tag 02_scf/INCAR ALGO All')
+            tag('02_scf', 'ALGO', 'All')
             if to_int(tags.get('NELM'), 60) < 150:
-                lines.append('set_tag 02_scf/INCAR NELM 150')
+                tag('02_scf', 'NELM', 150)
             say('scf: ALGO = All, NELM >= 150 (%s)' % c_scf)
         if c_scf == 'symmetry':
-            lines.append('set_tag 02_scf/INCAR ISYM 0' if 'SYMPREC' in tags else 'set_tag 02_scf/INCAR SYMPREC 1E-4')
+            tag('02_scf', *(('ISYM', 0) if 'SYMPREC' in tags else ('SYMPREC', '1E-4')))
             say('scf: symmetry error -> %s' % ('ISYM = 0' if 'SYMPREC' in tags else 'SYMPREC = 1E-4'))
         if 'relax' in m.steps and 'relax' not in redo:
             rchg = m.f('relax', 'CHGCAR')
@@ -639,19 +656,21 @@ def plan(m, status, cls_of, recs, args):
         elif 'relax' not in m.steps and c_scf in ('wavecar', 'chgcar'):
             lines.append('set_tag 02_scf/INCAR ISTART 0; set_tag 02_scf/INCAR ICHARG 2')
             say('scf: start from scratch (ICHARG = 2)')
-    for s in ('bands', 'dos'):
+    for s in ('bands', 'dos', 'lobster'):
         if s in redo and cls_of.get(s) in ('nscf_diverged', 'nscf_unconv'):
-            if cls_of[s] == 'nscf_diverged':
+            if cls_of[s] == 'nscf_diverged' and s != 'lobster':     # LOBSTER sets its own NBANDS
                 nb = scf_nbands(m)
                 if nb:
                     new = int(math.ceil(1.3 * nb / 2.0)) * 2
                     cur = to_int(incar(m.f(s, 'INCAR')).get('NBANDS'), 0)
                     if new > cur:
-                        lines.append('set_tag %s/INCAR NBANDS %d' % (STEP_DIR[s], new))
-            lines.append('set_tag %s/INCAR ALGO Normal' % STEP_DIR[s])
+                        tag(STEP_DIR[s], 'NBANDS', new)
+            tag(STEP_DIR[s], 'ALGO', 'Normal')
             if to_int(incar(m.f(s, 'INCAR')).get('NELM'), 60) < 150:
-                lines.append('set_tag %s/INCAR NELM 150' % STEP_DIR[s])
-            say('%s: %s -> ALGO = Normal%s' % (s, cls_of[s], ', more bands' if cls_of[s] == 'nscf_diverged' else ''))
+                tag(STEP_DIR[s], 'NELM', 150)
+            if STEP_DIR[s] in changed:
+                say('%s: %s -> ALGO = Normal%s' % (s, cls_of[s], ', more bands' if cls_of[s] == 'nscf_diverged'
+                                                    and s != 'lobster' else ''))
     # stash old outputs of every redone step
     for s in redo:
         if s == 'lobster' and binary_only:
@@ -659,7 +678,7 @@ def plan(m, status, cls_of, recs, args):
             say('lobster: NSCF kept, only the LOBSTER binary reruns')
         else:
             lines.append('stash %s' % STEP_DIR[s])
-    return redo, lines, extra, wall, binary_only
+    return redo, lines, extra, wall, changed
 
 
 # ── bash pieces ──────────────────────────────────────────────────────────────
@@ -825,6 +844,14 @@ def expand(entry, base):
         top = mat if os.path.isdir(mat) else p
         found = sorted(os.path.join(top, x) for x in os.listdir(top)
                        if os.path.isdir(os.path.join(top, x)) and is_material(os.path.join(top, x)))
+        lst = os.path.join(p, 'material_list.txt')
+        if top == mat and os.path.isfile(lst):    # the run's own list says which materials belong to it
+            names = set(l.split('#')[0].split()[0] for l in open(lst) if l.split('#')[0].split())
+            extra = [os.path.basename(f) for f in found if os.path.basename(f) not in names]
+            if extra:
+                print('-- %s: %d folder(s) in materials/ not in its material_list.txt, skipped: %s'
+                      % (entry, len(extra), ' '.join(extra)))
+            found = [f for f in found if os.path.basename(f) in names]
         return found or None                     # no runs in it: try entry as a material name
     return None                                  # not a folder: a material ID
 
@@ -956,7 +983,7 @@ def main():
             count[act] += 1
             rows.append([m.label, m.layout, m.path, steps_txt, act, ''])
             continue
-        fix, submit, redo_txt = [], [], []
+        fix, submit, redo_txt, repeat = [], [], [], []
         if cbad:
             cfix, csubs = conv_plan(m, cbad, recs, args)
             fix += cfix
@@ -969,7 +996,11 @@ def main():
             if m.layout == 'ht' and any(s not in HT_STEPS for s in bad):
                 notes.append('job.sbatch cannot run: ' + ','.join(s for s in bad if s not in HT_STEPS))
                 steps_txt = ' '.join(['%s:%s' % kv for kv in status.items()] + notes)
-            redo, pfix, extra, wall, _ = plan(m, status, cls_of, mrecs, args)
+            redo, pfix, extra, wall, changed = plan(m, status, cls_of, mrecs, args)
+            for s in bad:          # the INCAR fix of this cause is already there: it did not help
+                if cls_of[s] in INCAR_FIX and STEP_DIR[s] not in changed:
+                    status[s] += ' (fix already in INCAR)'
+                    repeat.append(s)
             if m.layout == 'ht':
                 redo = [s for s in redo if s in HT_STEPS]
             fix += pfix
@@ -981,7 +1012,7 @@ def main():
         count[main_cls] += 1
         script = os.path.join(out_dir, 'fix', m.label + '.sh')
         write_script(script, m, status, errs, ' ; '.join(x for x in redo_txt if x), fix, submit, out_dir)
-        unknown = any(c == 'unknown' for c in cls_of.values())
+        unknown = any(c == 'unknown' for c in cls_of.values()) or bool(repeat)
         hold = unknown and not args.retry_unknown
         (review if hold else scripts).append(script)
         rows.append([m.label, m.layout, m.path, steps_txt,
@@ -1006,7 +1037,8 @@ def main():
         for s in scripts:
             fh.write('run_fix %s\n' % shlex.quote(s))
         if review:
-            fh.write('\n# unknown cause - read the script header first; uncomment to submit:\n')
+            fh.write('\n# unknown cause, or its fix is already in the INCAR - read the script header first;'
+                     ' uncomment to submit:\n')
             for s in review:
                 fh.write('# run_fix %s\n' % shlex.quote(s))
         fh.write('echo "All fix scripts done.  Monitor: squeue -u ${USER:-$(whoami)}"\n')
@@ -1016,7 +1048,7 @@ def main():
         '%s %d' % kv for kv in sorted(Counter(r[1] for r in rows).items()))))
     for k, v in count.most_common():
         print('  %-14s %4d' % (k, v))
-    print('Fix scripts: %d to submit, %d to review (unknown cause)' % (len(scripts), len(review)))
+    print('Fix scripts: %d to submit, %d to review (unknown cause, or fix already tried)' % (len(scripts), len(review)))
     for s in review:
         print('  review: %s' % s)
     print('Report : %s\nSubmit : nohup bash %s > %s.log 2>&1 &' % (
