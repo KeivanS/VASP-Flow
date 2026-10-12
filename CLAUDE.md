@@ -11,7 +11,7 @@ vasp-gui.py                  # Flask server + embedded HTML/CSS/JS SPA (main ent
 vasp-agent.py                # Workflow orchestration agent (CLI and library)
 vasp-agent-slurm.py          # SLURM edition: SBATCH scripts + dependency-chained submission
 ht-mp-scf.py                 # High-throughput driver: MP primitive cells → SCF + ELF batch
-vasp_diagnose.py             # Cluster-side: diagnose runs (00_convergence…08_lobster) of the IDs/folders in a *_list.txt → per-material fix+resubmit scripts + submit_all_fixes.sh (manual: vasp_diagnose_manual.tex)
+vasp_diagnose.py             # Cluster-side: diagnose runs (00_convergence…08_lobster) of the material names (mp-ID, formula, any folder name) or folders in a *_list.txt → per-material fix+resubmit scripts + submit_all_fixes.sh (manual: vasp_diagnose_manual.tex)
 modules/
   instruction_parser.py      # Parses natural language instructions → settings dict
   vasp_input_generator.py    # Generates INCAR, KPOINTS, POTCAR, run.sh per step

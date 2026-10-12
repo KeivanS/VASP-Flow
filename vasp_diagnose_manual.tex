@@ -167,8 +167,9 @@ nohup bash vasp_diagnose_*/submit_all_fixes.sh > fixes.log 2>&1 &   # 3. resubmi
 \end{lstlisting}
 
 That is all.  \cmd{my_list.txt} stands for your own list, e.g.\
-\cmd{semimetals_list.txt}: the file of material IDs (or folder names) that the
-runs were created from, one per line.  The script finds each material's folder
+\cmd{semimetals_list.txt}: the file of material names that the runs were created
+from, one per line.  A name is whatever the material's folder is called ---
+a Materials Project ID (\cmd{mp-149}), a formula (\cmd{GaAs}), \cmd{GaAs_PBE}, \dots  The script finds each material's folder
 by itself.  When the resubmitted jobs have finished, run step~1 again to check
 that everything is now fine.
 
@@ -194,12 +195,17 @@ The list is the file you already have, for example
 mp-149
 mp-2534
 mp-20351
+Bi2Se3
+GaAs_PBE
 ...
 \end{lstlisting}
 
-Each ID is looked up in the folder that holds the list file, so
-\cmd{mp-149} is found as \cmd{~/VASP-Flow/HT_semimetals/materials/mp-149}.
-You can also list folders instead of IDs, or mix the two (section~\ref{sec:list}).
+Each name is looked up in the folder that holds the list file, so
+\cmd{mp-149} is found as \cmd{~/VASP-Flow/HT_semimetals/materials/mp-149}, and
+\cmd{Bi2Se3} as \cmd{~/VASP-Flow/HT_semimetals/materials/Bi2Se3} or as a project folder
+\cmd{~/VASP-Flow/Bi2Se3}.  Names must match the folder names exactly
+(\cmd{GaAs} does not match \cmd{GaAs_PBE}).  You can also list folder paths, or
+mix names and paths (section~\ref{sec:list}).
 
 \subsection{Step 1: diagnose}
 
@@ -230,7 +236,7 @@ Submit : nohup bash .../submit_all_fixes.sh > .../submit_all_fixes.log 2>&1 &
 Here 262 materials are fine.  31 failed for a known reason and have a fix script
 ready.  One failed for a reason the tool does not recognise; its script is kept
 back for you to look at.  5 finished but have a high LOBSTER charge spilling (reported
-only), and one ID of the list has no folder at all (\cmd{missing}).
+only), and one name of the list has no folder at all (\cmd{missing}).
 Section~\ref{sec:classes} explains each name.
 
 Everything is written into a new folder \cmd{vasp_diagnose_<date>_<time>/}:
@@ -330,7 +336,7 @@ lines, and remove the \texttt{\#}.  To submit all unknown cases without editing,
 % ============================================================
 
 \paragraph{Only some runs, or a single project.}  Make a short list with just
-those IDs or folder names, or give a folder:
+those material names, or give a folder:
 
 \begin{lstlisting}[language=bash]
 echo GaAs_test > one.txt;  python3 vasp_diagnose.py one.txt
@@ -345,8 +351,9 @@ its new place is used automatically.  Otherwise tell the script where to look:
 python3 vasp_diagnose.py semimetals_list.txt --root /scratch/$USER/VASP-Flow
 \end{lstlisting}
 
-\paragraph{The same ID in two runs.}  If an ID is found in more than one run
-folder, all copies are checked and a line \cmd{!! mp-... found in 2 runs} is printed.
+\paragraph{The same name in two runs.}  If a name is found in more than one run
+folder, all copies are checked and a line \cmd{!! GaAs found in 2 runs} is printed.
+To check only one of them, put its path in the list instead of the name.
 
 \paragraph{Projects with convergence tests.}  For a project made in two phases
 (convergence tests first, then \cmd{submit_calculations.sh} or
@@ -390,7 +397,7 @@ python3 vasp_diagnose.py LIST [options]
 \thead Option & Default & Meaning \\
 \midrule
 \opt{out DIR}       & \cmd{vasp_diagnose_<date>_<time>} & folder for the report and the scripts \\
-\opt{root DIR}      & --- & another folder to look up material IDs in (can be repeated) \\
+\opt{root DIR}      & --- & another folder to look up material names in (can be repeated) \\
 \opt{since DATE}    & 14 days ago & how far back SLURM's job records (\cmd{sacct}) are read, YYYY-MM-DD;
                                     must reach back to the jobs being diagnosed \\
 \opt{kpar-max N}    & 8 & largest KPAR written by the out-of-memory repair \\
@@ -415,7 +422,7 @@ An entry is
 \toprule
 \thead Entry & Checked \\
 \midrule
-a \textbf{material ID} (\cmd{mp-149}, any name that is not a folder) &
+a \textbf{material name} --- any folder name: \cmd{mp-149}, \cmd{GaAs}, \cmd{Bi2Se3_soc}, \dots &
   the folders of that name in \emph{R}, \emph{R}\cmd{/*/} or \emph{R}\cmd{/*/materials/},
   where \emph{R} is the folder holding the list file, and each \opt{root} \\
 a \textbf{material or project folder} (has \cmd{00_convergence}, \cmd{01_relax}, \dots) & that folder \\
@@ -425,8 +432,10 @@ any \textbf{other folder} & every sub-folder that is a material/project folder \
 \end{tabularx}
 \end{center}
 
-Relative folder names are taken relative to the list file's folder.  An ID that is
-found nowhere is reported as \cmd{missing}.
+A word that is a folder (relative to the list file's folder) is taken as a path;
+otherwise it is a material name.  Names are matched exactly, so \cmd{GaAs} finds
+\cmd{.../GaAs} but not \cmd{.../GaAs_PBE}, and a name may contain any characters a
+folder name can.  A name that is found nowhere is reported as \cmd{missing}.
 
 \subsection{Kinds of runs}
 
@@ -511,7 +520,7 @@ not\_run & never ran (e.g.\ an earlier step failed) & submitted \\
 unknown & none of the above & script written but held back for review \\
 \midrule
 spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & none (report only) \\
-missing & a listed ID has no folder & none (report only) \\
+missing & a listed name has no folder & none (report only) \\
 phase2\_pending & convergence tests done, production steps not started & none: start them with
   \cmd{submit_calculations.sh} / \cmd{run_calculations.sh} \\
 queued & the material still has jobs in the queue & none: diagnose later \\
@@ -582,7 +591,7 @@ DFPT 8\,h, LOBSTER 4\,h, tests 8\,h), doubled after a time-out.
 \thead Column & Content \\
 \midrule
 \cmd{label}  & the material's label \\
-\cmd{layout} & \cmd{ht}, \cmd{slurm}, \cmd{local} (\cmd{-} for a missing ID) \\
+\cmd{layout} & \cmd{ht}, \cmd{slurm}, \cmd{local} (\cmd{-} for a missing name) \\
 \cmd{path}   & its folder \\
 \cmd{steps}  & \cmd{step:status} for each step (\cmd{conv:encut}, \cmd{conv:kpoints}, \cmd{relax}, \dots) and notes \\
 \cmd{action} & \cmd{ok}, a report-only name, or \cmd{<cause> -> <steps redone>}; \cmd{REVIEW} in front when held back \\

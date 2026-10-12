@@ -4,8 +4,9 @@
 Give it a list file, one entry per line ('#' starts a comment; only the first word
 counts).  Typically this is the *_list.txt of material IDs the runs were made from.
 An entry can be
-  * a material ID (mp-149, ...): looked up under the list file's folder (and --root):
-    <root>/<id>, <root>/*/<id>, <root>/*/materials/<id>;
+  * a material name - any folder name: an MP ID (mp-149), a formula (GaAs), GaAs_PBE, ...:
+    looked up under the list file's folder (and --root): <root>/<name>, <root>/*/<name>,
+    <root>/*/materials/<name>;
   * one material / project folder: it has some of 00_convergence 01_relax 02_scf
     03_bands 04_dos 06_dfpt 08_lobster;
   * a highthroughput folder (has materials/): every materials/<id> is checked;
@@ -207,6 +208,11 @@ def chg_complete(path):
         return False
 
 
+def ere(text):
+    """Escape text for grep -E (re.escape adds backslashes grep warns about)."""
+    return re.sub(r'([.\[\]()*+?{}|^$\\])', r'\\\1', text)
+
+
 def sbatch_jobname(path):
     m = re.search(r'#SBATCH\s+(?:--job-name=|-J\s*)(\S+)', read(path))
     return m.group(1) if m else None
@@ -259,11 +265,12 @@ class Material(object):
         return '%s_%s' % (self.name, step)
 
     def jobnames(self):
-        return set([self.jobname(s) for s in self.steps] + [self.jobname('conv:' + t) for t in self.conv])
+        names = [self.jobname(s) for s in self.steps] + [self.jobname('conv:' + t) for t in self.conv]
+        if self.layout == 'ht':                  # job.sbatch names its jobs <name>_<step>
+            names += ['%s_%s' % (self.name, s) for s in ORDER]
+        return set(names)
 
     def queued(self, queue):
-        if self.layout == 'ht' and any(j.startswith(self.name + '_') for j in queue):
-            return True
         return bool(self.jobnames() & queue)
 
     def _ht_env(self):
@@ -768,8 +775,7 @@ def write_script(path, m, status, errs, redo_txt, fix, submit, out_dir):
              'cd "$D" || exit 1',
              '# guard: nothing of this folder queued, outputs unchanged since the diagnosis']
     if m.layout != 'local':
-        names = ['^%s_' % re.escape(m.name)] if m.layout == 'ht' else []
-        names += ['^%s$' % re.escape(j) for j in sorted(m.jobnames())]
+        names = ['^%s$' % ere(j) for j in sorted(m.jobnames())]
         body.append('if squeue -h -u "${USER:-$(whoami)}" -o "%%j" 2>/dev/null | grep -qE %s; then '
                     'echo "-- $LABEL: jobs queued, skipped"; exit 0; fi' % q('|'.join(names)))
     files = fingerprint_files(m)
@@ -819,9 +825,7 @@ def expand(entry, base):
         top = mat if os.path.isdir(mat) else p
         found = sorted(os.path.join(top, x) for x in os.listdir(top)
                        if os.path.isdir(os.path.join(top, x)) and is_material(os.path.join(top, x)))
-        if not found:
-            print('?? no step folders (00_convergence, 01_relax, 02_scf, ...) in %s' % entry)
-        return found
+        return found or None                     # no runs in it: try entry as a material name
     return None                                  # not a folder: a material ID
 
 
@@ -856,6 +860,9 @@ def read_list(path, roots):
             got = find_id(tok[0], roots)
             if not got:
                 missing.append(tok[0])
+                if os.path.isdir(os.path.join(base, os.path.expanduser(tok[0]))):
+                    print('?? %s: a folder without step folders (00_convergence, 01_relax, ...), '
+                          'and no material of that name' % tok[0])
             elif len(got) > 1:
                 print('!! %s found in %d runs, all checked: %s' % (tok[0], len(got), ' '.join(got)))
         for g in got:
