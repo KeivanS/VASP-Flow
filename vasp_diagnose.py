@@ -31,10 +31,11 @@ the ENCUT and k-point tests must have finished with a converged SCF.
   symmetry      symmetry-operation errors                SYMPREC = 1E-4 (ISYM = 0 if already set)
   edddav        ZHEGV / EDDDAV errors                    SCF: ALGO = All; relax: ALGO = Normal, then All;
                                                           NSCF: as nscf_diverged
-  nscf_diverged NSCF energies |E| > 1e6                  NBANDS >= 1.3 x SCF NBANDS, ALGO = Normal
+  nscf_diverged NSCF energies |E| > 1e6                  NBANDS >= 1.3 x SCF NBANDS; ALGO Davidson
+                                                          (Normal/default) -> VeryFast, Fast -> Normal
   relax_unconv  relax finished without convergence       continue from CONTCAR
   scf_nelm      SCF hit NELM                             ALGO = All (NELM >= 150), later steps redone
-  nscf_unconv   bands/DOS hit NELM                       ALGO = Normal, NELM >= 150
+  nscf_unconv   bands/DOS hit NELM                       ALGO as nscf_diverged, NELM >= 150
   lobster_fail  NSCF finished, LOBSTER binary did not    rerun only the LOBSTER binary
   not_run       never ran (e.g. upstream failed)         submitted
   unknown       anything else                            script written, but only submitted with
@@ -662,6 +663,7 @@ def plan(m, status, cls_of, recs, args):
             say('scf: start from scratch (ICHARG = 2)')
     for s in ('bands', 'dos', 'lobster'):
         if s in redo and cls_of.get(s) in ('nscf_diverged', 'nscf_unconv'):
+            more = ''
             if cls_of[s] == 'nscf_diverged' and s != 'lobster':     # LOBSTER sets its own NBANDS
                 nb = scf_nbands(m)
                 if nb:
@@ -669,12 +671,16 @@ def plan(m, status, cls_of, recs, args):
                     cur = to_int(incar(m.f(s, 'INCAR')).get('NBANDS'), 0)
                     if new > cur:
                         tag(STEP_DIR[s], 'NBANDS', new)
-            tag(STEP_DIR[s], 'ALGO', 'Normal')
+                        more = ', NBANDS %d' % new
+            # Davidson (Normal, VASP's default) -> RMM-DIIS (VeryFast): with a fixed density
+            # Davidson can run away (Ba2YReO6, Sr2YReO6: |E| -> 1e10) where RMM-DIIS converges
+            cur = incar(m.f(s, 'INCAR')).get('ALGO', 'Normal').strip().upper()
+            algo = 'Normal' if cur.startswith('F') else 'VeryFast'
+            tag(STEP_DIR[s], 'ALGO', algo)
             if to_int(incar(m.f(s, 'INCAR')).get('NELM'), 60) < 150:
                 tag(STEP_DIR[s], 'NELM', 150)
             if STEP_DIR[s] in changed:
-                say('%s: %s -> ALGO = Normal%s' % (s, cls_of[s], ', more bands' if cls_of[s] == 'nscf_diverged'
-                                                    and s != 'lobster' else ''))
+                say('%s: %s -> ALGO = %s%s' % (s, cls_of[s], algo, more))
     # stash old outputs of every redone step
     for s in redo:
         if s == 'lobster' and binary_only:
