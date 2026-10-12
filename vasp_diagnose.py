@@ -110,7 +110,7 @@ PAT = [   # (class, regex) -- first match wins; searched in the job logs (+ OUTC
 # VASP prints these and carries on - they are not the cause of a failure:
 #   'Sub-Space-Matrix is not hermitian' (warning), 'The number of bands has changed ...
 #   orbitals not found in the WAVECAR will be initialized ...' (info)
-STOPPED = r'hard stop encountered|soft stop encountered'   # STOPCAR of the walltime guard
+STOPPED = r'(hard|soft) stop (encountered|was set)'        # STOPCAR of the walltime guard (log / OUTCAR)
 ERRLINE = re.compile(r'error|bad news|severe|abort|killed|memory|quota|segmentation|'
                      r'cannot|not found|exit code|fatal|warning', re.I)
 ERRSKIP = re.compile(r'IBZKPT|Often results|\(SIGTERM\)|^Image|Unknown  |Stack trace|'
@@ -418,7 +418,7 @@ def classify(m, step, rec, provisional, point=None):
     if state.startswith('OUT_OF_ME'):
         return 'oom', errs[:6]
     # VASP stopped by the STOPCAR the walltime guard writes before the limit
-    stopped = re.search(STOPPED, read(outcar, tail=200000), re.I)
+    stopped = re.search(STOPPED, text + read(outcar, tail=200000), re.I)
     if provisional in ('relax_unconv', 'scf_nelm', 'nscf_unconv', 'nscf_diverged', 'lobster_fail') \
             and not stopped:
         return provisional, errs[:6]
