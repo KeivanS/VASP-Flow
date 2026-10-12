@@ -1,5 +1,5 @@
 #!/bin/bash
-# Key INCAR tags, end of OSZICAR and (relax) forces/pressure of each step of a material.
+# Key INCAR tags, last 10 OSZICAR lines and (relax) forces/pressure of each step of a material.
 #   bash show_material_status.sh mp-20352                 # every run under /scratch/$USER/VASP-Flow
 #   bash show_material_status.sh mp-20352 lobster bands   # only these steps
 #   bash show_material_status.sh /path/to/materials/mp-20352
@@ -17,7 +17,7 @@ for m in $dirs; do
         [ -f "$m/$sd/OUTCAR" ] || st="no OUTCAR"
         echo "== $sd ($st)"
         awk '/^ *(ALGO|KPAR|NCORE|NBANDS|NELM|NSW|EDIFFG?|ISYM|ICHARG|ISTART|LDAU) *=/ {sub(/!.*/, ""); printf "   %s\n", $0}' "$m/$sd/INCAR"
-        tail -3 "$m/$sd/OSZICAR" 2>/dev/null | sed 's/^/   /'
+        tail -10 "$m/$sd/OSZICAR" 2>/dev/null | sed 's/^/   /'
         if [ $sd = 01_relax ] && [ -f "$m/$sd/OUTCAR" ]; then
             grep -q "reached required accuracy" "$m/$sd/OUTCAR" && echo "   relax converged" || echo "   relax NOT converged"
             awk '/FORCES: max atom/ {f=$0} /external pressure/ {p=$0} END {print "  " f; print "  " p}' "$m/$sd/OUTCAR"
