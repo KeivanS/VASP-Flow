@@ -13,6 +13,16 @@ bash ../ht_tools/audit_run.sh [BACKUP ...] # read-only: run / converged / extrac
 bash ../ht_tools/resume_in_scratch.sh      # dry run; --apply copies the run to /scratch and resubmits unfinished materials
 ```
 
+**Quick look-up tools** (read-only except `skip_fixes.sh`; run from anywhere — an ID is searched in `/scratch/$USER/VASP-Flow/*/materials/`, a path is used as given):
+
+```bash
+bash ht_tools/show_problems.sh diag_round3            # broken materials, what each fix changes, which fixes will run
+bash ht_tools/skip_fixes.sh diag_round3 HT_1-500__mp-6430 HT_1-500__mp-7889   # don't submit these (--undo puts them back)
+bash ht_tools/show_material_status.sh mp-20352 [lobster ...]   # INCAR key tags, OSZICAR tail, relax forces/pressure per step
+bash ht_tools/show_job_history.sh mp-20352 [mp-6430 ...] [-S 2026-10-01]   # sacct (state, elapsed, limit) + queue
+bash ht_tools/show_job_log.sh mp-20352 lobster [LINES] [JOBID]   # end of the newest .out/.err of that step
+```
+
 | Script | Purpose |
 |---|---|
 | `reset_stale.sh` | Before resubmitting: (A) relax never reached "required accuracy" but SCF/bands/LOBSTER already ran on that geometry — restart the relax from the newest complete CONTCAR and redo the downstream steps; (B) LOBSTER curve files truncated — redo `08_lobster`; (C) blank `03_bands/EIGENVAL` — redo bands. Moves invalid outputs to `<material>/stale_<date>/` (nothing deleted); skips materials with queued jobs and prints the `scancel` line for stale relax-only jobs. |
