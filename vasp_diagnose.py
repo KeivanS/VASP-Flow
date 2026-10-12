@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vasp-doctor.py -- diagnose VASP-Flow runs and write fix-and-resubmit scripts.
+"""vasp_diagnose.py -- diagnose VASP-Flow runs and write fix-and-resubmit scripts.
 
 Give it a file that lists folders, one per line ('#' starts a comment).  A line can be
   * one material / project folder: it has some of 01_relax 02_scf 03_bands 04_dos
@@ -37,7 +37,7 @@ When the relax or the SCF is redone, every later step is redone too; otherwise o
 broken later steps.  Old outputs of every redone step are moved to <folder>/stale_<date>/
 (nothing is deleted).
 
-Writes into --out (default ./vasp_doctor_<date>/):
+Writes into --out (default ./vasp_diagnose_<date>/):
   diagnosis.tsv            one line per folder: layout, per-step status, planned fix
   fix/<label>.sh           per folder: guard (no queued jobs, outputs unchanged since the
                            diagnosis), the fixes, then the resubmission chain
@@ -48,9 +48,9 @@ Layouts: ht (materials/<id>/job.sbatch <step>, ht-semimetals), slurm (vasp-agent
 <step>/run.sh with #SBATCH), local (vasp-agent: <step>/run.sh run in the foreground).
 
 Usage:
-  ./vasp-doctor.py folders.txt                       diagnose, write the scripts
-  less vasp_doctor_*/diagnosis.tsv vasp_doctor_*/fix/<label>.sh     review
-  nohup bash vasp_doctor_*/submit_all_fixes.sh > fixes.log 2>&1 &
+  ./vasp_diagnose.py folders.txt                       diagnose, write the scripts
+  less vasp_diagnose_*/diagnosis.tsv vasp_diagnose_*/fix/<label>.sh     review
+  nohup bash vasp_diagnose_*/submit_all_fixes.sh > fixes.log 2>&1 &
 Options: --out DIR  --since YYYY-MM-DD (sacct window, default 14 days)  --kpar-max 8
          --spill-max 5  --retry-unknown  --max-queued 200
 """
@@ -584,7 +584,7 @@ def write_script(path, m, status, errs, redo, fix, extra, wall, out_dir):
     q = shlex.quote
     steps_txt = '  '.join('%s: %s' % (s, status[s]) for s in m.steps)
     body = ['#!/bin/bash',
-            '# vasp-doctor fix for %s' % m.label,
+            '# vasp_diagnose fix for %s' % m.label,
             '# folder : %s   (layout: %s)' % (m.path, m.layout),
             '# diagnosed %s:  %s' % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), steps_txt)]
     for s in m.steps:
@@ -600,7 +600,7 @@ def write_script(path, m, status, errs, redo, fix, extra, wall, out_dir):
     files = fingerprint_files(m)
     body += ['FP=""; for f in %s; do FP="$FP $f:$(stat -c %%Y "$f" 2>/dev/null || echo none)"; done' % ' '.join(files),
              'if [ "${FP# }" != %s ]; then echo "-- $LABEL: outputs changed since the diagnosis - '
-             'run vasp-doctor.py again"; exit 0; fi' % q(fingerprint(m)),
+             'run vasp_diagnose.py again"; exit 0; fi' % q(fingerprint(m)),
              'echo "== $LABEL"', HELPERS.rstrip('\n')]
     body += fix
     body += submit_lines(m, redo, extra, wall)
@@ -648,7 +648,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument('folders', help='file with one folder per line')
-    ap.add_argument('--out', default='vasp_doctor_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'))
+    ap.add_argument('--out', default='vasp_diagnose_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'))
     ap.add_argument('--since', default=(datetime.date.today() - datetime.timedelta(days=14)).isoformat())
     ap.add_argument('--kpar-max', type=int, default=8)
     ap.add_argument('--spill-max', type=float, default=5.0)
@@ -715,7 +715,7 @@ def main():
             fh.write('\t'.join(r) + '\n')
     master = os.path.join(out_dir, 'submit_all_fixes.sh')
     with open(master, 'w') as fh:
-        fh.write('#!/bin/bash\n# Runs every fix script written by vasp-doctor.py; safe to re-run\n'
+        fh.write('#!/bin/bash\n# Runs every fix script written by vasp_diagnose.py; safe to re-run\n'
                  '# (done ones are skipped).  Start it under nohup.  MAX_QUEUED=%d by default.\n'
                  'OUT=%s\nMAX_QUEUED=${MAX_QUEUED:-%d}\n'
                  'queued() { squeue -h -u "${USER:-$(whoami)}" 2>/dev/null | wc -l | tr -d " "; }\n'
