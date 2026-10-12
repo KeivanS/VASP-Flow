@@ -11,6 +11,7 @@ vasp-gui.py                  # Flask server + embedded HTML/CSS/JS SPA (main ent
 vasp-agent.py                # Workflow orchestration agent (CLI and library)
 vasp-agent-slurm.py          # SLURM edition: SBATCH scripts + dependency-chained submission
 ht-mp-scf.py                 # High-throughput driver: MP primitive cells → SCF + ELF batch
+vasp-doctor.py               # Cluster-side: diagnose runs in listed folders → per-folder fix+resubmit scripts + submit_all_fixes.sh
 modules/
   instruction_parser.py      # Parses natural language instructions → settings dict
   vasp_input_generator.py    # Generates INCAR, KPOINTS, POTCAR, run.sh per step
