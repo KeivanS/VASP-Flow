@@ -31,8 +31,8 @@ the ENCUT and k-point tests must have finished with a converged SCF.
   symmetry      symmetry-operation errors                SYMPREC = 1E-4 (ISYM = 0 if already set)
   edddav        ZHEGV / EDDDAV errors                    SCF: ALGO = All; relax: ALGO = Normal, then All;
                                                           NSCF: as nscf_diverged
-  nscf_diverged NSCF energies |E| > 1e6                  NBANDS >= 1.3 x SCF NBANDS; ALGO Davidson
-                                                          (Normal/default) -> VeryFast, Fast -> Normal
+  nscf_diverged NSCF energies |E| > 1e6                  NBANDS >= 1.3 x SCF NBANDS; ALGO Normal
+                                                          (Davidson, default) -> Fast -> VeryFast
   relax_unconv  relax finished without convergence       continue from CONTCAR
   scf_nelm      SCF hit NELM                             ALGO = All (NELM >= 150), later steps redone
   nscf_unconv   bands/DOS hit NELM                       ALGO as nscf_diverged, NELM >= 150
@@ -672,10 +672,12 @@ def plan(m, status, cls_of, recs, args):
                     if new > cur:
                         tag(STEP_DIR[s], 'NBANDS', new)
                         more = ', NBANDS %d' % new
-            # Davidson (Normal, VASP's default) -> RMM-DIIS (VeryFast): with a fixed density
-            # Davidson can run away (Ba2YReO6, Sr2YReO6: |E| -> 1e10) where RMM-DIIS converges
+            # fixed-density eigensolver ladder: Davidson (Normal, VASP's default) -> Fast
+            # (Davidson start, then RMM-DIIS) -> VeryFast (RMM-DIIS); then held for review.
+            # With a fixed density pure Davidson can run away (Ba2YReO6, Sr2YReO6: |E| -> 1e10);
+            # ALGO = All (CG) crashes with ICHARG = 11.
             cur = incar(m.f(s, 'INCAR')).get('ALGO', 'Normal').strip().upper()
-            algo = 'Normal' if cur.startswith('F') else 'VeryFast'
+            algo = 'VeryFast' if cur.startswith(('F', 'V')) else 'Fast'
             tag(STEP_DIR[s], 'ALGO', algo)
             if to_int(incar(m.f(s, 'INCAR')).get('NELM'), 60) < 150:
                 tag(STEP_DIR[s], 'NELM', 150)

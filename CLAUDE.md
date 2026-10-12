@@ -86,6 +86,8 @@ Regex-based extraction from natural language instruction files. Supported parame
 
 **LOBSTER step (`08_lobster`):** triggered by a `lobster`/`COHP`/`COBI`/`COOP`/`bonding analysis` task. `generate_lobster_input()` emits a symmetry-off NSCF (`ISYM=0`, `ICHARG=11` reading `02_scf/CHGCAR`, `NBANDS` ≥ number of LOBSTER basis functions via `_lobster_nbands()`, `LMAXMIX` from `_lmaxmix()`, `LWAVE=.TRUE.`); `run.sh` then builds `lobsterin` from the DOSCAR energy window and runs the lobster binary (`$LOBSTER_BIN`, default `lobster-5.1.0-OSX`). Aggregate per-bond ICOHP/ICOBI/ICOOP + antibonding integrals into a CSV with `lobster_postprocess.py` (reads `08_lobster/`, falling back to `02_scf/`).
 
+**ALGO:** relax/SCF `ALGO = Normal` (Davidson); the fixed-density steps bands/DOS/LOBSTER `ALGO = Fast` via `_add_nscf_algo()` (pure Davidson ran away to |E|~1e10 eV for Ba2YReO6/Sr2YReO6 bands; `ALGO = All` crashes with ICHARG=11); a functional's own ALGO (HSE06 Damped) and INCAR blocks win.
+
 **Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
 
 **MAGMOM:** `MAGMOM:` takes a uniform number (negative allowed), per-element values (`Fe=4.0, O=0.6`, unlisted elements 0) or a per-atom list (`2*4.0 2*-4.0`); any `MAGMOM` line turns spin polarisation on. Parsed into `magmom` ({kind, value/values}); resolved to one number per atom by `VASPInputGenerator._magmom_values()` (raises ValueError on a length/element mismatch). With SOC the values are rotated onto the requested x/y/z direction (3N `MAGMOM` components); `ISPIN` is not written.

@@ -22,9 +22,11 @@ HERE="$(cd "${HT_DIR:-$PWD}" && pwd)"
 if [ "${1:-}" = "--report" ]; then
     shift
     printf '%-34s %-9s %-6s %5s %16s %16s  %s\n' test status EDIFF steps first_E last_E max_abs_E
+    Q=" $(squeue -h -u "${USER:-$(whoami)}" -o %j 2>/dev/null | tr '\n' ' ') "
     for d in "$@"; do
         [ -d "$d" ] || continue
         st=running; [ -f "$d/OUTCAR" ] || st=queued
+        case "$Q" in *" test_$(basename "$d") "*) ;; *) [ -f "$d/OUTCAR" ] && st=ended ;; esac
         grep -q "General timing and accounting" "$d/OUTCAR" 2>/dev/null && st=finished
         grep -qE "DUE TO TIME LIMIT" "$d"/slurm-*.out 2>/dev/null && st=timeout
         ed=no; grep -q "aborting loop because EDIFF is reached" "$d/OUTCAR" 2>/dev/null && ed=yes

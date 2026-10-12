@@ -513,7 +513,7 @@ oom & out of memory (\cmd{insufficient virtual memory}, \cmd{Cannot allocate mem
 timeout & the job hit its time limit & walltime doubled; a relax continues from its last structure \\
 scf\_nelm & SCF stopped at NELM without converging & \cmd{ALGO = All}, \cmd{NELM} $\geq 150$ \\
 nscf\_diverged & bands/DOS/LOBSTER energies exploded & 30\% more bands than the SCF (not for LOBSTER);
-  Davidson (\cmd{ALGO = Normal}, VASP's default) $\to$ RMM-DIIS (\cmd{ALGO = VeryFast}), \cmd{Fast} $\to$ \cmd{Normal};
+  eigensolver \cmd{Normal} (Davidson, VASP's default) $\to$ \cmd{Fast} $\to$ \cmd{VeryFast} (RMM-DIIS), then held;
   \cmd{NELM} $\geq 150$ \\
 nscf\_unconv & bands/DOS stopped at NELM & \cmd{ALGO} as for nscf\_diverged, \cmd{NELM} $\geq 150$ \\
 relax\_unconv & relax ended without reaching the force criterion & continues from CONTCAR (or the last XDATCAR frame) \\

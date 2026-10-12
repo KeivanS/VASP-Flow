@@ -1928,6 +1928,17 @@ echo "      Data:  band.yaml  FORCE_SETS"
                     "ALGO = Damped", "TIME = 0.4"]
         return []   # PBE is the default — no tag needed
 
+    NSCF_ALGO = ("ALGO = Fast   ! Davidson start, then RMM-DIIS: with a fixed density pure "
+                 "Davidson can run away (Ba2YReO6, Sr2YReO6)")
+
+    def _add_nscf_algo(self, lines: list, fl: list) -> list:
+        """ALGO for a fixed-density run (bands/DOS/LOBSTER), after NELM; a functional's
+        own ALGO (HSE06: Damped) wins.  ALGO = All (CG) is not possible with ICHARG = 11."""
+        if any(l.startswith('ALGO') for l in fl):
+            return lines
+        i = next((k for k, l in enumerate(lines) if l.startswith('NELM')), len(lines) - 1)
+        return lines[:i + 1] + [self.NSCF_ALGO] + lines[i + 1:]
+
     def _soc_lines(self) -> list:
         if not self.instructions.get('soc', False):
             return []
@@ -2316,6 +2327,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "",
         ]
         fl = self._functional_lines()
+        lines = self._add_nscf_algo(lines, fl)
         if fl: lines += fl + [""]
         lines += self._mag_lines()
         lines += self._soc_lines()
@@ -2349,6 +2361,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "",
         ]
         fl = self._functional_lines()
+        lines = self._add_nscf_algo(lines, fl)
         if fl: lines += fl + [""]
         lines += self._mag_lines()
         lines += self._soc_lines()
@@ -2379,7 +2392,6 @@ echo "      Data:  band.yaml  FORCE_SETS"
             f"ENCUT = {encut}",
             "EDIFF = 1E-6",
             "NELM = 100",
-            "ALGO = Normal",
         ]
         if nbands:
             lines.append(f"NBANDS = {nbands}   # >= number of LOBSTER local basis functions")
@@ -2404,6 +2416,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "",
         ]
         fl = self._functional_lines()
+        lines = self._add_nscf_algo(lines, fl)
         if fl:
             lines += fl + [""]
         lines += self._mag_lines()
