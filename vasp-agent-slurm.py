@@ -492,7 +492,8 @@ fi'''
             with open(script, 'w') as f:
                 f.write(self._sbatch_header(f"{proj}_kconv",
                                             time_override=self.slurm_time))
-                f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+                # sbatch runs a spooled copy of this script, so $0 does not locate it
+                f.write(f'HERE="{os.path.abspath(d)}"\ncd "$HERE"\n')
                 # Pure MPI: see _run_sh_preamble. A login shell exporting
                 # OMP_NUM_THREADS=N would otherwise give ranks x N threads.
                 f.write('export OMP_NUM_THREADS=${VASP_OMP_NUM_THREADS:-1}\n\n')
@@ -574,7 +575,8 @@ fi'''
             with open(script, 'w') as f:
                 f.write(self._sbatch_header(f"{proj}_econv",
                                             time_override=self.slurm_time))
-                f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
+                # sbatch runs a spooled copy of this script, so $0 does not locate it
+                f.write(f'HERE="{os.path.abspath(d)}"\ncd "$HERE"\n')
                 # Pure MPI: see _run_sh_preamble. A login shell exporting
                 # OMP_NUM_THREADS=N would otherwise give ranks x N threads.
                 f.write('export OMP_NUM_THREADS=${VASP_OMP_NUM_THREADS:-1}\n\n')

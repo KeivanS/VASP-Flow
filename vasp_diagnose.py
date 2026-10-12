@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """vasp_diagnose.py -- diagnose VASP-Flow runs and write fix-and-resubmit scripts.
 
-Give it a file that lists folders, one per line ('#' starts a comment).  A line can be
-  * one material / project folder: it has some of 01_relax 02_scf 03_bands 04_dos
-    06_dfpt 08_lobster;
+Give it a list file, one entry per line ('#' starts a comment; only the first word
+counts).  Typically this is the *_list.txt of material IDs the runs were made from.
+An entry can be
+  * a material ID (mp-149, ...): looked up under the list file's folder (and --root):
+    <root>/<id>, <root>/*/<id>, <root>/*/materials/<id>;
+  * one material / project folder: it has some of 00_convergence 01_relax 02_scf
+    03_bands 04_dos 06_dfpt 08_lobster;
   * a highthroughput folder (has materials/): every materials/<id> is checked;
   * any folder whose sub-folders are material folders (e.g. an ht-mp-scf run).
+Relative paths are relative to the list file's folder.  A run folder holding a
+MOVED_TO_SCRATCH.txt note ("continues in <dir>") is followed to <dir>.
 
 Diagnosis is read-only.  For every step it decides ok / problem from OUTCAR, OSZICAR,
-lobster.out and the SLURM logs (+ sacct when available):
+lobster.out and the SLURM logs (+ sacct when available).  00_convergence: every point of
+the ENCUT and k-point tests must have finished with a converged SCF.
 
   quota         disk quota / "error during write"        resubmit unchanged (check space first)
   oom           insufficient virtual memory, UCX "Cannot allocate memory", OUT_OF_MEMORY
@@ -32,6 +39,13 @@ lobster.out and the SLURM logs (+ sacct when available):
   unknown       anything else                            script written, but only submitted with
                                                           --retry-unknown (error lines in its header)
   spilling_high LOBSTER finished, charge spilling > --spill-max %   reported only
+  missing       a listed material ID was not found         reported only
+  phase2_pending  convergence done, production steps never started: run
+                submit_calculations.sh / run_calculations.sh yourself     reported only
+
+00_convergence: broken points are moved aside, the test INCAR gets the fix of the class
+(ALGO/NELM, KPAR, SYMPREC, walltime) and the test's run.sh is resubmitted - it skips
+the points that are already done.  The production steps are not touched for it.
 
 When the relax or the SCF is redone, every later step is redone too; otherwise only the
 broken later steps.  Old outputs of every redone step are moved to <folder>/stale_<date>/
@@ -51,8 +65,8 @@ Usage:
   ./vasp_diagnose.py folders.txt                       diagnose, write the scripts
   less vasp_diagnose_*/diagnosis.tsv vasp_diagnose_*/fix/<label>.sh     review
   nohup bash vasp_diagnose_*/submit_all_fixes.sh > fixes.log 2>&1 &
-Options: --out DIR  --since YYYY-MM-DD (sacct window, default 14 days)  --kpar-max 8
-         --spill-max 5  --retry-unknown  --max-queued 200
+Options: --out DIR  --root DIR (more places to look up IDs)  --since YYYY-MM-DD (sacct
+         window, default 14 days)  --kpar-max 8  --spill-max 5  --retry-unknown  --max-queued 200
 """
 import argparse
 import datetime
@@ -69,9 +83,11 @@ STEPS = [('01_relax', 'relax'), ('02_scf', 'scf'), ('03_bands', 'bands'),
          ('04_dos', 'dos'), ('06_dfpt', 'dfpt'), ('08_lobster', 'lobster')]
 STEP_DIR = dict((s, d) for d, s in STEPS)
 ORDER = [s for _, s in STEPS]
-UNHANDLED = ('00_convergence', '05_wannier', '07_phonons')
+UNHANDLED = ('05_wannier', '07_phonons')
+CONV_DIR = '00_convergence'
+CONV_TESTS = ('encut', 'kpoints')
 NSCF = ('bands', 'dos', 'lobster')
-DEFAULT_TIME = {'relax': '08:00:00', 'scf': '04:00:00', 'bands': '02:00:00',
+DEFAULT_TIME = {'conv': '08:00:00', 'relax': '08:00:00', 'scf': '04:00:00', 'bands': '02:00:00',
                 'dos': '02:00:00', 'dfpt': '08:00:00', 'lobster': '04:00:00'}
 HT_TIME_KEY = {'relax': 'TIME_RELAX', 'scf': 'TIME_SCF', 'bands': 'TIME_BANDS',
                'lobster': 'TIME_LOBSTER'}
@@ -191,6 +207,11 @@ def chg_complete(path):
         return False
 
 
+def sbatch_jobname(path):
+    m = re.search(r'#SBATCH\s+(?:--job-name=|-J\s*)(\S+)', read(path))
+    return m.group(1) if m else None
+
+
 def run(cmd):
     try:
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -207,13 +228,15 @@ class Material(object):
         self.name = os.path.basename(self.path)
         self.steps = [s for d, s in STEPS if os.path.isdir(os.path.join(self.path, d))]
         self.unhandled = [d for d in UNHANDLED if os.path.isdir(os.path.join(self.path, d))]
+        self.conv = [t for t in CONV_TESTS if os.path.isfile(os.path.join(self.path, CONV_DIR, t, 'run.sh'))]
         parent = os.path.dirname(self.path)
         if os.path.isfile(os.path.join(self.path, 'job.sbatch')):
             self.layout = 'ht'
             self.root = os.path.dirname(parent) if os.path.basename(parent) == 'materials' else parent
             self.label = os.path.basename(self.root) + '__' + self.name
         else:
-            runs = [read(self.f(s, 'run.sh')) for s in self.steps]
+            runs = [read(self.f(s, 'run.sh')) for s in self.steps] + \
+                   [read(self.conv_f(t, 'run.sh')) for t in self.conv]
             self.layout = 'slurm' if any('#SBATCH' in r for r in runs) else 'local'
             self.root = parent
             self.label = os.path.basename(parent) + '__' + self.name
@@ -222,8 +245,26 @@ class Material(object):
     def f(self, step, name):
         return os.path.join(self.path, STEP_DIR[step], name)
 
+    def conv_f(self, test, name=''):
+        return os.path.join(self.path, CONV_DIR, test, name)
+
     def jobname(self, step):
+        """Job name of a step (or of a convergence test 'conv:<test>')."""
+        if step.startswith('conv:'):
+            return sbatch_jobname(self.conv_f(step[5:], 'run.sh')) or '%s_%sconv' % (self.name, step[5])
+        if self.layout != 'ht':
+            jn = sbatch_jobname(self.f(step, 'run.sh'))
+            if jn:
+                return jn
         return '%s_%s' % (self.name, step)
+
+    def jobnames(self):
+        return set([self.jobname(s) for s in self.steps] + [self.jobname('conv:' + t) for t in self.conv])
+
+    def queued(self, queue):
+        if self.layout == 'ht' and any(j.startswith(self.name + '_') for j in queue):
+            return True
+        return bool(self.jobnames() & queue)
 
     def _ht_env(self):
         env = {}
@@ -234,17 +275,23 @@ class Material(object):
         return env
 
     def walltime(self, step):
+        if step.startswith('conv:'):
+            m = re.search(r'#SBATCH\s+(?:--time=|-t\s*)(\S+)', read(self.conv_f(step[5:], 'run.sh')))
+            return m.group(1) if m else DEFAULT_TIME['conv']
         if self.layout == 'ht':
             return self.env.get(HT_TIME_KEY.get(step, ''), DEFAULT_TIME[step])
         m = re.search(r'#SBATCH\s+(?:--time=|-t\s*)(\S+)', read(self.f(step, 'run.sh')))
         return m.group(1) if m else DEFAULT_TIME[step]
 
-    def ranks(self, step):
-        m = re.search(r'running on\s+(\d+)\s+total cores', read(self.f(step, 'OUTCAR'), head=20000))
+    def ranks(self, step, outcar=None, script=None):
+        m = re.search(r'running on\s+(\d+)\s+total cores', read(outcar or self.f(step, 'OUTCAR'), head=20000))
         if m:
             return int(m.group(1))
-        script = read(os.path.join(self.path, 'job.sbatch')) if self.layout == 'ht' \
-            else read(self.f(step, 'run.sh'))
+        if script:
+            script = read(script)
+        else:
+            script = read(os.path.join(self.path, 'job.sbatch')) if self.layout == 'ht' \
+                else read(self.f(step, 'run.sh'))
         nodes = re.search(r'#SBATCH\s+--nodes=(\d+)', script)
         tpn = re.search(r'#SBATCH\s+--ntasks-per-node=(\d+)', script)
         nt = re.search(r'#SBATCH\s+(?:--ntasks=|-n\s*)(\d+)', script)
@@ -255,7 +302,7 @@ class Material(object):
     def logs(self, step, rec):
         """Text of the newest job logs of this step (tails)."""
         files = []
-        if self.layout == 'ht':
+        if self.layout == 'ht' and step in STEP_DIR:
             if rec:
                 files = [os.path.join(self.path, '%s-%s-%s.%s' % (self.name, self.jobname(step), rec['id'], e))
                          for e in ('err', 'out')]
@@ -265,15 +312,14 @@ class Material(object):
                 if cand:
                     files = [cand[-1][:-4] + '.err', cand[-1]]
         elif rec:
-            for d in (self.path, os.path.join(self.path, STEP_DIR[step]), self.root):
+            sd = self.conv_f(step[5:]) if step.startswith('conv:') else os.path.join(self.path, STEP_DIR[step])
+            for d in (self.path, sd, self.root):
                 for e in ('err', 'out'):
                     p = os.path.join(d, 'slurm-%s.%s' % (rec['id'], e))
                     if os.path.isfile(p):
                         files.append(p)
-        for name in ('vasp.out',):
-            p = self.f(step, name)
-            if os.path.isfile(p):
-                files.append(p)
+        if step in STEP_DIR and os.path.isfile(self.f(step, 'vasp.out')):
+            files.append(self.f(step, 'vasp.out'))
         return '\n'.join(read(x, tail=400000) for x in files if os.path.isfile(x))
 
 
@@ -336,10 +382,14 @@ def step_ok(m, step):
     return 'ok' if converged(m, step) else 'nscf_unconv'
 
 
-def classify(m, step, rec, provisional):
-    """Problem class + up to 6 error lines for a step that is not ok."""
+def classify(m, step, rec, provisional, point=None):
+    """Problem class + up to 6 error lines for a step that is not ok (point: one
+    convergence-test folder, whose vasp.out/OUTCAR are read instead of the step's)."""
     log = m.logs(step, rec)
-    text = log + '\n' + read(m.f(step, 'OUTCAR'), tail=20000)
+    outcar = os.path.join(point, 'OUTCAR') if point else m.f(step, 'OUTCAR')
+    if point:
+        log += '\n' + read(os.path.join(point, 'vasp.out'), tail=200000)
+    text = log + '\n' + read(outcar, tail=20000)
     errs = []
     seen = set()
     for line in text.splitlines():
@@ -364,9 +414,117 @@ def classify(m, step, rec, provisional):
         return 'nscf_diverged', errs[:6]
     if provisional:
         return provisional, errs[:6]
-    if not os.path.isfile(m.f(step, 'OUTCAR')) and not log.strip():
+    if not os.path.isfile(outcar) and not log.strip():
         return 'not_run', errs[:6]
     return 'unknown', errs[:6]
+
+
+# ── 00_convergence ───────────────────────────────────────────────────────────
+def conv_points(m, test):
+    """Point folders the test's run.sh will make (encut_<E>, <N1>x<N2>x<N3>)."""
+    tdir = m.conv_f(test)
+    script = read(os.path.join(tdir, 'run.sh'))
+    pts = []
+    if test == 'encut':
+        r = re.search(r'for EC in \$\(seq (\d+) (\d+) (\d+)\)', script)
+        if r:
+            a, st, b = (int(x) for x in r.groups())
+            pts = ['encut_%d' % v for v in range(a, b + 1, max(st, 1))]
+    else:
+        pts = re.findall(r'vf_done "(\d+x\d+x\d+)"', script)
+        r = re.search(r'for NX in \$\(seq (\d+) (\d+) (\d+)\)', script)
+        if not pts and r:
+            a, st, b = (int(x) for x in r.groups())
+            for nx in range(a, b + 1, max(st, 1)):
+                found = sorted(glob.glob(os.path.join(tdir, '%dx%dx*' % (nx, nx))))
+                pts.append(os.path.basename(found[0]) if found else '%dx%dx?' % (nx, nx))
+    if not pts:
+        pts = sorted(d for d in os.listdir(tdir) if os.path.isfile(os.path.join(tdir, d, 'INCAR')))
+    return pts
+
+
+def conv_fp_files(m):
+    return [os.path.join(CONV_DIR, t, p, 'OUTCAR') for t in m.conv for p in conv_points(m, t) if '?' not in p]
+
+
+def conv_check(m, recs):
+    """-> {test: (status, class, errs, bad points)} for the tests that are not ok."""
+    bad = {}
+    for t in m.conv:
+        key = 'conv:' + t
+        rec = recs.get(m.jobname(key))
+        broken, nelm = [], []
+        for p in conv_points(m, t):
+            out = os.path.join(m.conv_f(t), p, 'OUTCAR')
+            if contains(out, 'General timing and accounting'):
+                if not contains(out, 'aborting loop because EDIFF is reached'):
+                    nelm.append(p)
+            else:
+                broken.append(p)
+        if not broken and not nelm:
+            continue
+        if broken:
+            first = os.path.join(m.conv_f(t), broken[0].replace('?', '*'))
+            first = (glob.glob(first) or [first])[0]
+            cls, errs = classify(m, key, rec, 'scf_nelm' if nelm else None, point=first)
+        else:
+            cls, errs = 'scf_nelm', []
+        bad[t] = ('%s (%d of %d points)' % (cls, len(broken) + len(nelm), len(conv_points(m, t))),
+                  cls, errs, broken + nelm, nelm)
+    return bad
+
+
+def conv_not_converged(m):
+    """Parameters choose_params.py could not converge in the tested range."""
+    txt = read(os.path.join(m.path, CONV_DIR, 'converged_params.txt'))
+    return re.findall(r'^(\w+)_CONVERGED\s*=\s*no', txt, re.M)
+
+
+def conv_plan(m, bad, recs, args):
+    """-> (bash fix lines, [(test, jobname, walltime, extra sbatch opts)])"""
+    lines, subs = [], []
+    for t, (_, cls, _, pts, nelm) in sorted(bad.items()):
+        key, d = 'conv:' + t, os.path.join(CONV_DIR, t)
+        tags = incar(m.conv_f(t, 'INCAR'))
+        wall, extra = m.walltime(key), []
+
+        def say(x):
+            lines.append('echo "  %s: %s"' % (d, x.replace('"', "'")))
+        if cls in ('scf_nelm', 'edddav') or nelm:
+            lines.append('set_tag %s/INCAR ALGO All' % d)
+            if to_int(tags.get('NELM'), 60) < 150:
+                lines.append('set_tag %s/INCAR NELM 150' % d)
+            say('ALGO = All, NELM >= 150 (%s)' % ('scf_nelm' if nelm else cls))
+        if cls == 'symmetry':
+            lines.append('set_tag %s/INCAR %s' % (d, 'ISYM 0' if 'SYMPREC' in tags else 'SYMPREC 1E-4'))
+            say('symmetry error -> %s' % ('ISYM = 0' if 'SYMPREC' in tags else 'SYMPREC = 1E-4'))
+        elif cls == 'oom':
+            pt = [os.path.join(m.conv_f(t), p, 'OUTCAR') for p in pts]
+            n = m.ranks(key, outcar=(pt or [None])[0], script=m.conv_f(t, 'run.sh'))
+            kp = to_int(tags.get('KPAR'))
+            if n and kp:
+                k = largest_divisor(n, min(args.kpar_max, kp))
+                if k < kp:
+                    lines.append('set_tag %s/INCAR KPAR %d' % (d, k))
+                    say('KPAR %d -> %d (%d ranks)' % (kp, k, n))
+            extra.append('--mem=0')
+        elif cls == 'timeout':
+            rec = recs.get(m.jobname(key))
+            try:
+                sec = to_sec(rec['limit'])
+            except (TypeError, KeyError, ValueError):
+                sec = None
+            wall = from_sec(2 * (sec or to_sec(wall)))
+            say('walltime %s' % wall)
+        for p in pts:
+            if '?' not in p:
+                lines.append('stash_file %s %s' % (d, p))
+        say('%d point(s) moved aside, run.sh redoes them and skips the finished ones' % len(pts))
+        if m.layout != 'local' and '#SBATCH' in read(m.conv_f(t, 'run.sh')):
+            # run.sh may locate itself with $0, which is SLURM's spool copy: pin it to its folder
+            lines.append('sed -i.bak -E "s|^HERE=.*|HERE=$D/%s; cd \\"\\$HERE\\"|" %s/run.sh && rm -f %s/run.sh.bak' % (d, d, d))
+        subs.append((t, m.jobname(key), wall, extra))
+    return lines, subs
 
 
 # ── the fix plan ─────────────────────────────────────────────────────────────
@@ -538,7 +696,7 @@ PYX
 
 
 def fingerprint_files(m):
-    files = [os.path.join(STEP_DIR[s], 'OUTCAR') for s in m.steps]
+    files = conv_fp_files(m) + [os.path.join(STEP_DIR[s], 'OUTCAR') for s in m.steps]
     if 'lobster' in m.steps:
         files.append('08_lobster/lobster.out')
     return files
@@ -550,6 +708,21 @@ def fingerprint(m):
         p = os.path.join(m.path, f)
         out.append('%s:%s' % (f, int(os.path.getmtime(p)) if os.path.exists(p) else 'none'))
     return ' '.join(out)
+
+
+def conv_submit_lines(m, subs):
+    q = shlex.quote
+    out = []
+    for t, jn, wall, extra in subs:
+        d = os.path.join(CONV_DIR, t)
+        if m.layout == 'local' or '#SBATCH' not in read(m.conv_f(t, 'run.sh')):
+            out.append('( cd %s && bash run.sh ) || { echo "!!! %s failed"; exit 1; }' % (d, d))
+            continue
+        v = 'J_conv_' + t
+        opts = ' '.join(['--parsable', '--job-name=%s' % q(jn), '--time=%s' % wall] + extra)
+        out.append('%s=$(cd %s && sbatch %s run.sh) || { echo "!!! sbatch %s failed"; exit 1; }' % (v, d, opts, d))
+        out.append('echo "  submitted %s = $%s (%s)"' % (d, v, wall))
+    return out
 
 
 def submit_lines(m, redo, extra, wall):
@@ -580,30 +753,32 @@ def submit_lines(m, redo, extra, wall):
     return out
 
 
-def write_script(path, m, status, errs, redo, fix, extra, wall, out_dir):
+def write_script(path, m, status, errs, redo_txt, fix, submit, out_dir):
     q = shlex.quote
-    steps_txt = '  '.join('%s: %s' % (s, status[s]) for s in m.steps)
+    steps_txt = '  '.join('%s: %s' % (s, status[s]) for s in status)
     body = ['#!/bin/bash',
             '# vasp_diagnose fix for %s' % m.label,
             '# folder : %s   (layout: %s)' % (m.path, m.layout),
             '# diagnosed %s:  %s' % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), steps_txt)]
-    for s in m.steps:
+    for s in status:
         for e in errs.get(s, []):
             body.append('#   %s | %s' % (s, e))
-    body += ['# resubmits: %s' % ' -> '.join(redo), 'set -u',
+    body += ['# resubmits: %s' % redo_txt, 'set -u',
              'D=%s; OUT=%s; LABEL=%s' % (q(m.path), q(out_dir), q(m.label)),
              'cd "$D" || exit 1',
              '# guard: nothing of this folder queued, outputs unchanged since the diagnosis']
     if m.layout != 'local':
-        body.append('if squeue -h -u "${USER:-$(whoami)}" -o "%%j" 2>/dev/null | grep -q "^%s_"; then '
-                    'echo "-- $LABEL: jobs queued, skipped"; exit 0; fi' % re.escape(m.name))
+        names = ['^%s_' % re.escape(m.name)] if m.layout == 'ht' else []
+        names += ['^%s$' % re.escape(j) for j in sorted(m.jobnames())]
+        body.append('if squeue -h -u "${USER:-$(whoami)}" -o "%%j" 2>/dev/null | grep -qE %s; then '
+                    'echo "-- $LABEL: jobs queued, skipped"; exit 0; fi' % q('|'.join(names)))
     files = fingerprint_files(m)
     body += ['FP=""; for f in %s; do FP="$FP $f:$(stat -c %%Y "$f" 2>/dev/null || echo none)"; done' % ' '.join(files),
              'if [ "${FP# }" != %s ]; then echo "-- $LABEL: outputs changed since the diagnosis - '
              'run vasp_diagnose.py again"; exit 0; fi' % q(fingerprint(m)),
              'echo "== $LABEL"', HELPERS.rstrip('\n')]
     body += fix
-    body += submit_lines(m, redo, extra, wall)
+    body += submit
     body += ['mkdir -p "$OUT/.submitted" && touch "$OUT/.submitted/$LABEL"', '']
     with open(path, 'w') as fh:
         fh.write('\n'.join(body))
@@ -612,22 +787,81 @@ def write_script(path, m, status, errs, redo, fix, extra, wall, out_dir):
 
 # ── collect folders ──────────────────────────────────────────────────────────
 def is_material(p):
-    return any(os.path.isdir(os.path.join(p, d)) for d, _ in STEPS)
+    return any(os.path.isdir(os.path.join(p, d)) for d, _ in STEPS) or \
+        any(os.path.isfile(os.path.join(p, CONV_DIR, t, 'run.sh')) for t in CONV_TESTS)
 
 
-def expand(line):
-    p = os.path.abspath(os.path.expanduser(line))
-    if not os.path.isdir(p):
-        print('?? not a folder: %s' % line)
-        return []
-    if is_material(p):
-        return [p]
-    base = os.path.join(p, 'materials') if os.path.isdir(os.path.join(p, 'materials')) else p
-    found = sorted(os.path.join(base, x) for x in os.listdir(base)
-                   if os.path.isdir(os.path.join(base, x)) and is_material(os.path.join(base, x)))
-    if not found:
-        print('?? no step folders (01_relax, 02_scf, ...) in %s' % line)
-    return found
+def moved(p):
+    """Follow a MOVED_TO_SCRATCH.txt note ('This run continues in <dir> ...')."""
+    r = re.search(r'continues in (\S+)', read(os.path.join(p, 'MOVED_TO_SCRATCH.txt')))
+    if r and os.path.isdir(r.group(1)):
+        print('-> %s was moved: using %s' % (p, r.group(1)))
+        return r.group(1)
+    return p
+
+
+def follow(p):
+    """Material folder p, redirected when its run (p or p/../..) was moved."""
+    parent = os.path.dirname(p)
+    if os.path.basename(parent) == 'materials':
+        root = moved(os.path.dirname(parent))
+        return os.path.join(root, 'materials', os.path.basename(p))
+    return moved(p)
+
+
+def expand(entry, base):
+    p = os.path.abspath(os.path.join(base, os.path.expanduser(entry)))
+    if os.path.isdir(p):
+        p = moved(p)
+        if is_material(p):
+            return [follow(p)]
+        mat = os.path.join(p, 'materials')
+        top = mat if os.path.isdir(mat) else p
+        found = sorted(os.path.join(top, x) for x in os.listdir(top)
+                       if os.path.isdir(os.path.join(top, x)) and is_material(os.path.join(top, x)))
+        if not found:
+            print('?? no step folders (00_convergence, 01_relax, 02_scf, ...) in %s' % entry)
+        return found
+    return None                                  # not a folder: a material ID
+
+
+_ROOT_CACHE = {}
+
+
+def find_id(mid, roots):
+    """All material folders called mid under the roots (one level, or */materials/)."""
+    hits = []
+    for r in roots:
+        if r not in _ROOT_CACHE:
+            subs = [os.path.join(r, x) for x in sorted(os.listdir(r)) if os.path.isdir(os.path.join(r, x))]
+            _ROOT_CACHE[r] = [moved(x) for x in subs]
+        for d in [r] + _ROOT_CACHE[r]:
+            for c in (os.path.join(d, mid), os.path.join(d, 'materials', mid)):
+                if os.path.isdir(c) and is_material(c) and os.path.realpath(c) not in \
+                        [os.path.realpath(h) for h in hits]:
+                    hits.append(c)
+    return hits
+
+
+def read_list(path, roots):
+    """-> (material folders, missing IDs)"""
+    base = os.path.dirname(os.path.abspath(path))
+    folders, missing = [], []
+    for line in open(path):
+        tok = line.split('#')[0].split()
+        if not tok:
+            continue
+        got = expand(tok[0], base)
+        if got is None:
+            got = find_id(tok[0], roots)
+            if not got:
+                missing.append(tok[0])
+            elif len(got) > 1:
+                print('!! %s found in %d runs, all checked: %s' % (tok[0], len(got), ' '.join(got)))
+        for g in got:
+            if g not in folders:
+                folders.append(g)
+    return folders, missing
 
 
 def sacct_records(since):
@@ -647,7 +881,9 @@ def sacct_records(since):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    ap.add_argument('folders', help='file with one folder per line')
+    ap.add_argument('list', help='list file: material IDs and/or folders, one per line')
+    ap.add_argument('--root', action='append', default=[],
+                    help='also look up material IDs under this folder (repeatable)')
     ap.add_argument('--out', default='vasp_diagnose_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'))
     ap.add_argument('--since', default=(datetime.date.today() - datetime.timedelta(days=14)).isoformat())
     ap.add_argument('--kpar-max', type=int, default=8)
@@ -656,24 +892,32 @@ def main():
     ap.add_argument('--max-queued', type=int, default=200)
     args = ap.parse_args()
 
-    folders = []
-    for line in open(args.folders):
-        line = line.split('#')[0].strip()
-        if line:
-            folders += expand(line)
+    roots = [os.path.dirname(os.path.abspath(args.list))] + \
+            [os.path.abspath(os.path.expanduser(r)) for r in args.root]
+    folders, missing = read_list(args.list, [r for r in roots if os.path.isdir(r)])
     out_dir = os.path.abspath(args.out)
     os.makedirs(os.path.join(out_dir, 'fix'), exist_ok=True)
     recs = sacct_records(args.since)
     queue = set(run(['squeue', '-h', '-u', os.environ.get('USER', ''), '-o', '%j']).split())
     rows, scripts, review = [], [], []
     count = Counter()
+    for mid in missing:
+        count['missing'] += 1
+        rows.append([mid, '-', '-', 'not found under ' + ' '.join(roots), 'missing', ''])
     for p in folders:
         m = Material(p)
         status, cls_of, errs, mrecs = {}, {}, {}, {}
-        if any(j.startswith(m.name + '_') for j in queue):
+        if m.queued(queue):
             count['queued'] += 1
-            rows.append([m.label, m.layout, m.path, 'queued', '', ''])
+            rows.append([m.label, m.layout, m.path, 'queued', 'queued', ''])
             continue
+        cbad = conv_check(m, recs)
+        for t in m.conv:
+            key = 'conv:' + t
+            if t in cbad:
+                status[key], cls_of[key], errs[key] = cbad[t][0], cbad[t][1], cbad[t][2]
+            else:
+                status[key] = 'ok'
         for s in m.steps:
             mrecs[s] = recs.get(m.jobname(s))
             st = step_ok(m, s)
@@ -687,27 +931,55 @@ def main():
             cls, e = classify(m, s, mrecs[s], st)
             status[s], cls_of[s], errs[s] = cls, cls, e
         bad = [s for s in m.steps if not status[s].startswith('ok')]
-        notes = ' '.join('%s:unchecked' % d for d in m.unhandled)
-        if not bad:
+        notes = ['%s:unchecked' % d for d in m.unhandled]
+        nc = conv_not_converged(m)
+        if nc:
+            notes.append('convergence not reached in the tested range: ' + ','.join(nc))
+        # two-phase project: production steps wait for the convergence results
+        phase2 = (m.conv and m.steps and all(status[s] == 'not_run' for s in m.steps) and
+                  any(os.path.isfile(os.path.join(m.path, f))
+                      for f in ('submit_calculations.sh', 'run_calculations.sh')))
+        if phase2:
+            bad = []
+            notes.append('production steps not started yet (phase 2)')
+        steps_txt = ' '.join(['%s:%s' % kv for kv in status.items()] + notes)
+        if not bad and not cbad:
             spill = [s for s in m.steps if 'spilling' in status[s]]
-            count['spilling_high' if spill else 'ok'] += 1
-            rows.append([m.label, m.layout, m.path, ' '.join('%s:%s' % (s, status[s]) for s in m.steps) + notes,
-                         'spilling_high' if spill else 'ok', ''])
+            act = 'phase2_pending' if phase2 else ('spilling_high' if spill else 'ok')
+            count[act] += 1
+            rows.append([m.label, m.layout, m.path, steps_txt, act, ''])
             continue
-        if m.layout == 'ht' and any(s not in HT_STEPS for s in bad):
-            notes += ' job.sbatch cannot run: ' + ','.join(s for s in bad if s not in HT_STEPS)
-        redo, fix, extra, wall, _ = plan(m, status, cls_of, mrecs, args)
-        if m.layout == 'ht':
-            redo = [s for s in redo if s in HT_STEPS]
-        main_cls = cls_of[bad[0]]
+        fix, submit, redo_txt = [], [], []
+        if cbad:
+            cfix, csubs = conv_plan(m, cbad, recs, args)
+            fix += cfix
+            submit += conv_submit_lines(m, csubs)
+            redo_txt += ['%s/%s' % (CONV_DIR, t) for t in sorted(cbad)]
+            if phase2:
+                submit.append('echo "  when the tests are done: check them and start the production steps '
+                              '(submit_calculations.sh / run_calculations.sh)"')
+        if bad:
+            if m.layout == 'ht' and any(s not in HT_STEPS for s in bad):
+                notes.append('job.sbatch cannot run: ' + ','.join(s for s in bad if s not in HT_STEPS))
+                steps_txt = ' '.join(['%s:%s' % kv for kv in status.items()] + notes)
+            redo, pfix, extra, wall, _ = plan(m, status, cls_of, mrecs, args)
+            if m.layout == 'ht':
+                redo = [s for s in redo if s in HT_STEPS]
+            fix += pfix
+            submit += submit_lines(m, redo, extra, wall)
+            redo_txt.append(' -> '.join(redo))
+            steps_txt = ' '.join(['%s:%s' % kv for kv in status.items()] + notes)
+        first = bad[0] if bad else 'conv:' + sorted(cbad)[0]
+        main_cls = cls_of[first]
         count[main_cls] += 1
         script = os.path.join(out_dir, 'fix', m.label + '.sh')
-        write_script(script, m, status, errs, redo, fix, extra, wall, out_dir)
-        unknown = any(cls_of.get(s) == 'unknown' for s in bad)
-        (review if unknown and not args.retry_unknown else scripts).append(script)
-        rows.append([m.label, m.layout, m.path, ' '.join('%s:%s' % (s, status[s]) for s in m.steps) + notes,
-                     ('REVIEW ' if unknown and not args.retry_unknown else '') + main_cls + ' -> ' + '>'.join(redo),
-                     script])
+        write_script(script, m, status, errs, ' ; '.join(x for x in redo_txt if x), fix, submit, out_dir)
+        unknown = any(c == 'unknown' for c in cls_of.values())
+        hold = unknown and not args.retry_unknown
+        (review if hold else scripts).append(script)
+        rows.append([m.label, m.layout, m.path, steps_txt,
+                     ('REVIEW ' if hold else '') + main_cls + ' -> ' + ' ; '.join(
+                         x.replace(' -> ', '>') for x in redo_txt if x), script])
 
     with open(os.path.join(out_dir, 'diagnosis.tsv'), 'w') as fh:
         fh.write('label\tlayout\tpath\tsteps\taction\tscript\n')
