@@ -115,8 +115,9 @@ open('POSCAR', 'w').write('\n'.join(head + ['Direct'] + lines[last + 1:last + 1 
 PYX
     )
 }
-walltime() {
+walltime() {     # env.sh is re-read, so editing TIME_* there affects the rest of a running submission
     local v; eval "v=\${T_$1:-}"
+    VASPFLOW_NO_CHECK=1 source ./env.sh >/dev/null 2>&1
     [ -n "$v" ] && { echo "$v"; return; }
     case "$1" in
         relax) echo "${TIME_RELAX:-08:00:00}" ;;  scf)     echo "${TIME_SCF:-04:00:00}" ;;
