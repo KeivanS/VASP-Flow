@@ -428,7 +428,7 @@ a \textbf{material name} --- any folder name: \cmd{mp-149}, \cmd{GaAs}, \cmd{Bi2
   the folders of that name in \emph{R}, \emph{R}\cmd{/*/} or \emph{R}\cmd{/*/materials/},
   where \emph{R} is the folder holding the list file, and each \opt{root} \\
 a \textbf{material or project folder} (has \cmd{00_convergence}, \cmd{01_relax}, \dots) & that folder \\
-a \textbf{high-throughput run folder} (has \cmd{materials/}) & every material in \cmd{materials/};
+a \textbf{run folder} with \cmd{materials/} & every material in \cmd{materials/};
   if the run has a \cmd{material_list.txt}, only the materials in it (other folders are named and skipped) \\
 any \textbf{other folder} & every sub-folder that is a material/project folder \\
 \bottomrule
@@ -500,9 +500,9 @@ shown in the script header but never taken as the cause.
 
 \subsection{Failure causes and their repairs}\label{sec:classes}
 
-\renewcommand{\arraystretch}{1.15}
+\renewcommand{\arraystretch}{1.05}
 \begin{center}
-\small
+\footnotesize
 \begin{tabularx}{\linewidth}{>{\ttfamily}l >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
 \toprule
 \thead \normalfont Name & Meaning & Repair \\
