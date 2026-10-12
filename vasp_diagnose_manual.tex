@@ -517,7 +517,7 @@ nscf\_unconv & bands/DOS stopped at NELM & \cmd{ALGO = Normal}, \cmd{NELM} $\geq
 relax\_unconv & relax ended without reaching the force criterion & continues from CONTCAR (or the last XDATCAR frame) \\
 zbrent & \cmd{ZBRENT: fatal error} in a relax & \cmd{IBRION} 2 $\to$ 1, continue \\
 symmetry & VASP symmetry errors & \cmd{SYMPREC = 1E-4} (\cmd{ISYM = 0} if SYMPREC was set) \\
-edddav & \cmd{EDDDAV}/\cmd{ZHEGV} errors & SCF: \cmd{ALGO = All}; relax: \cmd{ALGO = Normal}; bands etc.: as nscf\_diverged \\
+edddav & \cmd{EDDDAV}/\cmd{ZHEGV} errors & SCF: \cmd{ALGO = All}; relax: \cmd{ALGO = Normal}, if that fails again \cmd{ALGO = All}; bands etc.: as nscf\_diverged \\
 wavecar & WAVECAR does not fit the new run & WAVECAR moved aside, start from CHGCAR \\
 chgcar & CHGCAR unreadable or cut off & SCF started from scratch (\cmd{ICHARG = 2}) \\
 chgcar\_missing & a later step needs \cmd{02_scf/CHGCAR}, which is missing or cut off & SCF redone first \\

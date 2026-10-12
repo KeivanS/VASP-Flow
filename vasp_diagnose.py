@@ -29,7 +29,7 @@ the ENCUT and k-point tests must have finished with a converged SCF.
                                                           is redone for bands/DOS/LOBSTER/DFPT
   zbrent        ZBRENT fatal error in a relax            IBRION 2 -> 1, continue from CONTCAR
   symmetry      symmetry-operation errors                SYMPREC = 1E-4 (ISYM = 0 if already set)
-  edddav        ZHEGV / EDDDAV / sub-space errors        SCF: ALGO = All; relax: ALGO = Normal;
+  edddav        ZHEGV / EDDDAV errors                    SCF: ALGO = All; relax: ALGO = Normal, then All;
                                                           NSCF: as nscf_diverged
   nscf_diverged NSCF energies |E| > 1e6                  NBANDS >= 1.3 x SCF NBANDS, ALGO = Normal
   relax_unconv  relax finished without convergence       continue from CONTCAR
@@ -631,9 +631,10 @@ def plan(m, status, cls_of, recs, args):
             tags = incar(m.f('relax', 'INCAR'))
             tag('01_relax', *(('ISYM', 0) if 'SYMPREC' in tags else ('SYMPREC', '1E-4')))
             say('relax: symmetry error -> %s' % ('ISYM = 0' if 'SYMPREC' in tags else 'SYMPREC = 1E-4'))
-        if c_relax == 'edddav':
-            tag('01_relax', 'ALGO', 'Normal')
-            say('relax: ALGO = Normal (EDDDAV)')
+        if c_relax == 'edddav':            # Davidson -> Normal; if that already failed -> All (CG)
+            algo = 'All' if incar(m.f('relax', 'INCAR')).get('ALGO', '').strip().upper().startswith('N') else 'Normal'
+            tag('01_relax', 'ALGO', algo)
+            say('relax: ALGO = %s (EDDDAV)' % algo)
         lines.append('continue_relax')
         if c_relax == 'wavecar':
             lines.append('rm -f 01_relax/WAVECAR')
