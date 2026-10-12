@@ -18,7 +18,7 @@ bash ../ht_tools/resume_in_scratch.sh      # dry run; --apply copies the run to 
 ```bash
 bash ht_tools/show_problems.sh diag_round3            # broken materials, what each fix changes, which fixes will run
 bash ht_tools/skip_fixes.sh diag_round3 HT_1-500__mp-6430 HT_1-500__mp-7889   # don't submit these (--undo puts them back)
-bash ht_tools/show_material_status.sh mp-20352 [lobster ...]   # INCAR key tags, last 10 OSZICAR lines, relax forces/pressure per step
+bash ht_tools/show_material_status.sh mp-20352 [lobster ...]   # INCAR key tags, every ionic step with its last 5 electronic steps, relax forces/pressure, OUTCAR tail if VASP did not finish
 bash ht_tools/show_job_history.sh mp-20352 [mp-6430 ...] [-S 2026-10-01]   # sacct (state, elapsed, limit) + queue
 bash ht_tools/show_job_log.sh mp-20352 lobster [LINES] [JOBID]   # end of the newest .out/.err of that step
 ```
