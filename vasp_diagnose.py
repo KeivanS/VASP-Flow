@@ -409,6 +409,9 @@ def classify(m, step, rec, provisional, point=None):
             seen.add(line)
             errs.append(line[:160])
     state = rec['state'] if rec else ''
+    # a diverged NSCF never finishes, however long it runs: this beats a time limit
+    if step in NSCF and nscf_diverged(m, step):
+        return 'nscf_diverged', errs[:6]
     # the job record of the last attempt is the most reliable source
     if state.startswith('TIMEOUT'):
         return 'timeout', errs[:6]
