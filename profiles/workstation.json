@@ -1,5 +1,5 @@
 {
-  "_comment": "Workstation profile — values here override site.env. Leave empty strings to inherit from site.env / environment variables.",
+  "_comment": "Workstation profile — values here override default_paths. Leave empty strings to inherit from default_paths / environment variables.",
   "name": "Workstation",
   "vasp_std": "",
   "vasp_ncl": "",

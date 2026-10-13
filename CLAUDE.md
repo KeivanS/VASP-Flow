@@ -24,7 +24,7 @@ modules/
 ## Running the Project
 
 ```bash
-make setup    # First time: create site.env from site.env.example
+make setup    # First time: create default_paths from default_paths.example
 make run      # Start Flask server on http://localhost:5001
 make snaps    # Alternate GUI on port 5050 (sc-snaps-gui.py)
 ```
@@ -36,8 +36,9 @@ make snaps    # Alternate GUI on port 5050 (sc-snaps-gui.py)
 
 ## Configuration
 
-- `site.env` — Platform-specific config (NOT committed, created from `site.env.example`)
-  - `PYTHON`, `VASP_STD`, `VASP_NCL`, `VASP_GAM`, `MPI_LAUNCH`, `MPI_NP`, `WANNIER90_X`, `VASP_POTCAR_DIR`
+- `default_paths` — Platform-specific config (Makefile syntax, NOT committed, created from `default_paths.example`)
+  - `PYTHON`, `VASP_STD`, `VASP_NCL`, `VASP_GAM`, `MPI_LAUNCH`, `MPI_NP`, `WANNIER90_X`, `VASP_POTCAR_DIR`, `VASP_POTCAR_DIR_LDA`
+  - POTCAR library per functional: `potcar_dir_for()` in vasp_input_generator.py — LDA uses `VASP_POTCAR_DIR_LDA` (default `lda_sibling()`: PBE → LDA in the folder name, PAW_PBE → PAW_LDA), every other functional `VASP_POTCAR_DIR`; both agents stop if the LDA library is missing; GUI System Setup field `potcar_dir_lda`, `/api/potcar_variants` takes `functional`; `ht_runs.py --functional LDA` uses it locally and `--hpc-potcar-dir-lda` (default: sibling of `--hpc-potcar-dir`) in env.sh
 - `<Project>/settings.json` — GUI state for "Edit & Regenerate"
 - `<Project>/instructions.txt` — Natural language workflow definition
 
@@ -114,7 +115,7 @@ Regex-based extraction from natural language instruction files. Supported parame
 
 **Smart file copying:** `_write_copy_if_newer()` generates bash code that copies source→dest only if source is newer, preserving user edits.
 
-**Functional:** R2SCAN is the default (parser: `Functional:` line, else `Methods:` line, else anywhere, whole words; none → R2SCAN); GUI select defaults to R2SCAN; HT drivers pass `--functional PBE` (database consistency). R2SCAN INCARs: `METAGGA = R2SCAN`, `LASPH`, `LMIXTAU = .TRUE.` (τ in CHGCAR for the ICHARG=11 steps); LDA = `GGA = CA` (PBE POTCARs would otherwise give PBE). **ENCUT:** 500 eV for every functional unless `ENCUT:` is given.
+**Functional:** R2SCAN is the default (parser: `Functional:` line, else `Methods:` line, else anywhere, whole words; none → R2SCAN); GUI select defaults to R2SCAN; HT drivers pass `--functional PBE` (database consistency). R2SCAN INCARs: `METAGGA = R2SCAN`, `LASPH`, `LMIXTAU = .TRUE.` (τ in CHGCAR for the ICHARG=11 steps); LDA = `GGA = CA` + LDA POTCARs. **ENCUT:** 500 eV for every functional unless `ENCUT:` is given.
 
 ## Testing
 

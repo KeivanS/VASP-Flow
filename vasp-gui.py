@@ -16,6 +16,7 @@ from collections import defaultdict
 APP_DIR      = os.path.dirname(os.path.abspath(__file__))
 PROJECTS_DIR = os.environ.get('VASP_PROJECTS_DIR', os.getcwd())
 sys.path.insert(0, os.path.join(APP_DIR, 'modules'))
+from vasp_input_generator import potcar_dir_for   # noqa: E402
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
@@ -39,6 +40,7 @@ CONFIG = {
     'lobster_x':              os.environ.get('LOBSTER_X',       'lobster'),
     'visualizer_x':           os.environ.get('VISUALIZER_X',    ''),
     'potcar_dir':             os.environ.get('VASP_POTCAR_DIR', ''),
+    'potcar_dir_lda':         os.environ.get('VASP_POTCAR_DIR_LDA', ''),   # '' = PBE folder, PBE -> LDA
     # SLURM settings
     'slurm_partition':        'standard',
     'slurm_nodes':            2,
@@ -467,6 +469,13 @@ def api_generate():
     env = os.environ.copy()
     if potcar_dir:
         env['VASP_POTCAR_DIR'] = potcar_dir
+    if CONFIG.get('potcar_dir_lda'):
+        env['VASP_POTCAR_DIR_LDA'] = CONFIG['potcar_dir_lda']
+    if functional.upper() == 'LDA':
+        lda_dir, how = potcar_dir_for('LDA', potcar_dir, CONFIG.get('potcar_dir_lda') or None)
+        if not os.path.isdir(lda_dir):
+            return jsonify(error=f'LDA needs the LDA POTCARs: {lda_dir or "(no folder)"} ({how}) '
+                                 'does not exist; set "LDA POTCAR library" in System Setup'), 400
     for key, evar in [('vasp_std','VASP_STD'), ('vasp_ncl','VASP_NCL'),
                       ('vasp_gam','VASP_GAM'), ('mpi_launch','MPI_LAUNCH'),
                       ('wannier90_x','WANNIER90_X'), ('lobster_x','LOBSTER_X'),
@@ -2092,6 +2101,8 @@ def api_potcar_variants():
     d = request.json or {}
     potcar_dir = d.get('potcar_dir', '').strip() or CONFIG['potcar_dir']
     elements   = d.get('elements', [])
+    potcar_dir, _how = potcar_dir_for(d.get('functional', 'R2SCAN'), potcar_dir,
+                                      CONFIG.get('potcar_dir_lda') or None)
     if not potcar_dir:
         return jsonify(error='No POTCAR directory configured'), 400
     if not os.path.isdir(potcar_dir):
@@ -2106,7 +2117,7 @@ def api_potcar_variants():
                     if (n == el or n.startswith(el + '_'))
                     and os.path.isfile(os.path.join(potcar_dir, n, 'POTCAR'))]
         result[el] = variants if variants else [el]
-    return jsonify(variants=result)
+    return jsonify(variants=result, dir=potcar_dir)
 
 @app.route('/api/run_sumo/<slug>/<stype>')
 def api_run_sumo(slug, stype):
@@ -2518,8 +2529,10 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
         <input id="cfg_potcar_dir" placeholder="e.g. /opt/vasp/potpaw_PBE.54"
                oninput="document.getElementById('potcar_dir').value=this.value; onPotcarDir()">
         <div style="font-size:11px;color:var(--sub);margin-top:3px;">
-          Folder that contains element sub-folders (e.g. <code>Ga/</code>, <code>As/</code> …)
+          Folder that contains element sub-folders (e.g. <code>Ga/</code>, <code>As/</code> …); the PBE potentials, used by every functional except LDA
         </div></div>
+      <div class="f" style="grid-column:1/-1;"><label>LDA POTCAR library <span style="font-weight:400;color:var(--sub);">(used only with the LDA functional)</span></label>
+        <input id="cfg_potcar_dir_lda" placeholder="blank = the PBE folder with PBE → LDA in its name, e.g. PAW_PBE → PAW_LDA"></div>
     </div>
 
     <!-- Workstation MPI -->
@@ -2654,7 +2667,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
   <div class="card-title">DFT Method</div>
   <div class="g2" style="margin-bottom:12px;">
     <div class="f"><label>Functional</label>
-      <select id="functional">
+      <select id="functional" onchange="fetchPotcarVariants()">
         <option selected>R2SCAN</option>
         <option>PBE</option>
         <option>PBEsol</option>
@@ -3020,6 +3033,7 @@ window.addEventListener('DOMContentLoaded', () => {
   s('cfg_lobster_x',            CFG.lobster_x);
   s('cfg_visualizer_x',         CFG.visualizer_x);
   s('cfg_potcar_dir',           CFG.potcar_dir);
+  s('cfg_potcar_dir_lda',       CFG.potcar_dir_lda);
   // System Setup — workstation MPI
   s('cfg_mpi_launch',           CFG.mpi_launch);
   // System Setup — SLURM
@@ -3091,6 +3105,7 @@ async function saveSystemConfig(){
     lobster_x:              v('cfg_lobster_x') || 'lobster',
     visualizer_x:           v('cfg_visualizer_x'),
     potcar_dir:             v('cfg_potcar_dir'),
+    potcar_dir_lda:         v('cfg_potcar_dir_lda'),
     // workstation MPI (launch command only; core count is set per-project)
     mpi_launch:             v('cfg_mpi_launch') || 'mpirun -np',
     // SLURM
@@ -3425,15 +3440,17 @@ async function fetchPotcarVariants(){
   if(!ELEMENTS.length){ if(status) status.textContent='Load a POSCAR first.'; return; }
   if(status) status.textContent='Scanning…';
   try{
-    const r = await post('/api/potcar_variants',{potcar_dir:dir, elements:ELEMENTS});
+    const r = await post('/api/potcar_variants',{potcar_dir:dir, elements:ELEMENTS, functional:v('functional')});
     const d = await r.json();
     if(!r.ok){ if(status) status.textContent='✗ '+d.error; return; }
     POTCAR_VARIANTS = d.variants||{};
+    for(const el of Object.keys(POTCAR_CHOICES))   // a variant missing from this library (PBE <-> LDA)
+      if(!(POTCAR_VARIANTS[el]||[]).includes(POTCAR_CHOICES[el])) delete POTCAR_CHOICES[el];
     // Auto-select recommended variant if not already chosen
     for(const [el,vars] of Object.entries(POTCAR_VARIANTS)){
       if(!POTCAR_CHOICES[el] && vars.length) POTCAR_CHOICES[el] = vars[0];
     }
-    if(status) status.textContent = '✓ POTCARs found';
+    if(status) status.textContent = '✓ POTCARs found in ' + (d.dir||dir);
     buildPotcarUI();
   }catch(e){ if(status) status.textContent='✗ '+e.message; }
 }

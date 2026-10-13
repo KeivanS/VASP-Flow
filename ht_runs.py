@@ -68,7 +68,7 @@ import numpy as np
 REPO_DIR    = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO_DIR, 'modules'))
 AGENT_SLURM = os.path.join(REPO_DIR, 'vasp-agent-slurm.py')
-from vasp_input_generator import STEP_WALLTIME, RESUME_LIB   # noqa: E402
+from vasp_input_generator import STEP_WALLTIME, RESUME_LIB, potcar_dir_for, lda_sibling   # noqa: E402
 
 # ── defaults ────────────────────────────────────────────────────────────────
 KSPACING        = 0.10      # A^-1; N_i = even(ceil(|b_i*| / KSPACING))
@@ -651,9 +651,10 @@ export VASP_STD="@VASP_STD@"
 # LOBSTER binary (must be the LINUX build -- the macOS one will not run here).
 export LOBSTER_BIN="@LOBSTER_BIN@"
 
-# POTCAR library: directory holding element sub-folders (Bi/, Fe_pv/, ...).
+# POTCAR library: directory holding element sub-folders (Bi/, Fe_pv/, ...);
+# the LDA library for LDA runs, the PBE one otherwise.
 # Used by make_potcars.sh only; the jobs themselves read the assembled POTCARs.
-export VASP_POTCAR_DIR="${VASP_POTCAR_DIR:-@POTCAR_DIR@}"
+export VASP_POTCAR_DIR="${@POTCAR_VAR@:-@POTCAR_DIR@}"
 
 # --- normalise and check -----------------------------------------------------
 # A leading ~ is NOT expanded inside quotes, so "~/BIN/vasp_std" would stay a
@@ -721,7 +722,7 @@ VASPFLOW_NO_CHECK=1 source "$HERE/env.sh" 2>/dev/null
 
 if [ -z "${VASP_POTCAR_DIR:-}" ] || [ ! -d "$VASP_POTCAR_DIR" ]; then
     echo "ERROR: VASP_POTCAR_DIR is not set or does not exist."
-    echo "       Edit env.sh (or export it) to point at the PAW_PBE library."
+    echo "       Edit env.sh (or export it) to point at the PAW_PBE library (PAW_LDA for LDA)."
     exit 1
 fi
 echo "POTCAR library: $VASP_POTCAR_DIR"
@@ -1243,6 +1244,8 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
                    .replace('@MODULES@',     module_lines or '# (no modules)')
                    .replace('@VASP_STD@',    args.vasp_std)
                    .replace('@LOBSTER_BIN@', args.lobster_bin)
+                   .replace('@POTCAR_VAR@',  'VASP_POTCAR_DIR_LDA' if args.functional.upper() == 'LDA'
+                                             else 'VASP_POTCAR_DIR')
                    .replace('@POTCAR_DIR@',  args.hpc_potcar_dir)
                    .replace('@T_RELAX@',     STEP_WALLTIME['relax'])
                    .replace('@T_SCF@',       STEP_WALLTIME['scf'])
@@ -1361,6 +1364,9 @@ def main():
     ap.add_argument('--lobster-bin', default='$HOME/BIN/lobster-5.1.1')
     ap.add_argument('--hpc-potcar-dir', default='$HOME/vasp.5.4.4/PAW_PBE',
                     help='POTCAR library path on the CLUSTER (written into env.sh)')
+    ap.add_argument('--hpc-potcar-dir-lda', default=None,
+                    help='LDA POTCAR library on the CLUSTER, used with --functional LDA '
+                         '(default: --hpc-potcar-dir with PBE -> LDA, e.g. PAW_LDA)')
     ap.add_argument('--include-potcars', action='store_true',
                     help='ship assembled POTCARs inside the highthroughput directory (large)')
     ap.add_argument('--build-potcars', dest='build_potcars', action='store_true', default=None,
@@ -1381,10 +1387,15 @@ def main():
 
     ht = _load_module('ht_mp_scf', 'ht-mp-scf.py')
     api_key    = None            # asked for only if something must be downloaded
-    potcar_dir = os.path.expanduser(os.environ.get('VASP_POTCAR_DIR', ''))
+    lda = args.functional.upper() == 'LDA'     # LDA: the LDA POTCARs, here and on the cluster
+    potcar_dir, how = potcar_dir_for(args.functional)
     if not os.path.isdir(potcar_dir):
-        sys.exit("ERROR: VASP_POTCAR_DIR is not set or does not exist "
-                 "(needed for ENCUT/NBANDS and the POTCAR manifest).")
+        sys.exit(f"ERROR: POTCAR library {potcar_dir or '(none)'} ({how}) does not exist "
+                 "(needed for ENCUT/NBANDS and the POTCAR manifest)."
+                 + ("  LDA needs the LDA POTCARs: export VASP_POTCAR_DIR_LDA." if lda else ""))
+    if lda:
+        args.hpc_potcar_dir = args.hpc_potcar_dir_lda or lda_sibling(args.hpc_potcar_dir)
+        print(f"  LDA: POTCARs from {potcar_dir} here, {args.hpc_potcar_dir} on the cluster")
 
     ids = ht.read_id_list(args.list)
 
@@ -1486,7 +1497,7 @@ def main():
                            gga_u=args.gga_u, nbands=robust_nbands(pinfo['nelect'], struct))
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
-        env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir)
+        env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir, VASP_POTCAR_DIR_LDA=potcar_dir)
         proc = subprocess.run(
             [sys.executable, AGENT_SLURM,
              '-i', os.path.join(stage, 'instructions.txt'),
@@ -1587,7 +1598,8 @@ def main():
     if build and not args.include_potcars:
         print("  Building POTCARs (make_potcars.sh) ...")
         r = subprocess.run([os.path.join(htdir, 'make_potcars.sh')],
-                           env=dict(os.environ, VASP_POTCAR_DIR=potcar_dir))
+                           env=dict(os.environ, VASP_POTCAR_DIR=potcar_dir,
+                                    VASP_POTCAR_DIR_LDA=potcar_dir))
         if r.returncode:
             print("  WARNING: make_potcars.sh failed; fix env.sh and rerun it "
                   "(submit_all.sh also retries automatically).")

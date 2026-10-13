@@ -129,7 +129,8 @@
 │ PBEsol              GGA optimized for solids                                  │
 │ HSE06  or  HSE      Hybrid — accurate gaps, expensive                         │
 │ RVV10               van der Waals (layered materials)                         │
-│ LDA                 Local density approximation (GGA = CA)                     │
+│ LDA                 Local density approximation (GGA = CA); LDA POTCARs from  │
+│                     $VASP_POTCAR_DIR_LDA (default: PAW_PBE -> PAW_LDA)         │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ SPIN AND MAGNETISM ───────────────────────────────────────────────────────────┐

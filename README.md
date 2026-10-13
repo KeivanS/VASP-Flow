@@ -13,7 +13,7 @@ A browser-based interface for setting up and running VASP density-functional-the
 | **Python ≥ 3.8** | Comes with most Linux/Mac systems. A conda environment is recommended. |
 | **MPI** | `mpirun`, `mpiexec`, or `srun` (SLURM). |
 | **sumo** | For band structure and DOS plots. |
-| **LOBSTER** | Optional — only for the COHP/COBI/COOP bonding-analysis task. Free for academic use from [cohp.de](http://www.cohp.de). Set the binary path as `LOBSTER_X` in `site.env` (or `$LOBSTER_BIN` at runtime). |
+| **LOBSTER** | Optional — only for the COHP/COBI/COOP bonding-analysis task. Free for academic use from [cohp.de](http://www.cohp.de). Set the binary path as `LOBSTER_X` in `default_paths` (or `$LOBSTER_BIN` at runtime). |
 
 > **Detailed references:** every Setup option and instructions-file keyword is documented in
 > [`QUICK_REFERENCE_GUI.txt`](QUICK_REFERENCE_GUI.txt) (browser GUI) and
@@ -290,7 +290,7 @@ bash run.sh        # workstation / interactive node
 | *sumo-bandplot: command not found* | sumo not installed | `pip install sumo` |
 | GUI unreachable from laptop | No SSH tunnel | `ssh -L 5001:localhost:5001 user@cluster` |
 | Project not visible in dropdown | Folder missing POSCAR or settings.json | Check that the folder is in the working directory |
-| LOBSTER plots empty / "run 08_lobster first" | The lobster binary did not run — check `08_lobster/lobster.out` | Install LOBSTER and set `LOBSTER_X` in `site.env` (full path; `~` is expanded) |
+| LOBSTER plots empty / "run 08_lobster first" | The lobster binary did not run — check `08_lobster/lobster.out` | Install LOBSTER and set `LOBSTER_X` in `default_paths` (full path; `~` is expanded) |
 
 ---
 

@@ -46,5 +46,6 @@ help:
 	@echo "  VASP_NCL    = $(VASP_NCL)"
 	@echo "  VASP_GAM    = $(VASP_GAM)"
 	@echo "  POTCAR DIR  = $(VASP_POTCAR_DIR)"
+	@echo "  LDA POTCARs = $(VASP_POTCAR_DIR_LDA)  (empty: POTCAR DIR with PBE -> LDA)"
 	@echo "  MPI         = $(MPI_LAUNCH) $(MPI_NP)"
 	@echo "  WANNIER90   = $(WANNIER90_X)"

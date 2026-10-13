@@ -271,6 +271,7 @@ nano default_paths     # set VASP paths, POTCAR directory, MPI command
 \end{lstlisting}
 
 \subsection{default\_paths --- platform configuration}
+\label{sec:defaultpaths}
 
 The file \texttt{default\_paths} (Makefile key=value syntax) is read at
 startup and its variables are exported as environment variables that the
@@ -284,6 +285,7 @@ VASP_STD        = /path/to/vasp_std
 VASP_NCL        = /path/to/vasp_ncl
 VASP_GAM        = /path/to/vasp_gam       # optional
 VASP_POTCAR_DIR = /path/to/potpaw_PBE
+VASP_POTCAR_DIR_LDA = /path/to/potpaw_LDA # only for LDA; default: PBE -> LDA in the name
 MPI_LAUNCH      = mpirun -np              # or: srun
 MPI_NP          = 16
 WANNIER90_X     = wannier90.x
@@ -299,6 +301,15 @@ VISUALIZER_X    = ~/bin/jmol             # Jmol, VESTA, OVITO, ...
         \texttt{make run}.
   \item Built-in code defaults.
 \end{enumerate}
+
+\noindent\textbf{Two POTCAR libraries.}  Every functional uses the PBE potentials of
+\texttt{VASP\_POTCAR\_DIR} except LDA, which needs the LDA potentials of
+\texttt{VASP\_POTCAR\_DIR\_LDA} (GUI System Setup: \emph{LDA POTCAR library}).  Left
+empty, it is the PBE folder with PBE replaced by LDA in its name (\texttt{PAW\_PBE}
+$\to$ \texttt{PAW\_LDA}, \texttt{potpaw\_PBE.54} $\to$ \texttt{potpaw\_LDA.54}); if that
+folder does not exist an LDA run stops with an error instead of using PBE potentials.  The
+agents print which library they used (\texttt{POTCAR library: \ldots}); for the
+high-throughput driver the cluster path is \texttt{-{}-hpc-potcar-dir-lda}.
 \texttt{profiles/workstation.json} is used only when running
 \texttt{vasp-agent.py~-{}-profile~workstation} directly from the
 command line without the GUI.
@@ -764,7 +775,8 @@ R2SCAN & \textbf{Default.} Meta-GGA; better structures, energies and gaps than t
   GGAs at about 1.5--3$\times$ the cost. \\
 PBE    & Standard GGA; widely used (the high-throughput drivers use it by default). \\
 PBEsol & GGA optimised for solids; good lattice constants, cheap. \\
-LDA    & Local density approximation (\texttt{GGA = CA}). \\
+LDA    & Local density approximation (\texttt{GGA = CA}); uses the LDA POTCARs
+  (\texttt{VASP\_POTCAR\_DIR\_LDA}, \S\ref{sec:defaultpaths}). \\
 HSE06  & Hybrid --- accurate band gaps, significantly slower. \\
 RVV10  & van der Waals; for layered or molecular materials. \\
 AM05   & Rarely needed. \\
@@ -1185,7 +1197,9 @@ What R2SCAN adds to every INCAR: \texttt{METAGGA = R2SCAN}, \texttt{LASPH = .TRU
 \texttt{ICHARG = 11}) need with a meta-GGA.  The Born-charge step uses the finite-field route
 (\S\ref{sec:dfpt}), because VASP's linear response does not support meta-GGAs.  The automatic
 Hubbard U is 0.6 times the tabulated PBE value (\S\ref{sec:ggau}).  LDA is written as
-\texttt{GGA = CA}: without it VASP would take PBE from the PBE POTCARs.
+\texttt{GGA = CA} and built from the LDA POTCAR library (\texttt{VASP\_POTCAR\_DIR\_LDA},
+\S\ref{sec:defaultpaths}); the tag also makes sure VASP does not take the functional from a
+PBE POTCAR.
 
 \subsection{Spin-orbit coupling}
 
@@ -1839,7 +1853,7 @@ binary.
         basis represents the bands; when it is above 5\,\% the step reruns LOBSTER with the other
         tabulated bases and keeps the best (\cmd{LOBSTER_BASIS}; Appendix~\ref{app:spilling}).
   \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
-        \texttt{site.env} (default \texttt{lobster-5.1.0-OSX}); it can
+        \texttt{default\_paths} (default \texttt{lobster-5.1.0-OSX}); it can
         be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
 \end{itemize}
 
@@ -2618,11 +2632,11 @@ Full descriptions are in \cmd{ht_tools/README.md}.
 \thead
 Symptom & Solution \\ \midrule
 POTCAR not found &
-  Check \texttt{VASP\_POTCAR\_DIR} in \texttt{site.env} or GUI System
-  Setup.  Use the POTCAR chooser for unusual variants
+  Check \texttt{VASP\_POTCAR\_DIR} (LDA: \texttt{VASP\_POTCAR\_DIR\_LDA}) in
+  \texttt{default\_paths} or GUI System Setup.  Use the POTCAR chooser for unusual variants
   (\texttt{Ga\_d}, \texttt{Fe\_sv}). \\[3pt]
 \texttt{vasp\_std} not found &
-  Set the full binary path in \texttt{site.env} or GUI System Setup. \\[3pt]
+  Set the full binary path in \texttt{default\_paths} or GUI System Setup. \\[3pt]
 WARNING: may not have converged &
   Increase NSW (ionic) or NELM (electronic) in INCAR and re-run. \\[3pt]
 Wrong bands ($W = \Gamma$) &
@@ -3772,8 +3786,9 @@ as commented-out lines.
     \texttt{vasp-agent-slurm.py} (PBE, PBEsol, LDA and the others on request; the
     high-throughput drivers keep \texttt{-{}-functional PBE}); R2SCAN INCARs carry
     \texttt{LMIXTAU = .TRUE.} for the fixed-density steps, and its automatic Hubbard U is 0.6
-    times the tabulated PBE value.  LDA now sets \texttt{GGA = CA} (before, the PBE POTCARs made
-    it PBE).
+    times the tabulated PBE value.  LDA now sets \texttt{GGA = CA} and uses the LDA POTCARs
+    (\texttt{VASP\_POTCAR\_DIR\_LDA}, default: the PBE folder with PBE $\to$ LDA); before,
+    it ran with the PBE POTCARs, i.e.\ as PBE.
     Manual reorganised for new users: installation, then five step-by-step examples (GUI,
     workstation, cluster, high throughput on a workstation and on a cluster with repair
     rounds), then how each part works and how to change it by hand.

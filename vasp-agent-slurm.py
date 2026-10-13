@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
-from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar,
+from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for,
                                   merge_cli_incar, STEP_WALLTIME, RESUME_SBATCH,
                                   RESUME_LIB)
 
@@ -46,12 +46,18 @@ from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar,
 def slugify(name):
     return re.sub(r'[^\w\-]', '_', name.strip()).strip('_') or 'vasp_project'
 
-def check_potcar_dir():
-    d = os.environ.get('VASP_POTCAR_DIR', '')
+def check_potcar_dir(functional='R2SCAN'):
+    """POTCAR library for the functional (LDA: the LDA potentials), or exit."""
+    d, how = potcar_dir_for(functional)
     if not d or not os.path.isdir(d):
-        print("\nERROR: VASP_POTCAR_DIR is not set or does not exist.")
-        print('  export VASP_POTCAR_DIR="$HOME/path/to/potcar/PAW_PBE"\n')
+        if str(functional).upper() == 'LDA':
+            print(f"\nERROR: LDA needs the LDA POTCARs, but {d or '(no folder)'} ({how}) does not exist.")
+            print('  export VASP_POTCAR_DIR_LDA="$HOME/path/to/potcar/PAW_LDA"\n')
+        else:
+            print("\nERROR: VASP_POTCAR_DIR is not set or does not exist.")
+            print('  export VASP_POTCAR_DIR="$HOME/path/to/potcar/PAW_PBE"\n')
         sys.exit(1)
+    print(f"  POTCAR library: {d}  ({how})")
     return d
 
 def build_potcar(elements, potcar_dir, out_path, choices=None):
@@ -307,7 +313,7 @@ fi'''
         # ── POTCAR ────────────────────────────────────────────────────────
         potcar_path = os.path.join(pd, 'POTCAR')
         if self.generator.elements:
-            potcar_dir = check_potcar_dir()
+            potcar_dir = check_potcar_dir(inst.get('functional', 'R2SCAN'))
             choices = {}
             choices_file = os.path.join(self.cwd, 'potcar_choices.json')
             if os.path.isfile(choices_file):

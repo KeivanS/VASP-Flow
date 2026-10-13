@@ -4,7 +4,7 @@ VASP Input Generator Module
 Generates INCAR, KPOINTS, and job scripts for VASP calculations
 """
 
-import os, sys, shutil
+import os, re, sys, shutil
 from typing import Dict, List, Any
 import numpy as np
 
@@ -64,6 +64,35 @@ def load_u_defaults():
         print(f"WARNING: cannot read {path} ({e}); no default Hubbard U applied",
               file=sys.stderr)
     return out
+
+
+# ── POTCAR library per functional ───────────────────────────────────────────
+# LDA needs the LDA PAW potentials; every other functional uses the PBE ones.
+# VASP_POTCAR_DIR = PBE library; VASP_POTCAR_DIR_LDA = LDA library, by default
+# the PBE folder with PBE -> LDA in its name (PAW_PBE -> PAW_LDA,
+# potpaw_PBE.54 -> potpaw_LDA.54).
+def lda_sibling(pbe_dir):
+    """The LDA library next to a PBE one (PBE -> LDA in the last path part), or ''."""
+    p = os.path.expanduser(pbe_dir or '').rstrip('/')
+    head, tail = os.path.split(p)
+    new = re.sub('PBE', 'LDA', re.sub('pbe', 'lda', tail))
+    return os.path.join(head, new) if p and new != tail else ''
+
+
+def potcar_dir_for(functional, pbe_dir=None, lda_dir=None):
+    """(POTCAR library for this functional, how it was chosen).
+
+    pbe_dir / lda_dir default to $VASP_POTCAR_DIR / $VASP_POTCAR_DIR_LDA.
+    For LDA the result may not exist; the caller checks."""
+    pbe = os.path.expanduser(pbe_dir if pbe_dir is not None
+                             else os.environ.get('VASP_POTCAR_DIR', ''))
+    if str(functional).upper() != 'LDA':
+        return pbe, 'VASP_POTCAR_DIR'
+    lda = os.path.expanduser(lda_dir if lda_dir is not None
+                             else os.environ.get('VASP_POTCAR_DIR_LDA', ''))
+    if lda:
+        return lda, 'VASP_POTCAR_DIR_LDA'
+    return lda_sibling(pbe), 'VASP_POTCAR_DIR with PBE -> LDA'
 
 
 # ── LOBSTER NSCF: keep the symmetry-off k-mesh within memory ────────────────
