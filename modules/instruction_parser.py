@@ -221,23 +221,28 @@ class InstructionParser:
         return match.group(1).strip() if match else "VASP_Calculation"
     
     def _extract_functional(self, content: str) -> str:
-        """Extract functional type. More specific keys checked first."""
-        # Order matters: most specific first
+        """Extract functional type; R2SCAN when none is named.
+
+        Looked for in a `FUNCTIONAL:` line first, then the `Methods:` line, then
+        anywhere.  Whole words only, so LDAU, PAW_PBE or pbeVaspFit2015 (a
+        LOBSTER basis) do not count as LDA/PBE.  Most specific names first.
+        """
         functionals = [
-            ('pbesol', 'PS'),
-            ('r2scan', 'R2SCAN'),
-            ('hse06',  'HSE06'),
-            ('hse',    'HSE06'),
-            ('rvv10',  'VV10'),
-            ('am05',   'AM'),
-            ('lda',    'LDA'),
-            ('pbe',    'PBE'),
+            (r'pbe-?sol',      'PS'),
+            (r'r2-?scan',      'R2SCAN'),
+            (r'hse(06)?',      'HSE06'),
+            (r'r?vv10',        'VV10'),
+            (r'am05',          'AM'),
+            (r'lda',           'LDA'),
+            (r'pbe',           'PBE'),
         ]
-        content_lower = content.lower()
-        for key, value in functionals:
-            if key in content_lower:
-                return value
-        return 'PBE'  # default
+        m = (re.search(r'^\s*functional\s*[:=]\s*(.+)$', content, re.I | re.M)
+             or re.search(r'^\s*methods?\s*:\s*(.+)$', content, re.I | re.M))
+        for text in ([m.group(1)] if m else []) + [content]:
+            for pat, value in functionals:
+                if re.search(rf'\b(?:{pat})\b', text, re.I):
+                    return value
+        return 'R2SCAN'  # default
     
     def _extract_soc(self, content: str) -> bool:
         """Check if SOC is requested"""

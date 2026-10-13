@@ -315,7 +315,7 @@ def api_generate():
     if not poscar: return jsonify(error='POSCAR is required'), 400
 
     # ── build instruction text ──────────────────────────────────────────
-    functional = d.get('functional','PBEsol')
+    functional = d.get('functional','R2SCAN')
     spin_mode  = d.get('spin_mode','none')      # none | collinear | soc_z | soc_x | soc_y
     try:
         mag_moment = float(d.get('mag_moment', 2.0))
@@ -2655,11 +2655,11 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
   <div class="g2" style="margin-bottom:12px;">
     <div class="f"><label>Functional</label>
       <select id="functional">
+        <option selected>R2SCAN</option>
         <option>PBE</option>
-        <option selected>PBEsol</option>
+        <option>PBEsol</option>
         <option>LDA</option>
         <option>AM05</option>
-        <option>R2SCAN</option>
         <option>HSE06</option>
         <option>RVV10</option>
       </select>
@@ -2687,7 +2687,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <label class="ck"><input type="checkbox" id="hexagonal" checked> Hexagonal BZ</label>
     <label class="ck"><input type="checkbox" id="is_2d"> 2D / slab (k<sub>z</sub>=1)</label>
     <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U (explicit)</label>
-    <label class="ck" title="Tabulated U_eff (hubbard_u_defaults.csv, Dudarev). Auto: only for chalcogenides/halides (O, S, Se, Te, F, Cl, Br, I in the POSCAR), otherwise U = 0. On: every tabulated d/f element. Off: never. Explicit GGA+U rows always override.">
+    <label class="ck" title="Tabulated U_eff (hubbard_u_defaults.csv, Dudarev). Auto: only for chalcogenides/halides (O, S, Se, Te, F, Cl, Br, I in the POSCAR), otherwise U = 0. On: every tabulated d/f element. Off: never. With R2SCAN the table value is scaled by 0.6; none with HSE06. Explicit GGA+U rows always override and are used as given.">
       Default Hubbard U:
       <select id="u_mode" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
         <option value="auto" selected>auto (chalcogenides/halides)</option>

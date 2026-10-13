@@ -27,6 +27,9 @@ _LOBSTER_X   = os.environ.get('LOBSTER_X',   'lobster')
 # tabulated element, 'GGA_U: OFF' never; explicit 'GGA+U with U=... on El-orb'
 # always wins.  See _u_lines().
 _U_ANIONS = ('O', 'S', 'Se', 'Te', 'F', 'Cl', 'Br', 'I')   # chalcogens + halogens
+# The table U_eff were fitted for PBE; R2SCAN removes part of the self-interaction
+# error itself, so its automatic U is this fraction of the table value.
+R2SCAN_U_FACTOR = 0.6
 
 
 def load_u_defaults():
@@ -1323,7 +1326,7 @@ cp "$SCF_DIR/CHGCAR" "$HERE/" 2>/dev/null && echo "  CHGCAR copied from 02_scf" 
         """
         if self.instructions.get('soc', False):
             return 'SOC (noncollinear)'
-        f = self.instructions.get('functional', 'PBE')
+        f = self.instructions.get('functional', 'R2SCAN')
         if f == 'HSE06':
             return 'the HSE06 hybrid functional'
         if f == 'R2SCAN':
@@ -2018,21 +2021,25 @@ echo "      Data:  band.yaml  FORCE_SETS"
 
     def _functional_lines(self) -> list:
         """Return INCAR lines for the chosen functional."""
-        f = self.instructions.get('functional', 'PBE')
+        f = self.instructions.get('functional', 'R2SCAN')
         if f == 'PS':
             return ["GGA = PS"]
         if f == 'LDA':
-            return ["# LDA — no GGA tag; VOSKOWN for Vosko-Wilk-Nusair interpolation",
-                    "VOSKOWN = 1"]
+            # Without a tag VASP takes the functional from the POTCAR, i.e. PBE
+            # with the PBE POTCARs used here; GGA = CA forces LDA.
+            return ["GGA = CA   ! LDA (Ceperley-Alder, Perdew-Zunger fit)"]
         if f == 'AM':
             return ["GGA = AM"]
         if f == 'R2SCAN':
-            return ["METAGGA = R2SCAN", "LASPH = .TRUE."]
+            # LMIXTAU: mixes the kinetic-energy density and writes it to CHGCAR,
+            # which the fixed-density steps (ICHARG = 11: bands, DOS, LOBSTER,
+            # Wannier) need for a meta-GGA.
+            return ["METAGGA = R2SCAN", "LASPH = .TRUE.", "LMIXTAU = .TRUE."]
         if f == 'HSE06':
             return ["# HSE06 hybrid functional",
                     "LHFCALC = .TRUE.", "HFSCREEN = 0.2",
                     "ALGO = Damped", "TIME = 0.4"]
-        return []   # PBE is the default — no tag needed
+        return []   # PBE: the POTCAR's own functional, no tag needed
 
     NSCF_ALGO = ("ALGO = Fast   ! Davidson start, then RMM-DIIS: with a fixed density pure "
                  "Davidson can run away (Ba2YReO6, Sr2YReO6)")
@@ -2231,19 +2238,21 @@ echo "      Data:  band.yaml  FORCE_SETS"
              no flag     -> U only if the compound contains a chalcogen or
                             halogen (O, S, Se, Te, F, Cl, Br, I); otherwise
                             U = 0 (the table values were fitted for those).
-           Never automatic under R2SCAN/HSE06 (already reduce the
-           self-interaction error).
+           Under R2SCAN the table value is scaled by R2SCAN_U_FACTOR (0.6);
+           never automatic under HSE06.  Explicit values are used as given.
         """
         u_info = self.instructions.get('gga_u', {})
         els  = u_info.get('elements', {}) if u_info.get('enabled') else {}
         mode = self.instructions.get('gga_u_mode', 'auto')
         auto = False
         if not els and mode != 'off':
-            func_ok = self.instructions.get('functional', 'PBE') not in ('R2SCAN', 'HSE06')
+            func = self.instructions.get('functional', 'R2SCAN')
             chalc = any(a in (self.elements or []) for a in _U_ANIONS)
-            if func_ok and (mode == 'on' or chalc):
+            if func != 'HSE06' and (mode == 'on' or chalc):
                 table = load_u_defaults()
-                els = {el: table[el] for el in (self.elements or []) if el in table}
+                scale = R2SCAN_U_FACTOR if func == 'R2SCAN' else 1.0
+                els = {el: dict(table[el], U=round(table[el]['U'] * scale, 2))
+                       for el in (self.elements or []) if el in table}
                 auto = 'on' if mode == 'on' else 'auto'
         if not els:
             return []
@@ -2265,7 +2274,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
         if auto:
             why = ("GGA_U: ON" if auto == 'on' else
                    "chalcogenide/halide (O/S/Se/Te/F/Cl/Br/I present), no GGA_U flag")
-            head = ["# GGA+U (Dudarev, LDAUTYPE=2) — U_eff from hubbard_u_defaults.csv",
+            src = ("hubbard_u_defaults.csv" if func != 'R2SCAN' else
+                   f"{R2SCAN_U_FACTOR:g} x the PBE value of hubbard_u_defaults.csv (R2SCAN)")
+            head = [f"# GGA+U (Dudarev, LDAUTYPE=2) — U_eff = {src}",
                     f"# because: {why}.",
                     "# 'GGA_U: OFF' disables it; 'GGA+U with U=<val> on <El>-<orb>' overrides."]
         return head + [

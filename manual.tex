@@ -214,7 +214,7 @@ know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, walltime continuation, \l
 \subsection{Key features}
 
 \begin{itemize}
-  \item Functionals: PBEsol, PBE, R2SCAN, HSE06, RVV10, LDA, AM05
+  \item Functionals: R2SCAN (default), PBE, PBEsol, LDA; also HSE06, RVV10, AM05
   \item Spin-orbit coupling (SOC) and collinear spin (ISPIN=2)
   \item Magnetic materials: correct MAGMOM per atom; spin-resolved band
         and DOS plots (spin-up / spin-down)
@@ -401,7 +401,8 @@ Direct
    0.00 0.00 0.00
    0.25 0.25 0.25
 \end{lstlisting}
-  \item \textbf{Functional}: PBEsol.  \textbf{Spin / SOC}: None.
+  \item \textbf{Functional}: PBEsol (the default is R2SCAN; PBEsol is quicker for a first
+        try).  \textbf{Spin / SOC}: None.
   \item \textbf{Tasks}: Structure relaxation, SCF, Band structure, DOS (projection row:
         Element \cmd{Si}, Orbitals \cmd{s} and \cmd{p}).  Leave the k-path empty: it is
         detected from the cell (the standard FCC path G-X-W-K-G-L-U-W-L-K).
@@ -759,12 +760,14 @@ POTCAR directory & Path to your PAW library.
 \begin{tabularx}{\linewidth}{@{}lX@{}}
 \thead
 Choice & Description \\ \midrule
-PBEsol & Optimised for solids; recommended starting point. \\
-PBE    & Standard GGA; widely used. \\
-R2SCAN & Meta-GGA; good accuracy/cost balance. \\
+R2SCAN & \textbf{Default.} Meta-GGA; better structures, energies and gaps than the
+  GGAs at about 1.5--3$\times$ the cost. \\
+PBE    & Standard GGA; widely used (the high-throughput drivers use it by default). \\
+PBEsol & GGA optimised for solids; good lattice constants, cheap. \\
+LDA    & Local density approximation (\texttt{GGA = CA}). \\
 HSE06  & Hybrid --- accurate band gaps, significantly slower. \\
 RVV10  & van der Waals; for layered or molecular materials. \\
-LDA / AM05 & Rarely needed. \\
+AM05   & Rarely needed. \\
 \bottomrule
 \end{tabularx}
 
@@ -1163,14 +1166,26 @@ Keyword (continued) & Meaning \\ \midrule
 \subsection{Functionals}
 
 \begin{lstlisting}
-Methods: PBEsol functional    # recommended for solids
-Methods: R2SCAN functional    # meta-GGA
+Methods: R2SCAN functional    # meta-GGA; also the default when no functional is named
+Methods: PBE functional       # standard GGA
+Methods: PBEsol functional    # GGA for solids
+Methods: LDA functional
 Methods: HSE06 functional     # hybrid -- more accurate but slower
 Methods: RVV10 functional     # van der Waals
 \end{lstlisting}
 
-Default ENCUT values: PBE 400~eV, PBEsol 450~eV, R2SCAN 680~eV,
-HSE06 400~eV, RVV10 450~eV.
+The functional is taken from a \texttt{Functional:} line if there is one, else from the
+\texttt{Methods:} line; with neither, R2SCAN is used.  ENCUT is 500~eV for every functional
+unless you give \texttt{ENCUT: \ldots} or run the ENCUT convergence test (worth doing for
+R2SCAN, which converges more slowly with ENCUT than the GGAs).
+
+What R2SCAN adds to every INCAR: \texttt{METAGGA = R2SCAN}, \texttt{LASPH = .TRUE.} and
+\texttt{LMIXTAU = .TRUE.}; the last one also writes the kinetic-energy density to
+\texttt{CHGCAR}, which the fixed-density steps (bands, DOS, LOBSTER, Wannier, all
+\texttt{ICHARG = 11}) need with a meta-GGA.  The Born-charge step uses the finite-field route
+(\S\ref{sec:dfpt}), because VASP's linear response does not support meta-GGAs.  The automatic
+Hubbard U is 0.6 times the tabulated PBE value (\S\ref{sec:ggau}).  LDA is written as
+\texttt{GGA = CA}: without it VASP would take PBE from the PBE POTCARs.
 
 \subsection{Spin-orbit coupling}
 
@@ -1265,12 +1280,14 @@ for oxides, chalcogenides and halides, so their use is set by one optional flag 
 Flag & Effect \\ \midrule
 (none) & \textbf{default}: GGA+U on the tabulated d/f elements only if the
   POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I);
-  otherwise $U = 0$. \\
+  otherwise $U = 0$.  With R2SCAN the value is $0.6\,U_{\mathrm{eff}}$ (the table is for
+  PBE); with HSE06 no automatic U. \\
 \texttt{GGA\_U: ON} & tabulated $U_{\mathrm{eff}}$ on every tabulated element,
   whatever the compound. \\
 \texttt{GGA\_U: OFF} & no U (also \texttt{no GGA+U}). \\
 \texttt{GGA\_U: AUTO} & same as no flag. \\
-\texttt{GGA+U with U=\ldots\ on El-orb} & explicit values; always win. \\
+\texttt{GGA+U with U=\ldots\ on El-orb} & explicit values; always win and are used as
+  given (not scaled for R2SCAN). \\
 \bottomrule
 \end{tabularx}
 
@@ -1281,8 +1298,10 @@ command-line option of the high-throughput drivers accepts
 with \texttt{auto}, \texttt{on}, \texttt{off} in any case.
 
 The same U block is written to every step (relax, SCF, bands, DOS, LOBSTER,
-\ldots), so all steps share one Hamiltonian.  Never automatic under
-R2SCAN/HSE06.  All three routes honour the flag: the GUI (Setup,
+\ldots), so all steps share one Hamiltonian.  R2SCAN already removes part of the
+self-interaction error that U corrects, so its automatic U is $0.6\times$ the tabulated PBE
+value (\texttt{R2SCAN\_U\_FACTOR} in \texttt{modules/vasp\_input\_generator.py}; e.g.\ Fe
+$4.1 \to 2.46$~eV, written in the INCAR comment); none is automatic under HSE06.  All three routes honour the flag: the GUI (Setup,
 \emph{Default Hubbard U}: auto / on / off), \texttt{vasp-agent.py} and
 \texttt{vasp-agent-slurm.py}; the high-throughput drivers write it with
 \texttt{-{}-gga\_u auto|on|off}.
@@ -3145,7 +3164,8 @@ Option & Meaning \\ \midrule
 \texttt{-{}-kpra} & \texttt{coarse}, \texttt{fine} (6000) or an integer. \\
 \texttt{-{}-kmesh} & Fixed $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}. \\
 \texttt{-{}-encut} & ENCUT (eV); default 500. \\
-\texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
+\texttt{-{}-functional} & PBE (default here, as in the existing database), R2SCAN,
+  PBEsol, LDA, \ldots \\
 \texttt{-{}-lobster} / \texttt{-{}-no-lobster} & LOBSTER step (default on). \\
 \texttt{-{}-kpar}, \texttt{-{}-ncore} & Force KPAR/NCORE (give one, the other
   is derived); the ELF pass always uses KPAR${}={}$1. \\
@@ -3748,6 +3768,12 @@ as commented-out lines.
     \texttt{LOBSTER\_BASIS} (auto/min/standard/max/scan/off) and an automatic basis scan above
     \texttt{LOBSTER\_SCAN\_ABOVE} (5\,\%) that keeps the lowest spilling
     (\texttt{lobster\_basis.py}); \texttt{ht\_tools/fix\_spilling.sh} for older runs.
+    R2SCAN is the default functional of the GUI, \texttt{vasp-agent.py} and
+    \texttt{vasp-agent-slurm.py} (PBE, PBEsol, LDA and the others on request; the
+    high-throughput drivers keep \texttt{-{}-functional PBE}); R2SCAN INCARs carry
+    \texttt{LMIXTAU = .TRUE.} for the fixed-density steps, and its automatic Hubbard U is 0.6
+    times the tabulated PBE value.  LDA now sets \texttt{GGA = CA} (before, the PBE POTCARs made
+    it PBE).
     Manual reorganised for new users: installation, then five step-by-step examples (GUI,
     workstation, cluster, high throughput on a workstation and on a cluster with repair
     rounds), then how each part works and how to change it by hand.

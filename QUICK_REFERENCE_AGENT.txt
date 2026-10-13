@@ -76,7 +76,8 @@
 │ Dudarev (LDAUTYPE=2): LDAUU = U_eff from  hubbard_u_defaults.csv  (repo       │
 │ root; the ONLY source of U values; element, orbital, U_eff), LDAUJ = 0.       │
 │ Same U block in every step; LMAXMIX 4 (d) / 6 (f) set with it.                │
-│ Rows with U_eff = 0 (Zn, Cd) get no U.  Never automatic with R2SCAN/HSE06.    │
+│ Rows with U_eff = 0 (Zn, Cd) get no U.  R2SCAN: 0.6 x the table (PBE) value;  │
+│ HSE06: never automatic.  Explicit U values are used as given.                 │
 │ GUI: Default Hubbard U auto/on/off.   HT drivers: --gga_u auto|on|off.        │
 │ Key GGA_U = GGA-U = GGA+U = GGAU; key, value and --gga_u/-u/+u any case.      │
 └───────────────────────────────────────────────────────────────────────────────┘
@@ -122,12 +123,13 @@
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ FUNCTIONALS ─────────────────────────────────────────────────────────────────┐
-│ PBE                 Standard GGA                                               │
-│ PBEsol              Optimized for solids (recommended starting point)         │
-│ R2SCAN              Meta-GGA, good accuracy/cost balance                      │
+│ R2SCAN              DEFAULT (no functional named). Meta-GGA; METAGGA, LASPH,  │
+│                     LMIXTAU (tau in CHGCAR for bands/DOS/LOBSTER)             │
+│ PBE                 Standard GGA (HT drivers: --functional PBE by default)    │
+│ PBEsol              GGA optimized for solids                                  │
 │ HSE06  or  HSE      Hybrid — accurate gaps, expensive                         │
 │ RVV10               van der Waals (layered materials)                         │
-│ LDA                 Local density approximation                                │
+│ LDA                 Local density approximation (GGA = CA)                     │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ SPIN AND MAGNETISM ───────────────────────────────────────────────────────────┐

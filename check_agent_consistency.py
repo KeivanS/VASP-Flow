@@ -197,6 +197,10 @@ def cases():
              text=("Project: feo\nMethods: PBE functional\n"
                    "Tasks: SCF calculation, band structure\nMPI: 16\nELF: off\nGGA_U: OFF\n"),
              expect=dict(u_everywhere=False)),
+        dict(name='r2scan-default-oxide', poscar=POSCAR_AFM, form=None,
+             text=("Project: feo\n"
+                   "Tasks: SCF calculation, band structure\nMPI: 16\nELF: off\n"),
+             expect=dict(u_everywhere=True, u_value='2.46', metagga=True)),   # 0.6 x 4.1
         dict(name='gui-u-mode-on', poscar=POSCAR_FESI,
              form=form(u_mode='on'), expect=dict(u_everywhere=True)),
         dict(name='text-elf-separate', poscar=POSCAR_AFM, form=None,
@@ -390,13 +394,20 @@ def check_semantics(case, out_dir, instr):
                 if d not in rs:
                     bad.append(f"{st}: run.sh lacks '{d}' (auto-continue)")
 
+    if ex.get('metagga'):
+        for st, sd in steps.items():
+            t = incar_tags(sd / 'INCAR')
+            if not st.startswith('00') and (t.get('METAGGA') != 'R2SCAN' or
+                                            t.get('LMIXTAU') != '.TRUE.'):
+                bad.append(f"{st}: METAGGA={t.get('METAGGA')}, LMIXTAU={t.get('LMIXTAU')}")
     if 'u_everywhere' in ex:
         want = ex['u_everywhere']
         for st, sd in steps.items():
             if st.startswith('00'):
                 continue
             t = incar_tags(sd / 'INCAR')
-            has = t.get('LDAU') == '.TRUE.' and t.get('LDAUU', '').split()[:1] == ['4.1']   # Fe U_eff
+            has = (t.get('LDAU') == '.TRUE.' and                       # Fe U_eff (PBE 4.1)
+                   t.get('LDAUU', '').split()[:1] == [ex.get('u_value', '4.1')])
             if has != want:
                 bad.append(f"{st}: GGA+U {'expected' if want else 'not expected'} "
                            f"(LDAU={t.get('LDAU')}, LDAUU={t.get('LDAUU')})")
