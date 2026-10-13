@@ -1,0 +1,945 @@
+{
+"basis": {
+"Ac": {
+"max": "5f 6s 6p 6d 7s",
+"min": "6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Ag": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Ag_pv": {
+"max": "4p 4d 5s 5p",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s 5p"
+},
+"Al": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"Am": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Ar": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"As": {
+"max": "4s 4p",
+"min": "4s 4p",
+"standard": "4s 4p"
+},
+"As_d": {
+"max": "3d 4s 4p",
+"min": "3d 4s 4p",
+"standard": "3d 4s 4p"
+},
+"At": {
+"max": "6s 6p",
+"min": "6s 6p",
+"standard": "6s 6p"
+},
+"Au": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"B": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"B_h": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"B_s": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"Ba_sv": {
+"max": "5s 5p 6s",
+"min": "5s 5p 6s",
+"standard": "5s 5p 6s"
+},
+"Be": {
+"max": "2s 2p",
+"min": "2s",
+"standard": "2s 2p"
+},
+"Be_sv": {
+"max": "1s 2s 2p",
+"min": "1s 2s",
+"standard": "1s 2s 2p"
+},
+"Bi": {
+"max": "6s 6p",
+"min": "6s 6p",
+"standard": "6s 6p"
+},
+"Bi_d": {
+"max": "5d 6s 6p",
+"min": "5d 6s 6p",
+"standard": "5d 6s 6p"
+},
+"Br": {
+"max": "4s 4p",
+"min": "4s 4p",
+"standard": "4s 4p"
+},
+"C": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"C_h": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"C_s": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"Ca_pv": {
+"max": "3p 4s",
+"min": "3p 4s",
+"standard": "3p 4s"
+},
+"Ca_sv": {
+"max": "3s 3p 4s",
+"min": "3s 3p 4s",
+"standard": "3s 3p 4s"
+},
+"Cd": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Ce": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Ce_3": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "5s 5p 5d 6s"
+},
+"Ce_h": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Cf": {
+"max": "5f 6s 6p 7s",
+"min": "5f 6s 6p 7s",
+"standard": "5f 6s 6p 7s"
+},
+"Cl": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"Cl_h": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"Cm": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Co": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Co_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Co_sv": {
+"max": "3s 3p 3d 4s 4p",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s 4p"
+},
+"Cr": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Cr_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Cr_sv": {
+"max": "3s 3p 3d 4s",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s"
+},
+"Cs_sv": {
+"max": "5s 5p 6s",
+"min": "5s 5p 6s",
+"standard": "5s 5p 6s"
+},
+"Cu": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Cu_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Dy": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Dy_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Er": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Er_2": {
+"max": "5p 5d 6s",
+"min": "5p 6s",
+"standard": "5p 5d 6s"
+},
+"Er_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Eu": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Eu_2": {
+"max": "5p 5d 6s",
+"min": "5p 6s",
+"standard": "5p 5d 6s"
+},
+"Eu_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"F": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"F_h": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"F_s": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"Fe": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Fe_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Fe_sv": {
+"max": "3s 3p 3d 4s",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s"
+},
+"Fr_sv": {
+"max": "6s 6p 7s",
+"min": "6s 6p 7s",
+"standard": "6s 6p 7s"
+},
+"Ga": {
+"max": "4s 4p",
+"min": "4s 4p",
+"standard": "4s 4p"
+},
+"Ga_d": {
+"max": "3d 4s 4p",
+"min": "3d 4s 4p",
+"standard": "3d 4s 4p"
+},
+"Ga_h": {
+"max": "3d 4s 4p",
+"min": "3d 4s 4p",
+"standard": "3d 4s 4p"
+},
+"Gd": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Gd_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Ge": {
+"max": "4s 4p",
+"min": "4s 4p",
+"standard": "4s 4p"
+},
+"Ge_d": {
+"max": "3d 4s 4p",
+"min": "3d 4s 4p",
+"standard": "3d 4s 4p"
+},
+"Ge_h": {
+"max": "3d 4s 4p",
+"min": "3d 4s 4p",
+"standard": "3d 4s 4p"
+},
+"H": {
+"max": "1s",
+"min": "1s",
+"standard": "1s"
+},
+"H_h": {
+"max": "1s",
+"min": "1s",
+"standard": "1s"
+},
+"H_s": {
+"max": "1s",
+"min": "1s",
+"standard": "1s"
+},
+"He": {
+"max": "1s",
+"min": "1s",
+"standard": "1s"
+},
+"Hf": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"Hf_pv": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Hf_sv": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d",
+"standard": "5s 5p 5d 6s"
+},
+"Hg": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"Ho": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Ho_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"I": {
+"max": "5s 5p",
+"min": "5s 5p",
+"standard": "5s 5p"
+},
+"In": {
+"max": "5s 5p",
+"min": "5s 5p",
+"standard": "5s 5p"
+},
+"In_d": {
+"max": "4d 5s 5p",
+"min": "4d 5s 5p",
+"standard": "4d 5s 5p"
+},
+"Ir": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"K_pv": {
+"max": "3p 4s",
+"min": "3p 4s",
+"standard": "3p 4s"
+},
+"K_sv": {
+"max": "3s 3p 4s",
+"min": "3s 3p 4s",
+"standard": "3s 3p 4s"
+},
+"Kr": {
+"max": "4s 4p",
+"min": "4s 4p",
+"standard": "4s 4p"
+},
+"La": {
+"max": "4f 5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"La_s": {
+"max": "4f 5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "4f 5p 5d 6s"
+},
+"Li": {
+"max": "2s 2p",
+"min": "2s",
+"standard": "2s 2p"
+},
+"Li_sv": {
+"max": "1s 2s 2p",
+"min": "1s 2s",
+"standard": "1s 2s 2p"
+},
+"Lu": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Lu_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Mg": {
+"max": "3s 3p",
+"min": "3s",
+"standard": "3s 3p"
+},
+"Mg_pv": {
+"max": "2p 3s",
+"min": "2p 3s",
+"standard": "2p 3s"
+},
+"Mg_sv": {
+"max": "2s 2p 3s",
+"min": "2s 2p 3s",
+"standard": "2s 2p 3s"
+},
+"Mn": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Mn_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Mn_sv": {
+"max": "3s 3p 3d 4s",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s"
+},
+"Mo": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Mo_pv": {
+"max": "4p 4d 5s",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s"
+},
+"Mo_sv": {
+"max": "4s 4p 4d 5s",
+"min": "4s 4p 4d 5s",
+"standard": "4s 4p 4d 5s"
+},
+"N": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"N_h": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"N_s": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"Na": {
+"max": "3s 3p",
+"min": "3s",
+"standard": "3s 3p"
+},
+"Na_pv": {
+"max": "2p 3s",
+"min": "2p 3s",
+"standard": "2p 3s"
+},
+"Na_sv": {
+"max": "2s 2p 3s",
+"min": "2s 2p 3s",
+"standard": "2s 2p 3s"
+},
+"Nb_pv": {
+"max": "4p 4d 5s",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s"
+},
+"Nb_sv": {
+"max": "4s 4p 4d 5s",
+"min": "4s 4p 4d 5s",
+"standard": "4s 4p 4d 5s"
+},
+"Nd": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Nd_3": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "5s 5p 5d 6s"
+},
+"Ne": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"Ni": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Ni_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Np": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Np_s": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"O": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"O_h": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"O_s": {
+"max": "2s 2p",
+"min": "2s 2p",
+"standard": "2s 2p"
+},
+"Os": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"Os_pv": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"P": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"P_h": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"Pa": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Pa_s": {
+"max": "5f 6p 6d 7s",
+"min": "5f 6p 6d 7s",
+"standard": "5f 6p 6d 7s"
+},
+"Pb": {
+"max": "6s 6p",
+"min": "6s 6p",
+"standard": "6s 6p"
+},
+"Pb_d": {
+"max": "5d 6s 6p",
+"min": "5d 6s 6p",
+"standard": "5d 6s 6p"
+},
+"Pd": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Pd_pv": {
+"max": "4p 4d 5s",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s"
+},
+"Pm": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Pm_3": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "5s 5p 5d 6s"
+},
+"Po": {
+"max": "6s 6p",
+"min": "6s 6p",
+"standard": "6s 6p"
+},
+"Po_d": {
+"max": "5d 6s 6p",
+"min": "5d 6s 6p",
+"standard": "5d 6s 6p"
+},
+"Pr": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Pr_3": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "5s 5p 5d 6s"
+},
+"Pt": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"Pt_pv": {
+"max": "5p 5d 6s 6p",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s 6p"
+},
+"Pu": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Pu_s": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Ra_sv": {
+"max": "6s 6p 7s",
+"min": "6s 6p 7s",
+"standard": "6s 6p 7s"
+},
+"Rb_pv": {
+"max": "4p 5s",
+"min": "4p 5s",
+"standard": "4p 5s"
+},
+"Rb_sv": {
+"max": "4s 4p 5s",
+"min": "4s 4p 5s",
+"standard": "4s 4p 5s"
+},
+"Re": {
+"max": "5d 6s",
+"min": "5d 6s",
+"standard": "5d 6s"
+},
+"Re_pv": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Rh": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Rh_pv": {
+"max": "4p 4d 5s",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s"
+},
+"Rn": {
+"max": "6s 6p",
+"min": "6s 6p",
+"standard": "6s 6p"
+},
+"Ru": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Ru_pv": {
+"max": "4p 4d 5s",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s"
+},
+"Ru_sv": {
+"max": "4s 4p 4d 5s",
+"min": "4s 4p 4d 5s",
+"standard": "4s 4p 4d 5s"
+},
+"S": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"S_h": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"Sb": {
+"max": "5s 5p",
+"min": "5s 5p",
+"standard": "5s 5p"
+},
+"Sc": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Sc_sv": {
+"max": "3s 3p 3d 4s",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s"
+},
+"Se": {
+"max": "4s 4p",
+"min": "4s 4p",
+"standard": "4s 4p"
+},
+"Si": {
+"max": "3s 3p",
+"min": "3s 3p",
+"standard": "3s 3p"
+},
+"Sm": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Sm_3": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "5s 5p 5d 6s"
+},
+"Sn": {
+"max": "5s 5p",
+"min": "5s 5p",
+"standard": "5s 5p"
+},
+"Sn_d": {
+"max": "4d 5s 5p",
+"min": "4d 5s 5p",
+"standard": "4d 5s 5p"
+},
+"Sr_sv": {
+"max": "4s 4p 5s",
+"min": "4s 4p 5s",
+"standard": "4s 4p 5s"
+},
+"Ta": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"Ta_pv": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Tb": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Tb_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Tc": {
+"max": "4d 5s 5p",
+"min": "4d 5s",
+"standard": "4d 5s 5p"
+},
+"Tc_pv": {
+"max": "4p 4d 5s",
+"min": "4p 4d 5s",
+"standard": "4p 4d 5s"
+},
+"Tc_sv": {
+"max": "4s 4p 4d 5s",
+"min": "4s 4p 4d 5s",
+"standard": "4s 4p 4d 5s"
+},
+"Te": {
+"max": "5s 5p",
+"min": "5s 5p",
+"standard": "5s 5p"
+},
+"Th": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"Th_s": {
+"max": "5f 6p 6d 7s",
+"min": "5f 6p 6d 7s",
+"standard": "5f 6p 6d 7s"
+},
+"Ti": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Ti_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"Ti_sv": {
+"max": "3s 3p 3d 4s",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s"
+},
+"Tl": {
+"max": "6s 6p",
+"min": "6s 6p",
+"standard": "6s 6p"
+},
+"Tl_d": {
+"max": "5d 6s 6p",
+"min": "5d 6s 6p",
+"standard": "5d 6s 6p"
+},
+"Tm": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 5d 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Tm_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"U": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"U_s": {
+"max": "5f 6s 6p 6d 7s",
+"min": "5f 6s 6p 6d 7s",
+"standard": "5f 6s 6p 6d 7s"
+},
+"V": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"V_pv": {
+"max": "3p 3d 4s",
+"min": "3p 3d 4s",
+"standard": "3p 3d 4s"
+},
+"V_sv": {
+"max": "3s 3p 3d 4s",
+"min": "3s 3p 3d 4s",
+"standard": "3s 3p 3d 4s"
+},
+"W": {
+"max": "5d 6s 6p",
+"min": "5d 6s",
+"standard": "5d 6s 6p"
+},
+"W_sv": {
+"max": "5s 5p 5d 6s",
+"min": "5s 5p 5d 6s",
+"standard": "5s 5p 5d 6s"
+},
+"Xe": {
+"max": "5s 5p",
+"min": "5s 5p",
+"standard": "5s 5p"
+},
+"Y_sv": {
+"max": "4s 4p 4d 5s",
+"min": "4s 4p 4d 5s",
+"standard": "4s 4p 4d 5s"
+},
+"Yb": {
+"max": "4f 5s 5p 5d 6s",
+"min": "4f 5s 5p 6s",
+"standard": "4f 5s 5p 5d 6s"
+},
+"Yb_2": {
+"max": "5p 5d 6s",
+"min": "5p 6s",
+"standard": "5p 5d 6s"
+},
+"Yb_3": {
+"max": "5p 5d 6s",
+"min": "5p 5d 6s",
+"standard": "5p 5d 6s"
+},
+"Zn": {
+"max": "3d 4s 4p",
+"min": "3d 4s",
+"standard": "3d 4s 4p"
+},
+"Zr_sv": {
+"max": "4s 4p 4d 5s",
+"min": "4s 4p 4d 5s",
+"standard": "4s 4p 4d 5s"
+}
+},
+"source": "pymatgen"
+}

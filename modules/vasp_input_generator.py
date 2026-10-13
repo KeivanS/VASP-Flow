@@ -655,6 +655,15 @@ class VASPInputGenerator:
         except Exception:
             return None
 
+    def _lobster_basis_kind(self) -> str:
+        """LOBSTER_BASIS: auto (default) | min | standard | max | scan | off."""
+        return (self.instructions.get('lobster_basis') or 'auto').lower()
+
+    def _lobster_scan_above(self) -> float:
+        """Charge spilling (%) above which run.sh scans the bases (LOBSTER_BASIS auto)."""
+        v = self.instructions.get('lobster_scan_above')
+        return 5.0 if v is None else float(v)
+
     def _lmaxmix(self) -> int:
         """LMAXMIX from the elements present: 6 if any f-block, 4 if any d, else 2."""
         try:
@@ -927,9 +936,40 @@ fi
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        # NBANDS from the project-level POTCAR (built one level up before steps).
+        # NBANDS from the project-level POTCAR (built one level up before steps):
+        # at least the largest pbeVaspFit2015 basis (so a basis scan can use it) x
+        # LOBSTER_NBANDS_FACTOR, and never below the recommended-basis count.
         potcar_path = os.path.join(os.path.dirname(os.path.abspath(output_dir)), 'POTCAR')
         nbands = self._lobster_nbands(potcar_path, self._ncore_for('lobster'))
+        kind = self._lobster_basis_kind()
+        try:
+            import math
+            from modules import lobster_basis as lb
+        except ImportError:
+            try:
+                import lobster_basis as lb
+            except ImportError:
+                lb = None
+        basis_lines = []
+        if lb is not None and os.path.isfile(potcar_path):
+            try:
+                nmax = lb.nbasis_for(self.poscar, potcar_path,
+                                     kind if kind in lb.KINDS else 'max')
+                fac = float(self.instructions.get('lobster_nbands_factor') or 1.0)
+                nb2 = int(2 * math.ceil(fac * nmax / 2.0))
+                nc = self._ncore_for('lobster')
+                if nc and nc > 1:
+                    nb2 = int(math.ceil(nb2 / nc) * nc)
+                nbands = max(nbands or 0, nb2) or None
+                if kind in lb.KINDS:
+                    basis_lines = lb.basis_lines(lb.basis_for(self.poscar, potcar_path, kind)[0])
+            except (SystemExit, Exception):
+                pass
+        # the basis-scan tool travels with the step (plain python3, no pymatgen)
+        here = os.path.dirname(os.path.abspath(__file__))
+        for f in ('lobster_basis.py', 'lobster_basis_table.json'):
+            if os.path.isfile(os.path.join(here, f)):
+                shutil.copy2(os.path.join(here, f), os.path.join(output_dir, f))
 
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
@@ -950,7 +990,8 @@ fi
                     f"cobiGenerator from 0.8 to {bondmax}\n"
                     "COHPStartEnergy -20\n"
                     "COHPEndEnergy 5\n"
-                    f"gaussianSmearingWidth {sigma}\n")
+                    f"gaussianSmearingWidth {sigma}\n"
+                    + ''.join(l + "\n" for l in basis_lines))
 
         # Pull the converged charge density from the SCF at runtime.
         rel_scf = os.path.relpath(from_scf, output_dir)
@@ -3048,6 +3089,15 @@ fi
 echo "Running LOBSTER ($LOBSTER_BIN) at $(date)"
 "$LOBSTER_BIN" > lobster.out 2>&1 || { echo "  LOBSTER failed -- see lobster.out"; exit 1; }
 echo "  charge spilling:"; grep -i spilling lobster.out | grep '%' || true
+
+# 4) Basis scan (LOBSTER_BASIS @BASIS@): LOBSTER once per pbeVaspFit2015 basis
+#    (min/standard/max per element), keep the lowest charge spilling (basis_scan.tsv)
+SPILL=$(grep -i "abs. charge spilling" lobsterout 2>/dev/null | awk '{gsub("%","",$NF); print $NF}' | sort -g | tail -1)
+if [ -f lobster_basis.py ] && { [ "@BASIS@" = scan ] || { [ "@BASIS@" = auto ] && \
+        awk -v s="${SPILL:-0}" -v t="@SCANABOVE@" 'BEGIN{exit !(s > t)}'; }; }; then
+    echo "  charge spilling ${SPILL:-?}% -- scanning the LOBSTER bases"
+    python3 lobster_basis.py scan . --lobster "$LOBSTER_BIN" || echo "  basis scan failed"
+fi
 echo "  Done: COHPCAR/COBICAR/COOPCAR + ICO*LIST.lobster in $HERE"
 '''
         return (template.replace('@PREAMBLE@', preamble)
@@ -3055,4 +3105,6 @@ echo "  Done: COHPCAR/COBICAR/COOPCAR + ICO*LIST.lobster in $HERE"
                         .replace('@LAUNCH@', launch_cmd)
                         .replace('@LOBSTER@', lobster_bin)
                         .replace('@SIGMA@', str(sigma))
-                        .replace('@BONDMAX@', str(self._second_shell_cutoff())))
+                        .replace('@BONDMAX@', str(self._second_shell_cutoff()))
+                        .replace('@BASIS@', self._lobster_basis_kind())
+                        .replace('@SCANABOVE@', str(self._lobster_scan_above())))

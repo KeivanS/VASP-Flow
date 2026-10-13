@@ -206,6 +206,7 @@ set my own parameters for some materials of a run & Section~\ref{sec:set-params}
 check one material or one job quickly & Section~\ref{sec:lookup} \\
 try a different INCAR setting on one material first & Section~\ref{sec:testfix} \\
 look up a symptom and its remedy & Section~\ref{sec:trouble} \\
+lower a high LOBSTER charge spilling & Appendix~\ref{app:spilling} \\
 know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, walltime continuation, \ldots) & Appendix~\ref{app:inputs} \\
 \bottomrule
 \end{tabularx}
@@ -1147,6 +1148,10 @@ Keyword (continued) & Meaning \\ \midrule
 \texttt{LOBSTER\_MAX\_KPW:} & Memory budget of the symmetry-off LOBSTER NSCF: largest
   k-points $\times$ plane waves; a denser mesh is reduced (default $6\times10^6$, 0 = no cap;
   Appendix~\ref{app:lobster-mem}). \\
+\texttt{LOBSTER\_BASIS:} & \cmd{auto} (default; basis scan when the spilling is high), \cmd{min},
+  \cmd{standard}, \cmd{max}, \cmd{scan}, \cmd{off} (Appendix~\ref{app:spilling}). \\
+\texttt{LOBSTER\_SCAN\_ABOVE:} & Charge spilling (\%) above which \cmd{auto} scans the bases (default 5). \\
+\texttt{LOBSTER\_NBANDS\_FACTOR:} & NBANDS of the LOBSTER NSCF = factor $\times$ the largest basis (default 1). \\
 \bottomrule
 \end{tabularx}
 
@@ -1811,6 +1816,9 @@ binary.
   \item \texttt{NBANDS} is auto-set to at least the LOBSTER
         basis-function count; \texttt{LMAXMIX} is chosen from the
         elements (6 for $f$, 4 for $d$, 2 for $sp$).
+  \item The \textbf{charge spilling} (in \cmd{lobsterout}) measures how well LOBSTER's atomic
+        basis represents the bands; when it is above 5\,\% the step reruns LOBSTER with the other
+        tabulated bases and keeps the best (\cmd{LOBSTER_BASIS}; Appendix~\ref{app:spilling}).
   \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
         \texttt{site.env} (default \texttt{lobster-5.1.0-OSX}); it can
         be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
@@ -2572,6 +2580,9 @@ Script & Purpose \\ \midrule
   \cmd{SCF_EIG_ONLY=1} packs only the SCF EIGENVALs of all finished materials. \\
 \cmd{cleanup_large.sh} & Delete WAVECAR/CHGCAR no remaining step needs
   (\cmd{02_scf/CHGCAR} is kept unless \opt{deep}); dry run unless \opt{apply}. \\
+\cmd{fix_spilling.sh [--above 5] [--submit] [ID ...]} & Redo the LOBSTER step of materials whose
+  charge spilling is above the limit: twice the bands, then a LOBSTER basis scan that keeps the
+  lowest spilling (Appendix~\ref{app:spilling}); a dry run without \opt{submit}. \\
 \bottomrule
 \end{tabularx}
 
@@ -2650,6 +2661,10 @@ The relax ends \cmd{relax_unconv} in every round, with small forces &
   Check the last max force and pressure (\cmd{show_material_status.sh ID relax}).  If
   they are close to EDIFFG and a few kB, accept the structure and leave the material
   out (\cmd{skip_fixes.sh}), or loosen \cmd{EDIFFG} with \cmd{set_params.sh ID relax "EDIFFG=-0.02"}. \\[3pt]
+LOBSTER charge spilling above 5\,\% (\cmd{spilling_high}) &
+  The local basis does not represent the bands well.  \cmd{RWIGS} does not matter to LOBSTER.
+  Run \cmd{ht_tools/fix_spilling.sh} (more bands, then a basis scan); if it stays high, see
+  Appendix~\ref{app:spilling}. \\[3pt]
 A material shows \cmd{queued} in two runs, although only one has jobs &
   Both runs use the same job name (\cmd{<material>_<step>}); diagnose again when the
   queue is empty. \\[3pt]
@@ -2798,6 +2813,84 @@ many plane waves per k-point.  The KPOINTS comment then reads e.g.\
 count.  Set either limit to 0 (\cmd{LOBSTER_MAX_KPTS: 0}, \opt{lobster-max-kpw 0}) to
 switch it off, or a larger \cmd{LOBSTER_MAX_KPW} on nodes with more memory.  For COHP/ICOHP integrals a mesh of a few
 hundred to two thousand k-points is ample for cells of up to $\sim$20 atoms.
+
+\subsection{LOBSTER charge spilling: what it is and how to lower it}
+\label{app:spilling}
+
+\paragraph{What LOBSTER projects onto.}  LOBSTER does not use VASP's projection spheres:
+\cmd{RWIGS} (and \cmd{LORBIT}) only change VASP's own site projections (PROCAR, the VASP
+DOS).  LOBSTER projects the PAW wavefunctions in \cmd{WAVECAR} onto its own local basis of
+atomic orbitals: contracted Slater-type orbitals (STOs), $\phi(r) = \sum_i c_i\, r^{n_i-1}
+e^{-\zeta_i r}$, fitted to free atoms.  The \emph{absolute charge spilling} printed in
+\cmd{lobsterout} is the part of the occupied wavefunctions that this basis cannot represent
+(averaged over bands and k-points, absolute values since LOBSTER~2).  The \emph{total spilling}
+includes the empty bands and matters much less.  LOBSTER's own guidance: below 1\,\% is very
+good; about 5\,\% ``could still be considered good'', depending on the complexity of the
+structure; above that, ICOHP/ICOBI values are less reliable.  The electrons are not lost ---
+they are relocated in the projection.  A small spilling alone does not prove that the basis is
+complete (LOBSTER FAQ 4.19).
+
+\paragraph{What you can change.}  The extent and completeness of the orbitals --- exactly what
+determines the spilling --- are set by the basis, at three levels:
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.3\linewidth}X@{}}
+\thead
+\cmd{lobsterin} keyword & Effect \\ \midrule
+\cmd{basisSet pbeVaspFit2015} \textit{(default)}, \cmd{koga}, \cmd{bunge} & The tabulated
+  STO sets.  \cmd{pbeVaspFit2015} is Koga's set plus functions fitted to PBE atoms
+  (Maintz et al., J.\ Comput.\ Chem.\ 37, 1030 (2016)). \\
+\cmd{basisFunctions El 3d 4s 4p} & Which orbitals each element gets.  Without it LOBSTER uses
+  its \emph{recommended} set, which is the minimal one; optional orbitals --- 4p of 3d metals,
+  5p/6p of 4d/5d metals, p of Li, Na, Mg, Be, 5d of Eu, Yb, Er, 4f/5f of La, Ac --- are
+  added only on request.  LOBSTER's guide asks you to choose them explicitly, in particular
+  for \cmd{_sv} potentials. \\
+\cmd{useBasisSet custom} \newline \cmd{customSTOforAtom El El.sto} & (LOBSTER $\geq$ 5.0) your
+  own STOs: for each orbital the principal quantum numbers, Slater exponents $\zeta_i$ and
+  contraction coefficients $c_i$ of its primitives.  This is the only way to change the
+  \emph{radial extent} of an orbital (smaller $\zeta$ = more diffuse).  LOBSTER ships an
+  example (\cmd{Custom_Basis/diamond/C.sto}, format in its \cmd{README.md}). \\
+\bottomrule
+\end{tabularx}
+
+\noindent Two more conditions matter.  \textbf{NBANDS} of the symmetry-off NSCF must be at least the
+number of basis functions (LOBSTER FAQ 4.11: ``match the number of your bands with the number of
+orbitals'').  With NBANDS exactly equal to it, as in VASP-Flow before v2.6, many k-points can fail
+LOBSTER's orthonormalisation (\cmd{WARNING: ... k-points could not be orthonormalized},
+\cmd{bandOverlaps.lobster}); the guide traces this to ``columns that are almost zero in the
+projected coefficient matrix'', i.e.\ a basis that does not fit the bands.  And the
+\textbf{POTCAR} decides which semicore states are valence and must be in the basis.
+
+\paragraph{What VASP-Flow does.}
+\begin{itemize}
+  \item \textbf{NBANDS} of the LOBSTER NSCF is at least the largest pbeVaspFit2015 basis of the
+        cell (min/standard/max per element), times \cmd{LOBSTER_NBANDS_FACTOR} (default 1), so a
+        larger basis can always be tried without redoing the NSCF.
+  \item \cmd{LOBSTER_BASIS:} in \cmd{instructions.txt} chooses the basis: \cmd{auto} (default:
+        LOBSTER's recommended set, and a scan when the spilling is above
+        \cmd{LOBSTER_SCAN_ABOVE}, default 5\,\%), \cmd{min}, \cmd{standard} or \cmd{max} (the
+        \cmd{basisFunctions} lines are written into \cmd{lobsterin}), \cmd{scan} (always scan),
+        \cmd{off} (never scan).
+  \item The \textbf{basis scan} (\cmd{08_lobster/lobster_basis.py scan .}) reruns only the
+        LOBSTER program, once per combination of the distinct min/standard/max sets of each
+        element, on the same WAVECAR, and keeps the outputs with the lowest charge spilling;
+        \cmd{basis_scan.tsv} lists every try, \cmd{basis_scan_best.txt} the choice.  A
+        high-throughput job does this automatically before it deletes the WAVECAR
+        (\cmd{LOBSTER_SCAN_ABOVE} in \cmd{env.sh}).  The table of sets,
+        \cmd{modules/lobster_basis_table.json}, is pymatgen's
+        \texttt{BASIS\_PBE\_54\_\{min,standard,max\}.yaml}; no pymatgen is needed on the cluster.
+  \item \textbf{Runs made before v2.6}: \cmd{ht_tools/fix_spilling.sh} finds the materials above
+        \opt{above} (5\,\%), backs up their LOBSTER run (\cmd{round_<i>_<date>/}), sets NBANDS to
+        \opt{factor} (2) $\times$ the largest basis, and submits one job: the NSCF, then the basis
+        scan.  Without \opt{submit} it only lists what it would do.
+\end{itemize}
+
+\paragraph{When the scan does not help.}  If every element has only one tabulated set (Si, C,
+O, Cs\_sv, \dots) the scan cannot change the basis, and only more bands remain.  If the
+spilling stays high, the next steps are by hand: another POTCAR (fewer semicore states, so a
+smaller minimal basis is adequate), \cmd{basisSet koga}, or a custom STO set with more diffuse
+or additional orbitals.  Compare materials of the same chemistry: in the October 2026 run the
+2-atom SiC (mp-8062) had 1.5\,\% with the same basis as the 10-atom polytype mp-11713 (18.3\,\%),
+which points to the run rather than the basis.
 
 \subsection{Relaxation $\to$ SCF hand-off}
 \label{sec:handoff}
@@ -3314,7 +3407,7 @@ unknown & none of the above & script written but held back for review \\
 \emph{(any)}, twice & the previous repair of the step had the same cause, or \opt{max-rounds} repairs done &
   script written but held back for review \\
 \midrule
-spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & none (report only) \\
+spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & not by the round; run \cmd{ht_tools/fix_spilling.sh} (Appendix~\ref{app:spilling}) \\
 missing & a listed name has no folder & none (report only) \\
 phase2\_pending & convergence tests done, production steps not started & none: start them with
   \cmd{submit_calculations.sh} / \cmd{run_calculations.sh} \\
@@ -3325,8 +3418,8 @@ queued & the material still has jobs in the queue & none: diagnose later \\
 \renewcommand{\arraystretch}{1.0}
 
 A material is counted under the cause of its \emph{first} failed step.
-A charge spilling is a property of the LOBSTER basis set, so rerunning does not
-change it; lowering it needs other basis functions in \cmd{lobsterin}.
+A charge spilling is not changed by rerunning the same step; lowering it needs more bands
+and other basis functions (\cmd{fix_spilling.sh}, Appendix~\ref{app:spilling}).
 
 \subsection{What is redone}
 
@@ -3651,6 +3744,10 @@ as commented-out lines.
     at the start.  \texttt{ht-semimetals.py} renamed \texttt{ht\_runs.py}.  Removed the
     superseded \texttt{fix\_failed.sh}, \texttt{reset\_stale.sh},
     \texttt{resume\_in\_scratch.sh}, \texttt{redo\_lobster.sh}, \texttt{patch\_*.sh}.
+    LOBSTER charge spilling: NBANDS of the LOBSTER NSCF covers the largest pbeVaspFit2015 basis;
+    \texttt{LOBSTER\_BASIS} (auto/min/standard/max/scan/off) and an automatic basis scan above
+    \texttt{LOBSTER\_SCAN\_ABOVE} (5\,\%) that keeps the lowest spilling
+    (\texttt{lobster\_basis.py}); \texttt{ht\_tools/fix\_spilling.sh} for older runs.
     Manual reorganised for new users: installation, then five step-by-step examples (GUI,
     workstation, cluster, high throughput on a workstation and on a cluster with repair
     rounds), then how each part works and how to change it by hand.

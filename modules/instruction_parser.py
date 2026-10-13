@@ -88,6 +88,15 @@ class InstructionParser:
                               r'LOBSTER_MAX_KPTS\s*[:,=]\s*(\d+)', default=None),
             'lobster_max_kpw': self._extract_float_key(content,
                               r'LOBSTER_MAX_KPW\s*[:,=]\s*([\d.Ee+]+)', default=None),
+            # LOBSTER basis: auto (LOBSTER's recommended set; basis scan if spilling > LOBSTER_SCAN_ABOVE %),
+            # min | standard | max (pbeVaspFit2015 sets written into lobsterin), scan (always scan), off (no scan)
+            'lobster_basis':  (self._extract_str_key(content,
+                              r'LOBSTER_BASIS\s*[:,=]\s*(auto|min|standard|max|scan|off)\b', default=None) or '').lower() or None,
+            'lobster_scan_above': self._extract_float_key(content,
+                              r'LOBSTER_SCAN_ABOVE\s*[:,=]\s*([\d.]+)', default=None),
+            # NBANDS of the LOBSTER NSCF = factor x the largest candidate basis (default 1)
+            'lobster_nbands_factor': self._extract_float_key(content,
+                              r'LOBSTER_NBANDS_FACTOR\s*[:,=]\s*([\d.]+)', default=None),
             # LOBSTER NSCF symmetry (must be 0 or -1); default applied later
             'lobster_isym':   self._extract_str_key(content,
                               r'LOBSTER_ISYM\s*[:,=]\s*(-?\d+)', default=None),

@@ -559,6 +559,14 @@ do_lobster() {      # symmetry-off NSCF, then the LOBSTER binary
         vf_run "$LOBSTER_BIN" > lobster.out 2>&1
         vf_after post                   # limit hit -> requeued, rerun LOBSTER only
         grep -q "finished in" lobster.out || echo "!!! LOBSTER failed - see lobster.out"
+        # charge spilling above LOBSTER_SCAN_ABOVE (env.sh, default 5 %): run LOBSTER once per
+        # pbeVaspFit2015 basis (min/standard/max per element) and keep the lowest spilling
+        SPILL=$(grep -i "abs. charge spilling" lobsterout 2>/dev/null | awk '{gsub("%","",$NF); print $NF}' | sort -g | tail -1)
+        if [ -f lobster_basis.py ] && [ -s WAVECAR ] && \
+                awk -v s="${SPILL:-0}" -v t="${LOBSTER_SCAN_ABOVE:-5}" 'BEGIN{exit !(s > t)}'; then
+            echo "--- charge spilling ${SPILL}% > ${LOBSTER_SCAN_ABOVE:-5}%: LOBSTER basis scan : $(date)"
+            python3 lobster_basis.py scan . --lobster "$LOBSTER_BIN" || echo "WARNING: basis scan failed"
+        fi
     fi
     grep -q "finished in" lobster.out 2>/dev/null && { [ "${KEEP_WAVECAR:-0}" = "1" ] || rm -f WAVECAR; }
     cd "$PROJ"
@@ -692,6 +700,12 @@ export VF_MAX_RESTARTS=5
 # Set to 1 to keep them (needs far more scratch for a full screen).
 export KEEP_LARGE_FILES=0
 export KEEP_WAVECAR=0
+
+# --- LOBSTER basis -----------------------------------------------------------
+# When the abs. charge spilling of a LOBSTER run is above this value (%), the job
+# reruns the LOBSTER program once per pbeVaspFit2015 basis (min/standard/max per
+# element) and keeps the lowest spilling (08_lobster/basis_scan.tsv).  999 = off.
+export LOBSTER_SCAN_ABOVE=5
 '''
 
 MAKE_POTCARS = r'''#!/bin/bash

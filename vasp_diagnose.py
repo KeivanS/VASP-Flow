@@ -45,7 +45,8 @@ the ENCUT and k-point tests must have finished with a converged SCF.
   not_run       never ran (e.g. upstream failed)         submitted
   unknown       anything else                            script written, but only submitted with
                                                           --retry-unknown (error lines in its header)
-  spilling_high LOBSTER finished, charge spilling > --spill-max %   reported only
+  spilling_high LOBSTER finished, charge spilling > --spill-max %   reported; repair with
+                ht_tools/fix_spilling.sh (more bands + LOBSTER basis scan)
   missing       a listed material ID was not found         reported only
   user_params   you changed its settings (set_params.sh)  the step and the later ones redone with them
   phase2_pending  convergence done, production steps never started: run
@@ -1463,6 +1464,10 @@ def main():
         fh.write('Certainty: of the cause, from the kind of evidence (SLURM record or OUTCAR 0.95, a known\n'
                  'error message 0.7-0.95, indirect 0.6, unknown 0.2); of the fix, its rule value blended with\n'
                  'how earlier repairs of the same cause went in these runs.\n')
+        if count['spilling_high']:
+            fh.write('%d material(s) have a LOBSTER charge spilling above %g %% (spilling_high in diagnosis.tsv);\n'
+                     'redo them with more bands and a basis scan: ht_tools/fix_spilling.sh --above %g --submit\n'
+                     % (count['spilling_high'], args.spill_max, args.spill_max))
         fh.write('Change a setting yourself:  bash ~/VASP-Flow/ht_tools/set_params.sh ID STEP "TAG=VALUE; ..."'
                  '  then run the round again.\n\n')
         held = [b for b, (r, _, _, _, _, _) in zip(blocks, todo) if r['hold']]
@@ -1500,6 +1505,9 @@ def main():
     for k, v in count.most_common():
         print('  %-14s %4d' % (k, v))
     print('Fix scripts: %d to submit, %d held for review' % (len(scripts), len(review)))
+    if count['spilling_high']:
+        print('%d material(s) with LOBSTER charge spilling > %g %%: bash ~/VASP-Flow/ht_tools/fix_spilling.sh '
+              '--above %g  (dry run; --submit to redo them)' % (count['spilling_high'], args.spill_max, args.spill_max))
     for r in review:
         print('  held: %s  (%s)' % (r['label'], r['hold']))
     print('Report : %s\nTable  : %s\nSubmit : nohup bash %s > %s.log 2>&1 &' % (

@@ -406,9 +406,13 @@
 │ unusable COHP/ICOHP (wrong sign, |Δ| > 100%). With SOC on, ISYM=-1 is set     │
 │ instead (spin-orbit breaks time reversal). NBANDS is auto-set to >= the       │
 │ LOBSTER basis-function count; LMAXMIX from the elements (6 f / 4 d / 2 sp).   │
-│ The NSCF k-mesh defaults to 2x the SCF mesh in every direction, keeping the   │
-│ SCF ratios (SCF 3x4x5 -> 6x8x10); edit 08_lobster/KPOINTS to override. With   │
-│ ISYM=0 there is no symmetry reduction, so 2x in 3D is ~8x the k-points.       │
+│ The NSCF k-mesh is the SCF mesh, reduced (same ratios) above 10000 points     │
+│ or the k x plane-wave memory budget (LOBSTER_MAX_KPTS / LOBSTER_MAX_KPW).     │
+│ Charge spilling (lobsterout): LOBSTER projects onto its own STO basis --      │
+│ RWIGS plays no role.  LOBSTER_BASIS: auto|min|standard|max|scan|off; with     │
+│ auto, spilling > LOBSTER_SCAN_ABOVE (5 %) reruns LOBSTER per tabulated basis  │
+│ and keeps the lowest (08_lobster/basis_scan.tsv).  NBANDS >= largest basis    │
+│ x LOBSTER_NBANDS_FACTOR.  Older HT runs: ht_tools/fix_spilling.sh --submit.   │
 │ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX; ~ in site.env is expanded). │
 │ analyze.sh also writes analysis/*_lobster_dos.{png,pdf}: LOBSTER projected    │
 │ DOS stacked as in 04_dos, with the projection-free 04_dos total overlaid in   │
