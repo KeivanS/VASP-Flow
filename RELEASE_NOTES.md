@@ -1,5 +1,20 @@
 # VASP-Flow release notes
 
+## v2.4 — 2026-10-12 · Checking and repairing runs
+
+Includes the v2.3 changes of 2026-10-05, which were not released separately.
+
+- **`vasp_diagnose.py`** (new): checks every run of a `*_list.txt` (material names of any kind — mp-IDs, formulas, folder names — or folders), steps `00_convergence` … `08_lobster`, for high-throughput, SLURM and local layouts. It names the cause of each failure (timeout, out of memory, SCF/NSCF not converged or diverged, EDDDAV, ZBRENT, symmetry, WAVECAR/CHGCAR, LOBSTER, quota, …), writes one repair + resubmission script per material and `submit_all_fixes.sh` (queue-throttled, resumable). Read-only until you run the scripts; a repair already tried is held back for review.
+- **Fixed-density steps use `ALGO = Fast`**: bands, DOS and the LOBSTER NSCF (Davidson start, then RMM-DIIS). Pure Davidson diverged to |E| ~ 1e10 eV for Ba2YReO6/Sr2YReO6; `ALGO = All` is not allowed with ICHARG = 11. Relax and SCF keep `ALGO = Normal`.
+- **`ht_tools/`** new tools:
+  - `test_step.sh`: test the SCF/bands/LOBSTER NSCF of one material with changed INCAR tags in `tests/` (`--report` to compare).
+  - `show_problems.sh`, `skip_fixes.sh`: what the diagnosis found and what each fix changes; leave materials out of the resubmission.
+  - `show_material_status.sh`: per step, how long VASP ran, key INCAR tags, every ionic step with its last 5 electronic steps, relax forces/pressure, OUTCAR tail when VASP did not finish.
+  - `show_job_history.sh`, `show_job_log.sh`: SLURM states/times of a material's jobs, end of the newest logs.
+- `vasp-agent-slurm.py`: convergence-test scripts locate their folder by absolute path (not `$0`, which is SLURM's spool copy).
+- From v2.3: `ht-semimetals.py` uses the Materials Project POTCAR choices by default (`--potcar-set mp`); `NBANDS` = 1.2 × VASP default in relax/SCF/bands, bands never below the SCF; `#SBATCH --mem=0`; relaxation with IBRION = 1; `ht_tools/` maintenance scripts (`fix_failed.sh`, `test_relax.sh`, `collect_lobster.sh`, `reset_stale.sh`, `cleanup_large.sh`, `audit_run.sh`, `resume_in_scratch.sh`).
+- **Manual**: one file (`manual.tex`/`manual.pdf`) organised by task — getting started, single calculations, high-throughput screens, checking and repairing runs — with how things work in the appendices; the `vasp_diagnose.py` manual is merged in. `QUICK_REFERENCE_AGENT.txt` gains a "Checking & repairing runs" box.
+
 ## v2.2 — 2026-09-30 · Relax-first high throughput; results viewer
 
 - `ht-mp-scf.py`: each material now starts with `01_relax` (IBRION = 2, ISIF = 3: cell shape, volume and ions), since MP structures come from a different functional/setup. Same k-density as the SCF by default, so the SCF reuses CONTCAR, CHGCAR and WAVECAR. Options `--no-relax`, `--relax-kpra`.

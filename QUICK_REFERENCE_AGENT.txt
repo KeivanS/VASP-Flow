@@ -519,6 +519,28 @@
 │                02_scf/elf writes ELFCAR (copied to 02_scf/)                   │
 └───────────────────────────────────────────────────────────────────────────────┘
 
+┌─ CHECKING & REPAIRING RUNS (vasp_diagnose.py, ht_tools/) ─────────────────────┐
+│ Diagnose (read-only), look, resubmit — on the cluster, in ~/VASP-Flow:        │
+│   python3 vasp_diagnose.py my_list.txt --since 2026-10-01 --out diag_round1   │
+│   bash ht_tools/show_problems.sh diag_round1     failed ones + what fixes do  │
+│   bash ht_tools/skip_fixes.sh diag_round1 NAME   leave one out (--undo)       │
+│   nohup bash diag_round1/submit_all_fixes.sh > fixes1.log 2>&1 &              │
+│   ... when the queue is empty: diagnose again into diag_round2                │
+│                                                                               │
+│ One material / one job:                                                       │
+│   bash ht_tools/show_material_status.sh ID [step]  ran time, INCAR tags,      │
+│                                 ionic steps (+5 electronic), OUTCAR tail      │
+│   bash ht_tools/show_job_history.sh ID [-S date]  sacct states + queue        │
+│   bash ht_tools/show_job_log.sh ID STEP [lines]   end of newest .out/.err     │
+│                                                                               │
+│ Try a setting first (in tests/, outside materials/), from the run folder:     │
+│   bash ~/VASP-Flow/ht_tools/test_step.sh ID bands fast "ALGO=Fast"            │
+│   bash ~/VASP-Flow/ht_tools/test_step.sh --report tests/ID_bands_*            │
+│                                                                               │
+│ Bands/DOS/LOBSTER use ALGO = Fast (Davidson can diverge at fixed density).    │
+│ Manual: manual.pdf, Part IV "Checking and repairing runs".                    │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ┌─ TROUBLESHOOTING ─────────────────────────────────────────────────────────────┐
 │ VASP_POTCAR_DIR not set   export VASP_POTCAR_DIR=/path/to/potpaw_PBE         │
 │ POTCAR element missing    add _sv or _pv variant to potcar_choices.json      │
