@@ -15,7 +15,8 @@
 #    KPAR is lowered to a divisor of the core count if needed.  Only VASP runs - the
 #    LOBSTER binary is not started.  Submitted with the run's env.sh, partition, account.
 #
-# Defaults: 40 cores, 1 h.  Override with T_NTASKS=.. T_TIME=.. T_PARTITION=..
+# Defaults: 1 node, 40 cores, 1 h, the run's partition (parallel -> standard).
+# Override with T_NTASKS=.. T_TIME=.. T_PARTITION=..
 set -u
 HERE="$(cd "${HT_DIR:-$PWD}" && pwd)"
 
@@ -77,6 +78,8 @@ if [ -n "$kp" ] && [ "$kp" -gt 0 ] && [ $((NT % kp)) -ne 0 ]; then
     sed -i -E "s|^[[:space:]]*KPAR[[:space:]]*=.*|KPAR = $k   ! test_step: divisor of $NT cores|I" "$dst/INCAR"
 fi
 part=${T_PARTITION:-$(sed -n 's/^#SBATCH --partition=//p' "$src/job.sbatch")}
+# a test is one node; multi-node-only partitions (Rivanna: parallel) refuse that
+case $part in parallel) part=standard ;; esac
 acct=$(sed -n 's/^#SBATCH --account=//p' "$src/job.sbatch")
 cat > "$dst/run.sbatch" <<EOF
 #!/bin/bash
@@ -93,4 +96,4 @@ cd "$dst"
 \$VASP_LAUNCH "\$VASP_STD"
 EOF
 echo "$(basename "$dst"): INCAR changes:"; grep "test_step" "$dst/INCAR" || echo "  (none - reference run)"
-(cd "$dst" && sbatch run.sbatch)
+(cd "$dst" && sbatch run.sbatch) || { echo "sbatch failed - removing $dst"; rm -rf "$dst"; exit 1; }
