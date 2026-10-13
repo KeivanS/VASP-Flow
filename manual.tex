@@ -123,7 +123,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v2.4 $\cdot$ October 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v2.5 $\cdot$ October 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -692,6 +692,9 @@ Keyword & Meaning \\ \midrule
 \texttt{WANNIER\_NUM\_WANN:} & Number of Wannier functions. \\
 \texttt{WANNIER\_PROJ:} & Projections, e.g.\ \texttt{Ga:s;As:p}. \\
 \texttt{WANNIER\_EWIN:} & Energy window, e.g.\ \texttt{-5.0 to 15.0}. \\
+\texttt{LOBSTER\_MAX\_KPW:} & Memory budget of the symmetry-off LOBSTER NSCF: largest
+  k-points $\times$ plane waves; a denser mesh is reduced (default $6\times10^6$, 0 = no cap;
+  Appendix~\ref{app:lobster-mem}). \\
 \bottomrule
 \end{tabularx}
 
@@ -850,8 +853,11 @@ Each axis gets a number of points proportional to its reciprocal-lattice length,
 SCF ratios are preserved; a 2-D slab keeps $N_z = 1$), ensuring denser
 sampling for accurate spectral features and smoother COHP/COBI/COOP curves.
 Because the LOBSTER NSCF runs with \texttt{ISYM}=0 there is no symmetry
-reduction, so doubling in 3-D multiplies its k-point count by ${\sim}8$; edit
-\texttt{08\_lobster/KPOINTS} if that is too costly.  The DFPT mesh is forced
+reduction, so doubling in 3-D multiplies its k-point count by ${\sim}8$.
+\textbf{The LOBSTER mesh is kept within memory automatically}: if its k-points
+times plane waves would exceed \cmd{LOBSTER_MAX_KPW} ($6\times10^6$ by default),
+the mesh is reduced, keeping its ratios, until it fits, and the KPOINTS comment
+says so (Appendix~\ref{app:lobster-mem}).  The DFPT mesh is forced
 to match the SCF mesh exactly.
 
 An explicit \texttt{KMESH: N1 N2 N3} entry overrides the automatic density
@@ -1346,6 +1352,9 @@ binary.
         With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
         coupling breaks time-reversal symmetry, which ISYM=0 would still
         assume.
+  \item The k-mesh is $2\times$ the SCF mesh, reduced automatically when the
+        symmetry-off run would not fit in memory (\cmd{LOBSTER_MAX_KPW},
+        Appendix~\ref{app:lobster-mem}).
   \item \texttt{NBANDS} is auto-set to at least the LOBSTER
         basis-function count; \texttt{LMAXMIX} is chosen from the
         elements (6 for $f$, 4 for $d$, 2 for $sp$).
@@ -2183,9 +2192,11 @@ Bands/DOS/LOBSTER energies run away to $10^{6}$--$10^{10}$~eV &
   New runs use \cmd{ALGO = Fast} in these steps; \cmd{vasp_diagnose.py} sets it, then
   \cmd{VeryFast}, for older ones (Appendix~\ref{app:algo}). \\[3pt]
 \cmd{forrtl: severe (41): insufficient virtual memory}, the job fails within a minute &
-  Out of memory while setting up.  Lower KPAR in that step's INCAR (each k-group holds
-  its own copy of the grids), or run fewer MPI ranks per node.  The LOBSTER NSCF
-  (\cmd{ISYM = 0}, full k-mesh) is the usual case. \\[3pt]
+  Out of memory while setting up.  The usual case is the LOBSTER NSCF: with
+  \cmd{ISYM = 0} it keeps every k-point of the mesh (6916 for 24$\times$24$\times$24).
+  Halve its mesh in \cmd{08_lobster/KPOINTS} (\cmd{vasp_diagnose.py} does this; new runs
+  are capped from the start, Appendix~\ref{app:lobster-mem}).  More memory per rank (one
+  node, fewer ranks) did not help.  For other steps lower KPAR. \\[3pt]
 SCF reached EDIFF (the \cmd{1 F=} line is in OSZICAR) but the job still hit its time limit &
   VASP stalled after convergence, so more walltime will not help.  Look at where it
   stopped (\cmd{show_material_status.sh ID scf} prints the OUTCAR tail and the time of
@@ -2315,6 +2326,31 @@ also converged, while \cmd{ALGO = All} (conjugate gradients) is not allowed with
 any INCAR block win over these defaults.  \cmd{vasp_diagnose.py} repairs a diverged or
 unconverged fixed-density step along \cmd{Normal} $\to$ \cmd{Fast} $\to$ \cmd{VeryFast},
 and a non-converging SCF with \cmd{ALGO = All}.
+
+\subsection{LOBSTER k-mesh and memory}
+\label{app:lobster-mem}
+
+The LOBSTER NSCF must run without symmetry (\cmd{ISYM = 0}), so VASP keeps every
+k-point of the mesh; only time reversal pairs $\mathbf k$ with $-\mathbf k$:
+\[
+  N_\mathrm{k} = \frac{N_1N_2N_3 - t}{2} + t,\qquad t = 2^{\,\#\{i:\ N_i\ \mathrm{even}\}}
+\]
+(6916 for 24$\times$24$\times$24, 2820 for 16$\times$16$\times$22, as VASP reports).
+Its memory grows with $N_\mathrm{k}\times N_\mathrm{PW}$, where the plane waves per
+k-point follow from the cell volume and the cutoff,
+$N_\mathrm{PW} = V k_c^3/(6\pi^2)$ with $k_c = \sqrt{\mathrm{ENCUT}/3.81~\mathrm{eV\,\AA^2}}$.
+Two runs with $N_\mathrm{k}N_\mathrm{PW} = 1.5\times10^7$ and $1.8\times10^7$ stopped at
+set-up with \cmd{insufficient virtual memory}, on two 96-core nodes as well as on one
+40-core node with 375~GB --- more memory per rank did not help, a smaller mesh does.
+The generators therefore start from the usual LOBSTER mesh ($2\times$ SCF for the agents,
+$1\times$ SCF in \cmd{ht-semimetals.py}) and, if
+$N_\mathrm{k}N_\mathrm{PW} > $ \cmd{LOBSTER_MAX_KPW} (default $6\times10^6$), scale all $N_i$
+by the same factor (even, at least 2; $N_z = 1$ for slabs; in-plane multiples of 6 for
+hexagonal cells) until it fits.  The KPOINTS comment then reads e.g.\
+\cmd{reduced from 24x24x24 for memory: 2052 k x ~2822 PW}.  The KPAR rule uses the reduced
+count.  Set \cmd{LOBSTER_MAX_KPW: 0} (or \opt{lobster-max-kpw 0}) to keep the full mesh,
+a larger value on nodes with more memory.  For COHP/ICOHP integrals a mesh of a few
+hundred to two thousand k-points is ample for cells of up to $\sim$20 atoms.
 
 \subsection{Relaxation $\to$ SCF hand-off}
 \label{sec:handoff}
@@ -2625,8 +2661,14 @@ Relax, SCF and bands use the same \texttt{NBANDS} $= 1.2\times$ VASP's default
 (from NELECT, NIONS and the starting moment; rounded up to even): VASP's default
 leaves too few empty bands for narrow d bands, the electron count then drifts
 between SCF steps (\texttt{BRMIX: very serious problems}) and the SCF diverges.
-The bands step never uses fewer bands than its SCF.  Every job requests the
-whole node's memory (\texttt{\#SBATCH -{}-mem=0}).
+The bands step never uses fewer bands than its SCF.  The LOBSTER NSCF uses the
+SCF mesh (not $2\times$), reduced further when its symmetry-off k-points times plane
+waves exceed \opt{lobster-max-kpw} (Appendix~\ref{app:lobster-mem}).  Every job
+requests the whole node's memory (\texttt{\#SBATCH -{}-mem=0}).  Without \opt{kpra}
+the mesh follows \opt{kspacing} (default 0.10~\AA$^{-1}$ including the $2\pi$, i.e.\
+$N_i = $ even$\lceil|\mathbf b_i^*|/0.10\rceil$): a dense mesh, e.g.\ 24$\times$24$\times$24
+for the 8-atom Sc$_2$Al$_2$C$_2$O$_2$ --- written as an explicit KMESH into each
+\cmd{instructions.txt}.
 3d elements (V--Ni) start spin-polarised.  GGA+U follows the default rule
 (only chalcogenides/halides, Section~\ref{sec:ggau}) unless
 \texttt{-{}-gga\_u on|off} is given.  There is no DFPT step (dielectric
@@ -2638,6 +2680,8 @@ loop tends not to converge) and no ELF (\texttt{ELF: off}).
 Option & Meaning \\ \midrule
 \texttt{-{}-list}, \texttt{-{}-out} & ID file and directory to create. \\
 \texttt{-{}-kpra N} & k-points per reciprocal atom (e.g.\ 8000). \\
+\texttt{-{}-kspacing D} & used when \opt{kpra} is not given: $N_i$ = even$\lceil|\mathbf b_i^*|/D\rceil$, default 0.10~\AA$^{-1}$ (dense). \\
+\texttt{-{}-lobster-max-kpw X} & LOBSTER memory budget, k-points $\times$ plane waves (default $6\times10^6$, 0 = no cap). \\
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-gga\_u auto|on|off} & GGA+U flag written into every
   \texttt{instructions.txt} (default \texttt{auto}: only chalcogenides/halides). \\
@@ -2788,7 +2832,8 @@ shown in the script header but never taken as the cause.
 \midrule
 oom & out of memory (\cmd{insufficient virtual memory}, \cmd{Cannot allocate memory},
   killed by the OOM handler, MPI time-outs between nodes) &
-  KPAR lowered to at most \opt{kpar-max} (a divisor of the MPI ranks); all node memory requested \\
+  KPAR lowered to at most \opt{kpar-max} (a divisor of the MPI ranks); all node memory requested;
+  for the LOBSTER NSCF also its k-mesh halved per axis \\
 timeout & the job hit its time limit & walltime doubled; a relax continues from its last structure \\
 scf\_nelm & SCF stopped at NELM without converging & \cmd{ALGO = All}, \cmd{NELM} $\geq 150$ \\
 nscf\_diverged & bands/DOS/LOBSTER energies exploded & 30\% more bands than the SCF (not for LOBSTER);
@@ -2921,7 +2966,8 @@ as commented-out lines.
   \item Only jobs since \opt{since} are known to the tool.  Without a job record a time-out is
         still recognised from the log, but the walltime is doubled from the configured value.
   \item A second out-of-memory failure with KPAR already $\leq$ \opt{kpar-max} is resubmitted
-        with the same KPAR; diagnose again with a smaller \opt{kpar-max}.
+        with the same KPAR (the LOBSTER mesh is halved again); diagnose again with a smaller
+        \opt{kpar-max}.
   \item A material that fails again with the same cause after one repair (e.g.\
         \cmd{scf_nelm}) needs a look by hand.
   \item \cmd{quota} and \cmd{mpi_init} are resubmitted unchanged: free disk space first;
@@ -3109,6 +3155,13 @@ as commented-out lines.
     \texttt{show\_job\_log.sh}.  Manual reorganised by task (getting started, single
     calculations, high-throughput screens, checking and repairing runs; how things work in
     the appendices), with the \texttt{vasp\_diagnose.py} manual merged in.
+  \item[\textcolor{mainblue}{v2.5} (2026-10-12)]
+    LOBSTER NSCF k-mesh kept within memory by default: with \texttt{ISYM = 0} its
+    k-points $\times$ plane waves are estimated at generation time and the mesh is
+    reduced (same ratios) above \texttt{LOBSTER\_MAX\_KPW} ($6\times10^6$;
+    \texttt{ht-semimetals.py -{}-lobster-max-kpw}); \texttt{vasp\_diagnose.py} halves the
+    LOBSTER mesh after an out-of-memory failure.  \texttt{test\_step.sh}: one-node tests
+    go to the \texttt{standard} partition.
 \end{description}
 
 \vfill

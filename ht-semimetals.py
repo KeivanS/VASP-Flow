@@ -375,24 +375,47 @@ def make_run_sh_portable(step_dir):
     os.chmod(path, 0o755)
 
 
-def cap_lobster_mesh(proj_dir):
-    """Set the LOBSTER NSCF mesh to 1x the SCF mesh.
+def cap_lobster_mesh(proj_dir, budget=None):
+    """Set the LOBSTER NSCF mesh to 1x the SCF mesh, shrunk further to fit memory.
 
     generate_lobster_input() defaults to 2x the SCF mesh, which is sensible for
     a single material but not here: the step runs ISYM=0, so its cost scales
     with the *full* mesh and 2x in each direction is 8x the k-points.  At the
-    SCF density the COHP/COBI integrals are already well converged.
+    SCF density the COHP/COBI integrals are already well converged.  A dense SCF
+    mesh (e.g. 24x24x24 for a small cell) is still too big without symmetry:
+    VASP then stops at set-up with "insufficient virtual memory".  The mesh is
+    reduced (same ratios) until NKPTS x plane waves <= budget (LOBSTER_MAX_KPW).
     """
+    from vasp_input_generator import (VASPInputGenerator, cap_lobster_mesh as _cap,
+                                      LOBSTER_MAX_KPW)
     scf_kp = os.path.join(proj_dir, '02_scf', 'KPOINTS')
     lob_kp = os.path.join(proj_dir, '08_lobster', 'KPOINTS')
     if not (os.path.isfile(scf_kp) and os.path.isfile(lob_kp)):
         return None
     with open(scf_kp) as f:
-        body = f.read().split('\n', 1)[1]
+        lines = f.read().split('\n')
+    head = "Automatic Gamma mesh (LOBSTER, 1x SCF - ISYM=0, full mesh)"
+    try:
+        mesh = tuple(int(x) for x in lines[3].split()[:3])
+        poscar = os.path.join(proj_dir, 'POSCAR')
+        gen = VASPInputGenerator(poscar, {})
+        encut = 500
+        with open(os.path.join(proj_dir, '08_lobster', 'INCAR')) as f:
+            for l in f:
+                if l.split('=')[0].strip().upper() == 'ENCUT':
+                    encut = float(l.split('=')[1].split()[0])
+        new, nk, npw, reduced = _cap(mesh, gen._cell_volume(), encut,
+                                     LOBSTER_MAX_KPW if budget is None else budget,
+                                     hexagonal=gen._is_hex_lattice())
+    except (ValueError, IndexError, OSError):
+        new, reduced = None, False
     with open(lob_kp, 'w') as f:
-        f.write("Automatic Gamma mesh (LOBSTER, 1x SCF - ISYM=0, full mesh)\n")
-        f.write(body)
-    return True
+        if reduced:
+            f.write(f"{head} - reduced from {mesh[0]}x{mesh[1]}x{mesh[2]} for memory: "
+                    f"{nk} k x ~{npw} PW\n0\nGamma\n  {new[0]}  {new[1]}  {new[2]}\n  0    0    0\n")
+        else:
+            f.write(head + "\n" + '\n'.join(lines[1:]))
+    return new if reduced else True
 
 
 def localise_analyze_sh(proj_dir, tools_rel):
@@ -1091,7 +1114,8 @@ resubmitted.
 * **k-mesh.**  @KMESH_NOTE@ Even subdivisions
   so the BZ boundary is always sampled.  The LOBSTER NSCF is capped at 1x the
   SCF mesh because ISYM=0 means it pays for the full mesh, not the irreducible
-  wedge.
+  wedge, and reduced further (same ratios) when k-points x plane waves would
+  exceed the memory budget (`--lobster-max-kpw`, default 6e6).
 * **Spin.**  Cells containing V/Cr/Mn/Fe/Co/Ni start spin-polarised (ISPIN=2)
   with a high moment on the magnetic species.  Everything else is
   non-spin-polarised.
@@ -1257,6 +1281,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('-l', '--list', required=True, help='file with one mp-id per line')
     ap.add_argument('-o', '--out', required=True, help='highthroughput directory to create')
+    ap.add_argument('--lobster-max-kpw', type=float, default=None,
+                    help='LOBSTER NSCF memory budget: largest k-points x plane waves of the '
+                         'symmetry-off mesh; a denser mesh is reduced (default %g, 0 = no cap)' % 6e6)
     ap.add_argument('--kspacing', type=float, default=KSPACING,
                     help=f'k-point spacing in A^-1 (default {KSPACING})')
     ap.add_argument('--kpra', type=int, default=None,
@@ -1442,7 +1469,7 @@ def main():
         if got != expected:
             return 'fail', f"[{n}/{len(ids)}] {mp_id}: WRONG STEPS {got}", None
 
-        cap_lobster_mesh(proj)
+        cap_lobster_mesh(proj, args.lobster_max_kpw)
         localise_analyze_sh(proj, '../../tools')
         for step in expected:
             make_run_sh_portable(os.path.join(proj, step))

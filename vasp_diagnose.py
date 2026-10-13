@@ -21,7 +21,8 @@ the ENCUT and k-point tests must have finished with a converged SCF.
   quota         disk quota / "error during write"        resubmit unchanged (check space first)
   oom           insufficient virtual memory, UCX "Cannot allocate memory", OUT_OF_MEMORY
                                                           KPAR capped (<= --kpar-max, divisor of
-                                                          the ranks), whole-node memory
+                                                          the ranks), whole-node memory; LOBSTER
+                                                          NSCF: its k-mesh halved per axis
   mpi_init      MPI start-up failure (node problem)      resubmit unchanged
   timeout       time limit                               walltime x2; a relax continues from CONTCAR
   wavecar       WAVECAR does not fit (NBANDS/ENCUT/cell) WAVECAR moved aside, start from CHGCAR
@@ -612,6 +613,20 @@ def plan(m, status, cls_of, recs, args):
                     say('%s: KPAR %d -> %d (%d ranks)' % (s, kp, k, n))
             if m.layout != 'local':
                 extra[s].append('--mem=0')
+        # LOBSTER NSCF (ISYM=0): memory grows with the full k-mesh -> halve it
+        if 'lobster' in redo and cls_of.get('lobster') == 'oom':
+            kp = read(m.f('lobster', 'KPOINTS')).split('\n')
+            try:
+                mesh = [int(x) for x in kp[3].split()[:3]]
+                auto = kp[2].strip()[:1].upper() in ('G', 'M') and kp[1].strip() == '0'
+            except (IndexError, ValueError):
+                mesh, auto = [], False
+            if auto and len(mesh) == 3 and max(mesh) > 2:
+                new = [1 if n == 1 else max(2, (n // 2 + 1) // 2 * 2) for n in mesh]
+                d = STEP_DIR['lobster']
+                lines.append("sed -i -e '4s/.*/  %d  %d  %d/' -e '1s/$/ [vasp_diagnose: %dx%dx%d halved for memory]/' %s/KPOINTS"
+                             % tuple(new + mesh + [d]))
+                say('lobster: k-mesh %dx%dx%d -> %dx%dx%d (ISYM=0 memory)' % tuple(mesh + new))
     # walltime x2 for the step(s) that timed out
     for s in first_bad:
         if cls_of.get(s) == 'timeout' and s in wall:

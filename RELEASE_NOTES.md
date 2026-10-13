@@ -1,5 +1,11 @@
 # VASP-Flow release notes
 
+## v2.5 — 2026-10-12 · LOBSTER k-mesh within memory
+
+- The LOBSTER NSCF runs without symmetry, so VASP keeps every k-point of its mesh (24×24×24 → 6916 k-points) and dense meshes stopped at set-up with `insufficient virtual memory`, whatever the memory per rank. The generators now estimate k-points × plane waves (plane waves from cell volume and ENCUT) and reduce the LOBSTER mesh, keeping its ratios, until it is below `LOBSTER_MAX_KPW` (default 6e6; `LOBSTER_MAX_KPW: <n>` in `instructions.txt`, `ht-semimetals.py --lobster-max-kpw`, 0 = no cap). The KPOINTS comment records the reduction; KPAR follows the reduced count.
+- `vasp_diagnose.py`: an out-of-memory LOBSTER step also gets its k-mesh halved per axis.
+- `ht_tools/test_step.sh`: one-node tests go to `standard` when the run uses the multi-node `parallel` partition; a failed `sbatch` removes the test folder.
+
 ## v2.4 — 2026-10-12 · Checking and repairing runs
 
 Includes the v2.3 changes of 2026-10-05, which were not released separately.

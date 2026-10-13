@@ -83,6 +83,9 @@ class InstructionParser:
             # LOBSTER Gaussian smearing width (eV) for lobsterin; default applied later
             'lobster_sigma':  self._extract_str_key(content,
                               r'LOBSTER_SIGMA\s*[:,=]\s*([\d.]+)', default=None),
+            # LOBSTER NSCF memory budget: max NKPTS x plane waves (ISYM=0 mesh is shrunk to fit; 0 = no cap)
+            'lobster_max_kpw': self._extract_float_key(content,
+                              r'LOBSTER_MAX_KPW\s*[:,=]\s*([\d.Ee+]+)', default=None),
             # LOBSTER NSCF symmetry (must be 0 or -1); default applied later
             'lobster_isym':   self._extract_str_key(content,
                               r'LOBSTER_ISYM\s*[:,=]\s*(-?\d+)', default=None),

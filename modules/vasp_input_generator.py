@@ -63,6 +63,61 @@ def load_u_defaults():
     return out
 
 
+# ── LOBSTER NSCF: keep the symmetry-off k-mesh within memory ────────────────
+# The LOBSTER NSCF runs ISYM = 0, so VASP keeps every k-point of the full mesh
+# (time reversal only halves it).  Its memory grows with
+#     NKPTS x NPW      (k-points x plane waves per k-point),
+# and VASP stops at set-up with "insufficient virtual memory" when it is too
+# large: Sc2Al2C2O2 (24x24x24, 6916 k x ~2600 PW = 1.8e7) and mp-20352
+# (16x16x22, 2820 k x ~5400 PW = 1.5e7) failed on a 40-core / 375 GB node and
+# on 2 x 96 cores.  The mesh is shrunk (same ratios, even N_i) until the
+# product is below LOBSTER_MAX_KPW; `LOBSTER_MAX_KPW: <n>` in instructions.txt
+# changes the budget (0 = no cap).
+LOBSTER_MAX_KPW = 6.0e6
+
+
+def plane_waves_per_k(volume, encut):
+    """Plane waves inside the ENCUT sphere: V k_c^3 / (6 pi^2), hbar^2/2m = 3.80998 eV A^2."""
+    kc = (float(encut) / 3.80998) ** 0.5
+    return volume * kc ** 3 / (6 * np.pi ** 2)
+
+
+def lobster_kpoints(mesh):
+    """k-points of a Gamma mesh without symmetry, time reversal kept (what VASP's ISYM=0 runs)."""
+    n = mesh[0] * mesh[1] * mesh[2]
+    t = 2 ** sum(1 for x in mesh if x % 2 == 0)   # points with k = -k (Gamma and zone-boundary halves)
+    return (n - t) // 2 + t
+
+
+def cap_lobster_mesh(mesh, volume, encut, budget=LOBSTER_MAX_KPW, two_d=False, hexagonal=False):
+    """Largest mesh with the ratios of *mesh* whose NKPTS x NPW stays within *budget*.
+
+    Returns (mesh, nkpts, npw, reduced).  N_i are even (minimum 2), N_z stays 1
+    for a 2-D slab, the in-plane N of a hexagonal lattice are multiples of 6
+    when >= 6 (K and M on the mesh).
+    """
+    mesh = tuple(int(x) for x in mesh)
+    npw = plane_waves_per_k(volume, encut)
+    if not budget or lobster_kpoints(mesh) * npw <= budget:
+        return mesh, lobster_kpoints(mesh), int(npw), False
+
+    def snap(n, i):
+        if n <= 1 or (two_d and i == 2):
+            return 1 if (two_d and i == 2) else max(1, n)
+        if hexagonal and i < 2 and n >= 6:
+            return max(6, int(round(n / 6.0)) * 6)
+        return max(2, int(round(n / 2.0)) * 2)
+
+    f = 1.0
+    new = mesh
+    while f > 0.05:
+        f *= 0.95
+        new = tuple(snap(int(round(n * f)) if n > 1 else n, i) for i, n in enumerate(mesh))
+        if lobster_kpoints(new) * npw <= budget or all(x <= 2 for x in new):
+            break
+    return new, lobster_kpoints(new), int(npw), True
+
+
 # ── SLURM: continue a step that hits its time limit ─────────────────────────
 # Default walltime per step (HH:MM:SS).  An explicit <STEP>_WALLTIME or a
 # global WALLTIME in the instructions wins; steps not listed use the profile.
@@ -1710,7 +1765,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
             return max(1, int(npts) * 4)          # ~4 segments on a typical path
         if text:                                  # explicit automatic mesh
             mesh = self._parse_kpoints_text(text)[1]
-        elif calc_type in ('dos', 'lobster'):
+        elif calc_type == 'lobster':
+            mesh = self._lobster_mesh()[0]
+        elif calc_type == 'dos':
             mesh = self._mesh_x2()
         elif calc_type == 'relax':
             mesh = self._relax_mesh()
@@ -1720,7 +1777,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             mesh = self._scf_mesh()
         full = max(1, mesh[0] * mesh[1] * mesh[2])
         if calc_type == 'lobster':
-            return full                            # ISYM=0: no reduction
+            return lobster_kpoints(mesh)           # ISYM=0: time reversal only
         try:
             import spglib
             from pymatgen.core import Structure
@@ -2638,6 +2695,32 @@ echo "      Data:  band.yaml  FORCE_SETS"
         nz2 = 1 if self.instructions.get('is_2d') else nz * 2
         return nx * 2, ny * 2, nz2
 
+    def _cell_volume(self) -> float:
+        with open(self.poscar) as f:
+            lines = f.readlines()
+        sc = float(lines[1].split()[0])
+        A = np.array([[float(x) for x in lines[i].split()[:3]] for i in range(2, 5)])
+        vol = abs(np.linalg.det(A))
+        return (-sc if sc < 0 else vol * sc ** 3)
+
+    def _lobster_mesh(self, density=None):
+        """LOBSTER NSCF mesh: 2x the SCF mesh, shrunk if NKPTS x NPW (ISYM=0) would
+        not fit in memory (see LOBSTER_MAX_KPW).  Returns (mesh, note)."""
+        mesh = self._mesh_x2(density)
+        budget = self.instructions.get('lobster_max_kpw')
+        budget = LOBSTER_MAX_KPW if budget is None else float(budget)
+        try:
+            vol = self._cell_volume()
+        except Exception:
+            return mesh, ''
+        new, nk, npw, reduced = cap_lobster_mesh(
+            mesh, vol, self._encut(), budget,
+            two_d=bool(self.instructions.get('is_2d')), hexagonal=self._is_hex_lattice())
+        if not reduced:
+            return mesh, ''
+        return new, (f" - reduced from {mesh[0]}x{mesh[1]}x{mesh[2]} for memory: "
+                     f"ISYM=0 {nk} k x ~{npw} PW <= LOBSTER_MAX_KPW {budget:.3g}")
+
     def _generate_kpoints_x2(self, density=None, label: str = 'NSCF') -> str:
         """KPOINTS file at 2× the SCF mesh (see _mesh_x2)."""
         nx, ny, nz = self._mesh_x2(density)
@@ -2662,7 +2745,10 @@ echo "      Data:  band.yaml  FORCE_SETS"
         if step == 'relax':
             return self._generate_kpoints_auto(
                 density if density is not None else self._relax_density())
-        if step in ('dos', 'lobster'):
+        if step == 'lobster':
+            mesh, note = self._lobster_mesh(density)
+            return self._kpoints_auto_text(mesh, f"Automatic Gamma mesh (LOBSTER, 2x SCF{note})")
+        if step == 'dos':
             return self._generate_kpoints_x2(density, label=step.upper())
         if step == 'phonons':
             return self._generate_kpoints_auto('coarse')
