@@ -132,6 +132,7 @@
 \sloppy
 
 \maketitle
+\setcounter{tocdepth}{2}
 \tableofcontents
 \newpage
 % ============================================================
@@ -139,49 +140,71 @@
 % ============================================================
 
 % ============================================================
-\section{What VASP-Flow does and where to find what}
+\section{What VASP-Flow does: four ways to run it}
 \label{sec:start}
 % ============================================================
 
 
-VASP Workflow is a framework for setting up, running, and analysing DFT
-calculations with VASP.  Two interfaces are provided:
+VASP-Flow sets up, runs and analyses DFT calculations with VASP.  You describe
+\emph{what} you want --- a structure (POSCAR) and a few lines such as ``PBEsol,
+relaxation, SCF, band structure'' --- and it writes every INCAR, KPOINTS, POTCAR and job
+script, chooses the k-mesh, the parallelisation and the walltimes, runs the steps in the
+right order and plots the results.  There are four ways to use it:
 
-\begin{itemize}
-  \item \textbf{Browser GUI} (\texttt{vasp-gui.py}) --- a Flask web
-        application: configure calculations through a form, run steps from
-        the browser, view band-structure and DOS plots in real time.
-  \item \textbf{CLI agents} (\texttt{vasp-agent.py} for workstations,
-        \texttt{vasp-agent-slurm.py} for SLURM clusters) --- read POSCAR and a
-        plain-text \texttt{instructions.txt} file and generate all INCAR,
-        KPOINTS, POTCAR, and job scripts automatically.
-\end{itemize}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.2\linewidth}@{}}
+\thead
+Way & For & First example \\ \midrule
+\textbf{Browser GUI} (\cmd{vasp-gui.py}) & one material, set up with a form; runs on your
+  computer, plots in the browser & Example~1 (\ref{sec:ex-gui}) \\
+\textbf{Workstation agent} (\cmd{vasp-agent.py}) & one material from the command line,
+  described in a text file \cmd{instructions.txt} & Example~2 (\ref{sec:ex-ws}) \\
+\textbf{Cluster agent} (\cmd{vasp-agent-slurm.py}) & the same on a SLURM cluster: every step
+  is a job & Example~3 (\ref{sec:ex-slurm}) \\
+\textbf{High-throughput drivers} (\cmd{ht-mp-scf.py}, \cmd{ht_runs.py}) & a list of Materials
+  Project IDs, on a workstation or a cluster; failed runs are repaired round by round
+  (\cmd{ht_tools/next_round.sh}) & Examples~4 and~5 (\ref{sec:ex-ht-ws}, \ref{sec:ex-ht-hpc}) \\
+\bottomrule
+\end{tabularx}
 
-Both interfaces share the same \texttt{modules/} back-end.
+\noindent All four use the same input generator (\cmd{modules/}), so a calculation set up in
+one way gives the same files as in another.
 
-On a cluster, \cmd{ht_tools/next_round.sh} (with \cmd{vasp_diagnose.py}) checks finished runs, says why a step failed and how sure it is, repairs the inputs and resubmits them, round by round (Part~\ref{part:check}).
+\textbf{How to read this manual.}  Install VASP-Flow (Section~\ref{sec:install}), then work
+through the example that matches what you want to do (Part~\ref{part:examples}).
+Part~\ref{part:reference} explains each piece and how to change it by hand;
+Part~\ref{part:check} shows how to find and repair failed runs; the appendices describe
+how values are chosen.
 
 \subsection{Find what you need}
 
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.36\linewidth}@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.3\linewidth}@{}}
 \thead
 I want to \ldots & Go to \\ \midrule
 install VASP-Flow and tell it where VASP and the POTCARs are & Section~\ref{sec:install} \\
-set up and run one material with a form in the browser & Section~\ref{sec:gui} \\
-set up and run one material from the command line or on a cluster & Section~\ref{sec:agents} \\
-write or change \texttt{instructions.txt} & Section~\ref{sec:instructions} \\
+\multicolumn{2}{@{}l}{\textit{Get going with an example}} \\
+run one material in the browser, with convergence tests & Example~1, Section~\ref{sec:ex-gui} \\
+run one material from the command line & Example~2, Section~\ref{sec:ex-ws} \\
+run one material on a SLURM cluster & Example~3, Section~\ref{sec:ex-slurm} \\
+run a list of Materials Project IDs on a workstation & Example~4, Section~\ref{sec:ex-ht-ws} \\
+run a list of materials on a cluster and repair the failures & Example~5, Section~\ref{sec:ex-ht-hpc} \\
+\multicolumn{2}{@{}l}{\textit{Change something}} \\
+know every field and button of the GUI & Section~\ref{sec:gui} \\
+know which files and scripts the agents create & Section~\ref{sec:agents} \\
+write or change \texttt{instructions.txt} (all keywords) & Section~\ref{sec:instructions} \\
 choose the functional, spin, SOC or GGA+U & Section~\ref{sec:methods} \\
 change the k-point mesh & Section~\ref{sec:kmesh} \\
 set any INCAR or KPOINTS tag myself & Section~\ref{sec:incar} \\
-get band structures, DOS, ELF, phonons, Born charges, Wannier functions or LOBSTER bonds & Sections~\ref{sec:spectra}--\ref{sec:extras} \\
+get band structures, DOS, ELF, phonons, Born charges, Wannier functions or LOBSTER bonds & Sections~\ref{sec:spectra}, \ref{sec:extras} \\
 set cores, nodes, KPAR/NCORE and walltimes & Section~\ref{sec:resources} \\
-run a list of Materials Project IDs on a cluster & Section~\ref{sec:ht-howto} \\
+see more \texttt{instructions.txt} examples (SOC, magnetism, phonons, pressure) & Section~\ref{sec:examples} \\
+set up a high-throughput run and use its scripts & Sections~\ref{sec:highthroughput}, \ref{sec:ht-scripts} \\
+\multicolumn{2}{@{}l}{\textit{Something went wrong}} \\
 find out why runs failed and repair them, round by round & Section~\ref{sec:next-round} \\
 read the report and its certainty numbers & Section~\ref{sec:certainty} \\
-set my own parameters for some materials & Section~\ref{sec:set-params} \\
+set my own parameters for some materials of a run & Section~\ref{sec:set-params} \\
 check one material or one job quickly & Section~\ref{sec:lookup} \\
-try a different INCAR setting on one material before resubmitting & Section~\ref{sec:testfix} \\
-fix something that went wrong & Section~\ref{sec:trouble} \\
+try a different INCAR setting on one material first & Section~\ref{sec:testfix} \\
+look up a symptom and its remedy & Section~\ref{sec:trouble} \\
 know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, walltime continuation, \ldots) & Appendix~\ref{app:inputs} \\
 \bottomrule
 \end{tabularx}
@@ -328,11 +351,348 @@ source for GUI users is the System Setup page.  On a headless cluster, edit
 the JSON file directly and leave it in place.
 
 % ============================================================
-\part{Single calculations}
+\part{Learning by example}
+\label{part:examples}
 % ============================================================
 
+The five examples below go from one material in the browser to a small
+high-throughput run on a cluster that needs a repair round.  Each one is
+complete: you can type the commands as they are.  How things work behind the
+scenes, and every option, is in Part~\ref{part:reference}.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.3\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.17\linewidth}@{}}
+\thead
+Example & What you learn & Runs on \\ \midrule
+1. Silicon in the browser (Section~\ref{sec:ex-gui}) & convergence tests, choosing ENCUT and the
+  k-mesh, bands and DOS, changing an INCAR tag by hand & your computer \\
+2. GaAs from the command line (Section~\ref{sec:ex-ws}) & \cmd{instructions.txt}, the two-phase
+  workflow, INCAR blocks, editing inputs & a workstation \\
+3. GaAs on a cluster (Section~\ref{sec:ex-slurm}) & the same with SLURM jobs; rerunning one step & a SLURM cluster \\
+4. Three materials on a workstation (Section~\ref{sec:ex-ht-ws}) & a high-throughput list from
+  Materials Project; checking the runs & a workstation \\
+5. Three materials on a cluster (Section~\ref{sec:ex-ht-hpc}) & a high-throughput run with repair
+  rounds, your own settings, collecting the results & a SLURM cluster \\
+\bottomrule
+\end{tabularx}
+
 % ============================================================
-\section{Running a calculation from the browser (GUI)}
+\section{Example 1 --- Silicon in the browser: convergence tests, then bands and DOS}
+\label{sec:ex-gui}
+% ============================================================
+
+\paragraph{1. Start the GUI.}  In the VASP-Flow folder run \cmd{make run} and open
+\url{http://localhost:5001}.  (On a cluster, see Section~\ref{sec:gui} for the SSH tunnel.)
+
+\paragraph{2. Setup tab.}  Fill in:
+\begin{itemize}
+  \item \textbf{Project name}: \cmd{Si_example}.
+  \item \textbf{POSCAR}: paste the primitive cell of silicon:
+\begin{lstlisting}
+Si
+1.0
+   0.000   2.734   2.734
+   2.734   0.000   2.734
+   2.734   2.734   0.000
+Si
+2
+Direct
+   0.00 0.00 0.00
+   0.25 0.25 0.25
+\end{lstlisting}
+  \item \textbf{Functional}: PBEsol.  \textbf{Spin / SOC}: None.
+  \item \textbf{Tasks}: Structure relaxation, SCF, Band structure, DOS (projection row:
+        Element \cmd{Si}, Orbitals \cmd{s} and \cmd{p}).  Leave the k-path empty: it is
+        detected from the cell (the standard FCC path G-X-W-K-G-L-U-W-L-K).
+  \item \textbf{Calculation parameters}: choose \emph{Run convergence tests first} and enter
+        \textbf{K-point meshes} \cmd{4x4x4, 6x6x6, 8x8x8, 10x10x10, 12x12x12} and
+        \textbf{ENCUT range} \cmd{250-500}.
+\end{itemize}
+Click \textbf{Generate Workflow}.  The project folder \cmd{Si_example/} is created
+with one sub-folder per step (Section~\ref{sec:agent-files}).
+
+\paragraph{3. Phase 1: convergence tests.}  On the \textbf{Workflow} tab, run
+\emph{Convergence tests}.  Each ENCUT and each k-mesh is one short SCF; the plots of
+energy, pressure and force against ENCUT and against the k-mesh appear below the
+button.  When they are done, the fields under \emph{Review results then set production
+parameters} are filled with the automatic choice --- the smallest ENCUT and k-mesh
+after which the force and the pressure no longer change (by more than 5~meV/\AA\ and
+0.5~kbar).  For silicon this is typically ENCUT $\approx$ 300--350~eV and an
+8$\times$8$\times$8 to 10$\times$10$\times$10 mesh.  You may type other values.
+
+\paragraph{4. Phase 2: production.}  Click \textbf{Run Phase 2 with these parameters}.
+ENCUT is written into every INCAR, the k-meshes are regenerated (the DOS gets twice the
+SCF mesh) and relax $\to$ SCF $\to$ bands $\to$ DOS run one after the other; the output
+streams into the page.
+
+\paragraph{5. Results tab.}  Band structure, total and projected DOS and the OUTCAR
+summary (energy, Fermi level, forces).  Silicon should show an indirect gap of about
+0.5--0.6~eV (PBEsol underestimates the experimental 1.1~eV).
+
+\paragraph{6. Change a tag by hand.}  Two ways:
+\begin{itemize}
+  \item \textbf{One file, now}: on the Workflow tab, \textbf{Edit files} next to a step
+        opens its INCAR, KPOINTS and POSCAR in the browser (a \cmd{.bak} copy is kept).
+        Change e.g.\ \cmd{SIGMA = 0.05} to \cmd{SIGMA = 0.02} in \cmd{03_bands/INCAR}, save,
+        and run that step again.
+  \item \textbf{In the project, for good}: \textbf{Edit \& Regenerate} reopens Setup with
+        everything filled in.  Under \emph{Advanced --- explicit INCAR / KPOINTS} choose a
+        step and type tags (one \cmd{TAG = value} per line) or a whole KPOINTS file;
+        \textbf{Generate Workflow} again.  These override every automatic choice
+        (Section~\ref{sec:incar}).
+\end{itemize}
+
+% ============================================================
+\section{Example 2 --- GaAs from the command line on a workstation}
+\label{sec:ex-ws}
+% ============================================================
+
+The same steps without the browser, with \cmd{vasp-agent.py}.  Work in a folder of your
+own, outside the VASP-Flow folder.
+
+\paragraph{1. Two input files.}  \cmd{POSCAR} (primitive zinc-blende GaAs) and
+\cmd{instructions.txt}:
+\begin{lstlisting}
+GaAs
+1.0
+   0.000   2.827   2.827
+   2.827   0.000   2.827
+   2.827   2.827   0.000
+Ga As
+1 1
+Direct
+   0.00 0.00 0.00
+   0.25 0.25 0.25
+\end{lstlisting}
+\begin{lstlisting}
+Project: GaAs_example
+Methods: PBEsol functional
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Ga-p and As-p)
+Convergence: Test k-points 4x4x4, 6x6x6, 8x8x8, 10x10x10
+             Test ENCUT 250:50:500
+MPI: 8
+
+# my own tags: tighter SCF, smaller smearing for the bands
+INCAR scf:
+   EDIFF = 1E-7
+END_INCAR
+INCAR bands:
+   SIGMA = 0.02
+END_INCAR
+\end{lstlisting}
+\cmd{instructions.txt} is plain English with a few keywords; all of them are listed in
+Section~\ref{sec:keywords}.  The \cmd{INCAR scf:} \dots\ \cmd{END_INCAR} blocks put your
+own tags into one step's INCAR and override the generated values.
+
+\paragraph{2. Generate the inputs.}  Run the agent in that folder:
+\begin{lstlisting}[language=bash]
+mkdir -p ~/calc && cd ~/calc            # POSCAR and instructions.txt are here
+python3 ~/VASP-Flow/vasp-agent.py       # or: -i my_inst.txt -s my.vasp
+\end{lstlisting}
+It creates \cmd{GaAs_example/} with \cmd{00_convergence/}, \cmd{01_relax/},
+\cmd{02_scf/}, \cmd{03_bands/}, \cmd{04_dos/} (each with INCAR, KPOINTS, POTCAR and
+\cmd{run.sh}) and the scripts \cmd{run_convergence.sh}, \cmd{run_calculations.sh},
+\cmd{analyze_convergence.sh} and \cmd{analyze.sh}.  Look at the INCARs: they are complete
+and commented, and \cmd{02_scf/INCAR} ends with your \cmd{EDIFF}.
+
+\paragraph{3. Phase 1: convergence tests.}  Run the tests, plot them and look at the automatic choice:
+\begin{lstlisting}[language=bash]
+cd GaAs_example
+./run_convergence.sh                    # one short SCF per ENCUT and per mesh
+./analyze_convergence.sh                # plots in 00_convergence/
+cat 00_convergence/converged_params.txt # the automatic choice
+\end{lstlisting}
+
+\paragraph{4. Phase 2: production.}  Then run the calculations and the plots:
+\begin{lstlisting}[language=bash]
+./run_calculations.sh     # asks for ENCUT and the k-mesh (Enter = automatic choice)
+./analyze.sh              # band structure, DOS and OUTCAR summary in analysis/
+\end{lstlisting}
+\cmd{run_calculations.sh} writes the chosen ENCUT and mesh into every step and runs relax
+$\to$ SCF $\to$ bands $\to$ DOS.  Without a \cmd{Convergence:} line the agent writes a
+single \cmd{run_all.sh} instead.
+
+\paragraph{5. Change inputs by hand.}  Three ways:
+\begin{itemize}
+  \item Before a step runs, its files are yours: edit \cmd{03_bands/INCAR} and run that step
+        alone with \cmd{cd 03_bands && bash run.sh}.
+  \item To change the project for good, edit \cmd{instructions.txt} and run the agent again;
+        a fixed mesh goes in a \cmd{KPOINTS scf:} \dots\ \cmd{END_KPOINTS} block
+        (Section~\ref{sec:kpoints-block}).
+  \item One-off tags on the command line:
+        \cmd{vasp-agent.py --incar "scf:NELM=200"} (Section~\ref{sec:incar-cli}).
+\end{itemize}
+
+% ============================================================
+\section{Example 3 --- GaAs on a SLURM cluster}
+\label{sec:ex-slurm}
+% ============================================================
+
+Exactly Example~2, with \cmd{vasp-agent-slurm.py}: every step becomes a SLURM job.
+
+\paragraph{1. Once per cluster.}  Put the VASP binaries, modules, partition and account
+into \cmd{~/VASP-Flow/profiles/slurm.json} (Section~\ref{sec:remote-setup}).
+
+\paragraph{2. Inputs.}  The same \cmd{POSCAR} and \cmd{instructions.txt}, with the job
+size instead of \cmd{MPI: 8}:
+\begin{lstlisting}
+NODES: 1
+NTASKS_PER_NODE: 40
+RELAX_WALLTIME: 02:00:00      # optional; each step has a default walltime
+\end{lstlisting}
+
+\paragraph{3. Generate, then run the two phases.}  On the login node:
+\begin{lstlisting}[language=bash]
+cd /scratch/$USER/calc
+python3 ~/VASP-Flow/vasp-agent-slurm.py
+cd GaAs_example
+./submit_convergence.sh       # phase 1: the test jobs
+squeue -u $USER               # wait until they are gone
+./analyze_convergence.sh
+./submit_calculations.sh      # phase 2: asks ENCUT/k-mesh, submits relax->scf->bands->dos
+./analyze.sh                  # after the jobs have finished
+\end{lstlisting}
+The production jobs are chained (\cmd{--dependency=afterok}): the SCF starts only when
+the relaxation ended well.  Each step has its own walltime, and a step that reaches it
+is stopped cleanly and continued in a new job automatically
+(Section~\ref{sec:slurm-time}).
+
+\paragraph{4. If a step failed.}  Find out why and repair it with the diagnosis
+(Part~\ref{part:check}); for one project the list has one line:
+\begin{lstlisting}[language=bash]
+echo GaAs_example > mylist.txt
+python3 ~/VASP-Flow/vasp_diagnose.py mylist.txt     # -> diagnosis_round1/report.txt
+\end{lstlisting}
+To rerun one step by hand after editing its INCAR: \cmd{cd 03_bands && sbatch run.sh}.
+
+% ============================================================
+\section{Example 4 --- Three materials from Materials Project on a workstation}
+\label{sec:ex-ht-ws}
+% ============================================================
+
+\cmd{ht-mp-scf.py} takes a list of Materials Project IDs, downloads each primitive
+cell and runs relax $\to$ SCF (+ ELF) $\to$ LOBSTER for each with
+\cmd{vasp-agent.py}.  It needs internet access, \cmd{pip install pymatgen mp-api}, and a
+free API key from \url{https://materialsproject.org/api}.
+
+\begin{lstlisting}[language=bash]
+export MP_API_KEY=your_key
+export VASP_POTCAR_DIR=/path/to/potpaw_PBE
+mkdir -p ~/ht_small && cd ~/ht_small
+printf 'mp-149\nmp-2534\nmp-22862\n' > my_list.txt    # Si, GaAs, NaCl
+python3 ~/VASP-Flow/ht-mp-scf.py -l my_list.txt --agent local --mpi 8
+./runall.sh               # builds and runs the three materials, one after another
+\end{lstlisting}
+Each material gets a project folder like those of Example~2 (\cmd{mp-149/01_relax},
+\cmd{02_scf}, \cmd{08_lobster}, \dots).  The settings written for each material are in
+\cmd{_ht_inputs/<id>/instructions.txt}; edit one and run \cmd{runall.sh} again to change
+that material.
+
+\paragraph{Check the runs.}  When \cmd{runall.sh} has finished:
+\begin{lstlisting}[language=bash]
+python3 ~/VASP-Flow/vasp_diagnose.py my_list.txt
+less diagnosis_round1/report.txt
+\end{lstlisting}
+Every material should be \cmd{ok}.  If one is not, its repair script is in
+\cmd{diagnosis_round1/fix/}; for a workstation it runs VASP directly, so start it where
+VASP may run: \cmd{bash diagnosis_round1/fix/ht_small__mp-2534.sh}.
+
+% ============================================================
+\section{Example 5 --- Three materials on a cluster, with repair rounds}
+\label{sec:ex-ht-hpc}
+% ============================================================
+
+\cmd{ht_runs.py} is the cluster driver for a list of materials: relax $\to$ SCF $\to$
+bands $\to$ LOBSTER, one SLURM job per step, every setting chosen per material.  This
+example uses three materials picked so that at least one needs a second round:
+
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X@{}}
+\thead
+Material & Why it is in the list \\ \midrule
+\cmd{mp-149} (Si) & an easy reference: finishes in minutes \\
+\cmd{mp-972937} (Sc$_2$Al$_2$C$_2$O$_2$) & a dense LOBSTER mesh; with the settings of
+  step 2 its LOBSTER step runs out of memory and is repaired in round 1 \\
+\cmd{mp-1080459} & its relaxation did not converge in the two passes of the first job
+  in our runs, so round 1 continues it from its last structure \\
+\bottomrule
+\end{tabularx}
+
+\paragraph{1. Generate the run.}  On the login node (it downloads from Materials Project):
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow && git pull
+source ~/vaspenv/bin/activate          # python with pymatgen, mp-api, spglib, numpy
+export MP_API_KEY=your_key
+printf 'mp-149\nmp-972937\nmp-1080459\n' > lists/example5.txt
+python3 ht_runs.py --list lists/example5.txt --single-node \
+    --out /scratch/$USER/VASP-Flow/HT_example5
+\end{lstlisting}
+
+\paragraph{2. Optional: see an out-of-memory repair.}  Generate with the dense mesh of
+VASP-Flow before v2.5 and without the LOBSTER memory guard:
+add \opt{kspacing 0.10} \opt{lobster-max-kpts 0} \opt{lobster-max-kpw 0} to the command of step~1.
+The LOBSTER step of mp-972937 then gets a 24$\times$24$\times$24 mesh and stops at
+set-up with \cmd{insufficient virtual memory}.
+
+\paragraph{3. Configure and submit.}  Edit the one settings file, then submit everything:
+\begin{lstlisting}[language=bash]
+cd /scratch/$USER/VASP-Flow/HT_example5
+vi env.sh                 # VASP module, LOBSTER_BIN (Linux build), ANALYSIS_PYTHON
+./submit_all.sh           # builds the POTCARs, submits relax->scf->bands->lobster per material
+./status.sh               # progress per step; squeue -u $USER for the jobs
+\end{lstlisting}
+
+\paragraph{4. Round 1, when the queue is empty.}  From the run folder:
+\begin{lstlisting}[language=bash]
+bash ~/VASP-Flow/ht_tools/next_round.sh
+\end{lstlisting}
+It prints one line per failed material and asks before submitting anything, e.g.
+\begin{lstlisting}
+HT_example5__mp-972937   relax:ok scf:ok bands:ok lobster:oom   oom -> lobster   cause 0.90  fix 0.85  round 1
+HT_example5__mp-1080459  relax:relax_unconv scf:ok ...          relax_unconv -> relax>scf>bands>lobster  cause 0.95  fix 0.80  round 1
+== changes per fix script:
+-- HT_example5__mp-972937
+   lobster: k-mesh 24x24x24 -> 12x12x12 (ISYM=0 memory)
+Submit the 2 repair(s) now? [y/N]
+\end{lstlisting}
+Read \cmd{diagnosis_round1/report.txt} for the cause in words, the evidence and the
+certainty (Section~\ref{sec:certainty}), then answer \cmd{y}.  The failed runs are kept in
+\cmd{materials/<id>/round_1_<date>/}.  Which materials fail can differ on your cluster;
+the procedure is the same.
+
+\paragraph{5. Round 2.}  When those jobs are done, run \cmd{next_round.sh} again.
+Repaired materials now show \cmd{ok}; repeat until it says \cmd{Nothing to submit.}
+
+\paragraph{6. Your own setting for one material.}  Suppose you want the relaxation of
+mp-1080459 with a looser force criterion and twice the time:
+\begin{lstlisting}[language=bash]
+bash ~/VASP-Flow/ht_tools/set_params.sh mp-1080459 relax "EDIFFG=-0.02; TIME=16:00:00"
+bash ~/VASP-Flow/ht_tools/next_round.sh
+\end{lstlisting}
+The next round redoes that relaxation (and the steps after it) with your values
+(Section~\ref{sec:set-params}).
+
+\paragraph{7. Results.}  When nothing is left to repair:
+\begin{lstlisting}[language=bash]
+bash ~/VASP-Flow/ht_tools/audit_run.sh        # all ok? spilling? (read-only)
+./postprocess_all.sh                          # bond tables -> screen_lobster_all.csv
+./collect_results.sh                          # small screen_results.tar.gz for your computer
+\end{lstlisting}
+Open the unpacked tarball in the GUI with \textbf{Open results folder}
+(Section~\ref{sec:open-results}).
+
+% ============================================================
+\part{How it works and how to change it}
+\label{part:reference}
+% ============================================================
+
+This part explains each piece the examples used --- every field of the GUI, the
+files and scripts the agents write, every keyword of \cmd{instructions.txt} --- and how
+to change any of it by hand.  The appendices go one level deeper.
+
+% ============================================================
+\section{The browser GUI: every field and button}
 \label{sec:gui}
 % ============================================================
 
@@ -540,7 +900,7 @@ with trimmed OUTCARs, so the tarball opens directly; set
 \texttt{FULL\_OUTCAR=1} to keep the complete OUTCARs.
 
 % ============================================================
-\section{Running a calculation from the command line}
+\section{The command-line agents: commands and the files they create}
 \label{sec:agents}
 % ============================================================
 
@@ -581,6 +941,7 @@ Two-phase workflow when convergence tests are requested:
 \end{lstlisting}
 
 \subsection{What the agent creates}
+\label{sec:agent-files}
 
 \begin{lstlisting}
 ProjectName/
@@ -601,7 +962,7 @@ ProjectName/
 Without the GUI on a cluster, first set the VASP paths and SLURM defaults in \cmd{profiles/slurm.json} (Section~\ref{sec:remote-setup}).
 
 % ============================================================
-\section{Describing the calculation: \texttt{instructions.txt}}
+\section{Describing a calculation in \texttt{instructions.txt}: every keyword}
 \label{sec:instructions}
 % ============================================================
 
@@ -835,7 +1196,7 @@ R2SCAN/HSE06.  All three routes honour the flag: the GUI (Setup,
 \texttt{-{}-gga\_u auto|on|off}.
 
 % ============================================================
-\section{Choosing the k-point mesh}
+\section{Choosing the k-point mesh: densities, fixed meshes, DOS and LOBSTER}
 \label{sec:kmesh}
 % ============================================================
 
@@ -1132,7 +1493,7 @@ ELF.
 \paragraph{ELF without slowing down the SCF.}  \texttt{LELF} needs KPAR${}={}$1.  With \cmd{ELF: separate} (or \cmd{ELF: two-step}) in \cmd{instructions.txt} the SCF runs at full KPAR and a short KPAR${}={}$1 restart in \cmd{02_scf/elf/} writes the ELFCAR (Appendix~\ref{sec:elf-separate}); \cmd{ht-mp-scf.py} does this by default.
 
 % ============================================================
-\section{Convergence tests for ENCUT and k-points}
+\section{Convergence tests for ENCUT and k-points: syntax and outputs}
 \label{sec:conv}
 % ============================================================
 
@@ -1384,7 +1745,7 @@ Results tab.  To aggregate averaged COHP/COBI over many projects into
 Why the LOBSTER projected DOS and the VASP DOS differ is explained in Appendix~\ref{app:lobster-dos}.
 
 % ============================================================
-\section{Worked examples}
+\section{More \texttt{instructions.txt} examples: SOC, magnetism, phonons, pressure}
 \label{sec:examples}
 % ============================================================
 
@@ -1517,11 +1878,7 @@ MPI: 128
 \end{lstlisting}
 
 % ============================================================
-\part{High-throughput screens}
-% ============================================================
-
-% ============================================================
-\section{Running a high-throughput screen step by step}
+\section{High-throughput runs: the two drivers and their setup on a cluster}
 \label{sec:highthroughput}
 % ============================================================
 
@@ -1636,10 +1993,10 @@ unpack \texttt{screen\_results.tar.gz} on your computer (or run the GUI on
 the cluster with \texttt{ssh -L 5001:localhost:5001}) and use
 \textbf{Open results folder}; missing plots are drawn there.
 
-All options of the two drivers are listed in Appendix~\ref{app:ht}.  When the jobs have finished, check and repair the runs as described in Part~\ref{part:check}.
+A complete small run with repair rounds is Example~5 (Section~\ref{sec:ex-ht-hpc}).  All options of the two drivers are listed in Appendix~\ref{app:ht}.  When the jobs have finished, check and repair the runs as described in Part~\ref{part:check}.
 
 % ============================================================
-\section{Scripts inside a high-throughput directory}
+\section{Scripts inside a high-throughput directory: submit, status, retune, collect}
 \label{sec:ht-scripts}
 % ============================================================
 
@@ -1932,7 +2289,7 @@ causes and their repairs, the output files and the limitations --- is in
 Appendix~\ref{app:diagnose}.
 
 % ============================================================
-\section{Looking up one material or job quickly}
+\section{Looking up one material or job quickly (\texttt{show\_*.sh})}
 \label{sec:lookup}
 % ============================================================
 
@@ -2134,7 +2491,7 @@ Script & Purpose \\ \midrule
 Full descriptions are in \cmd{ht_tools/README.md}.
 
 % ============================================================
-\section{Troubleshooting: symptom and remedy}
+\section{Troubleshooting: symptoms and remedies}
 \label{sec:trouble}
 % ============================================================
 
@@ -3207,6 +3564,9 @@ as commented-out lines.
     at the start.  \texttt{ht-semimetals.py} renamed \texttt{ht\_runs.py}.  Removed the
     superseded \texttt{fix\_failed.sh}, \texttt{reset\_stale.sh},
     \texttt{resume\_in\_scratch.sh}, \texttt{redo\_lobster.sh}, \texttt{patch\_*.sh}.
+    Manual reorganised for new users: installation, then five step-by-step examples (GUI,
+    workstation, cluster, high throughput on a workstation and on a cluster with repair
+    rounds), then how each part works and how to change it by hand.
 \end{description}
 
 \vfill

@@ -10,7 +10,7 @@
 - New causes: **`hang`** (an SCF/fixed-density run converged, then stalled until the time limit, seen on two-node runs: rerun on one node) and **`stopcar`** (stopped early by a STOPCAR an earlier killed job left behind; the step looks finished but is not converged). Job scripts now delete a leftover STOPCAR at the start of a fresh run. A LOBSTER step counts as done only with a non-empty `ICOHPLIST.lobster`.
 - `ht-semimetals.py` renamed **`ht_runs.py`** (nothing in it is specific to semimetals).
 - Removed superseded tools: `fix_failed.sh`, `reset_stale.sh`, `resume_in_scratch.sh`, `redo_lobster.sh`, `patch_lean_outputs.sh`, `patch_relax_ibrion.sh`.
-- Manual Part IV rewritten around the repair cycle.
+- Manual reorganised for new users: installation; Part II "Learning by example" with five step-by-step examples (silicon in the GUI with convergence tests, GaAs on a workstation and on a cluster, three Materials Project IDs on a workstation, three on a cluster with repair rounds); Part III "How it works and how to change it"; Part IV rewritten around the repair cycle.
 
 ## v2.5 — 2026-10-12 · LOBSTER k-mesh within memory
 
