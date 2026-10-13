@@ -190,6 +190,7 @@ run a list of materials on a cluster and repair the failures & Example~5, Sectio
 \multicolumn{2}{@{}l}{\textit{Change something}} \\
 know every field and button of the GUI & Section~\ref{sec:gui} \\
 know which files and scripts the agents create & Section~\ref{sec:agents} \\
+make or redraw the plots (GUI or \texttt{analyze.sh}), change their energy window & Section~\ref{sec:plots} \\
 write or change \texttt{instructions.txt} (all keywords) & Section~\ref{sec:instructions} \\
 choose the functional, spin, SOC or GGA+U & Section~\ref{sec:methods} \\
 change the k-point mesh & Section~\ref{sec:kmesh} \\
@@ -426,7 +427,9 @@ streams into the page.
 
 \paragraph{5. Results tab.}  Band structure, total and projected DOS and the OUTCAR
 summary (energy, Fermi level, forces).  Silicon should show an indirect gap of about
-0.5--0.6~eV (PBEsol underestimates the experimental 1.1~eV).
+0.5--0.6~eV (PBEsol underestimates the experimental 1.1~eV).  The plots are drawn when you
+open the tab and saved in \cmd{Si_example/analysis/}; the \textbf{Zoom} bar changes the
+energy window and the \textbf{PDF} buttons download them (Section~\ref{sec:plots}).
 
 \paragraph{6. Change a tag by hand.}  Two ways:
 \begin{itemize}
@@ -511,7 +514,9 @@ cat 00_convergence/converged_params.txt # the automatic choice
 ./analyze.sh              # band structure, DOS and OUTCAR summary in analysis/
 \end{lstlisting}
 \cmd{run_calculations.sh} writes the chosen ENCUT and mesh into every step and runs relax
-$\to$ SCF $\to$ bands $\to$ DOS.  Without a \cmd{Convergence:} line the agent writes a
+$\to$ SCF $\to$ bands $\to$ DOS.  \cmd{analyze.sh} writes \cmd{analysis/GaAs_example_band.png},
+\cmd{..._dos.png} and their PDFs; to view the project in the browser instead, start the GUI
+and select it (Section~\ref{sec:plots}).  Without a \cmd{Convergence:} line the agent writes a
 single \cmd{run_all.sh} instead.
 
 \paragraph{5. Change inputs by hand.}  Three ways:
@@ -555,7 +560,8 @@ squeue -u $USER               # wait until they are gone
 ./analyze.sh                  # after the jobs have finished
 \end{lstlisting}
 The production jobs are chained (\cmd{--dependency=afterok}): the SCF starts only when
-the relaxation ended well.  Each step has its own walltime, and a step that reaches it
+the relaxation ended well.  Run \cmd{analyze.sh} on the login node after the jobs, or copy the
+project to your computer and open it in the GUI (Section~\ref{sec:plots}).  Each step has its own walltime, and a step that reaches it
 is stopped cleanly and continued in a new job automatically
 (Section~\ref{sec:slurm-time}).
 
@@ -962,6 +968,81 @@ ProjectName/
 Without the GUI on a cluster, first set the VASP paths and SLURM defaults in \cmd{profiles/slurm.json} (Section~\ref{sec:remote-setup}).
 
 % ============================================================
+\section{Making the plots: in the GUI or with \texttt{analyze.sh}}
+\label{sec:plots}
+% ============================================================
+
+The same plots can be made in two ways: in the browser (Results tab) or on the command
+line with the project's \cmd{analyze.sh}.  Both read the raw VASP and LOBSTER outputs
+and write PNG and PDF files into the project's \cmd{analysis/} folder.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.25\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.3\linewidth}@{}}
+\thead
+Plot & Made from & File in \cmd{analysis/} \\ \midrule
+Band structure & \cmd{03_bands/EIGENVAL} (sumo or \cmd{vasprun.xml} as fallback);
+  spin up/down in two colours & \cmd{<project>_band.png/pdf} \\
+Total and projected DOS & \cmd{04_dos/DOSCAR}; projections as asked in
+  \cmd{instructions.txt} (\cmd{DOS (projected on Ga-p and As-p)}) & \cmd{<project>_dos.png/pdf} \\
+ELF along bonds, ELF plane & \cmd{02_scf/ELFCAR} (only if the SCF wrote one) &
+  \cmd{*_elf_bonds.*}, \cmd{*_elf_plane.*} \\
+COHP, COBI, COOP & \cmd{08_lobster/*CAR.lobster} & \cmd{*_cohp.*}, \cmd{*_cobi.*}, \cmd{*_coop.*} \\
+LOBSTER projected DOS & \cmd{08_lobster/DOSCAR.lobster}, with the \cmd{04_dos} total for comparison
+  & \cmd{*_lobster_dos.*} \\
+Bond table & ICOHP/ICOBI/ICOOP per bond, antibonding integrals & \cmd{lobster_summary.csv} \\
+Convergence tests (energy, pressure, force vs.\ ENCUT and k-mesh; \cmd{analyze_convergence.sh}) & the test points in \cmd{00_convergence/encut/}, \cmd{kpoints/} & \cmd{00_convergence/encut_*.png}, \cmd{kpoints_*.png} (not in \cmd{analysis/}) \\
+\bottomrule
+\end{tabularx}
+
+\subsection{In the GUI (Results tab)}
+
+Select the project and open \textbf{Results}.  The plots are drawn from the outputs that
+exist when you open the tab --- nothing has to be run first --- and saved in
+\cmd{analysis/}; plots \cmd{analyze.sh} already made are shown as they are.
+\begin{itemize}
+  \item \textbf{Energy window}: each group (bands, DOS, LOBSTER) has a bar
+        \emph{Energy window (eV): min to max}; \textbf{Zoom} redraws the plots for that
+        range, \textbf{Reset} returns to the default.  The default band window is set on
+        the Setup tab (\emph{Energy window (eV, relative to EF)}, e.g.\ \cmd{-4 to 4}).
+  \item \textbf{Download}: the \textbf{PDF} buttons under each plot give the vector file
+        (for the zoomed range, if you zoomed).
+  \item \textbf{Convergence plots} appear on the Workflow tab under the convergence step.
+  \item \textbf{Runs made elsewhere} (a cluster job, a high-throughput run, a collected
+        tarball): \textbf{Open results folder} (Section~\ref{sec:open-results}), then
+        Results as usual.
+\end{itemize}
+
+\subsection{On the command line (\texttt{analyze.sh})}
+
+Every project made by \cmd{vasp-agent.py} or \cmd{vasp-agent-slurm.py} has an
+\cmd{analyze.sh}.  Run it in the project folder once the steps have finished --- on a
+cluster, on the login node after the jobs:
+\begin{lstlisting}[language=bash]
+cd GaAs_example
+./analyze.sh               # prints relax energy, E-fermi; writes the plots into analysis/
+./analyze_convergence.sh   # the convergence-test plots (if there were tests)
+\end{lstlisting}
+It needs a \cmd{python3} with numpy and matplotlib (\cmd{pip install numpy matplotlib});
+\cmd{sumo} is used when installed but is not required.  It skips plots whose outputs are
+missing and can be rerun at any time (e.g.\ after a step was redone).
+
+\paragraph{Another energy window or style.}  \cmd{analyze.sh} is a short script that calls
+the plotters in \cmd{analysis/}; edit its \cmd{--ymin -4 --ymax 4}, or call a plotter
+directly:
+\begin{lstlisting}[language=bash]
+cd analysis
+python3 plot_band_eigenval.py ../03_bands --out GaAs_wide --ymin -8 --ymax 6
+python3 plot_dos.py ../04_dos --out GaAs --proj ../dos_proj.json
+cd ../03_bands && sumo-bandplot --ymin -4 --ymax 4      # sumo's own band plot
+\end{lstlisting}
+
+\paragraph{High-throughput runs.}  In a run made by \cmd{ht_runs.py} every material's last
+job runs its \cmd{analyze.sh} automatically (results in \cmd{materials/<id>/analysis/},
+log in \cmd{analysis/analyze.log}).  If the cluster's \cmd{python3} lacks numpy or
+matplotlib, set \cmd{ANALYSIS_PYTHON} in \cmd{env.sh}; \cmd{./analyze_all.sh} (or
+\cmd{./analyze_all.sh mp-149}) redraws the plots for finished materials.  With
+\cmd{ht-mp-scf.py} each material folder has its own \cmd{analyze.sh}, run as above.
+
+% ============================================================
 \section{Describing a calculation in \texttt{instructions.txt}: every keyword}
 \label{sec:instructions}
 % ============================================================
@@ -1030,6 +1111,12 @@ Keyword & Meaning \\ \midrule
 \texttt{INCAR: \ldots\ END\_INCAR} & Block of literal INCAR tags merged
   into the generated INCAR(s); optionally per-step
   (Section~\ref{sec:incar-raw}). \\
+\bottomrule
+\end{tabularx}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Keyword (continued) & Meaning \\ \midrule
 \texttt{NKPTS:} & k-points per band segment. Default 40. \\
 \texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
 \texttt{KPAR:} & Global k-point parallelisation. \\
