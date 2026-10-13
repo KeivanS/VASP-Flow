@@ -1502,7 +1502,8 @@ def main():
             [sys.executable, AGENT_SLURM,
              '-i', os.path.join(stage, 'instructions.txt'),
              '-s', poscar, '-p', args.profile],
-            cwd=materials, env=env, capture_output=True, text=True)
+            cwd=materials, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True)          # Python 3.6: no capture_output/text
         proj = os.path.join(materials, mp_id)
         if proc.returncode != 0 or not os.path.isdir(proj):
             return 'fail', (f"[{n}/{len(ids)}] {mp_id}: AGENT FAILED\n    " +
