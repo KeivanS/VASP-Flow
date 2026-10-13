@@ -653,7 +653,7 @@ Keyword & Meaning \\ \midrule
   mesh (relax/SCF/DOS); for 2-D give the third value (\texttt{12 12 1}). \\
 \texttt{KMESH\_DENSITY:} & Automatic k-mesh density tier: \texttt{coarse}
   (1000~kpra, default for relaxation and convergence tests) or \texttt{fine}
-  (5000~kpra, default for SCF/DOS/spectroscopic steps).  kpra $= N_k \times
+  (6000~kpra, default for SCF/DOS/spectroscopic steps).  kpra $= N_k \times
   N_\mathrm{atoms}$ where $N_k = N_x N_y N_z$; subdivisions scale as
   $N_i \propto |\mathbf{b}_i^*|$.  An integer is taken as the kpra target
   itself (also \texttt{KPRA:}, \texttt{KPOINTS\_DENSITY:}).  Overridden by
@@ -692,6 +692,8 @@ Keyword & Meaning \\ \midrule
 \texttt{WANNIER\_NUM\_WANN:} & Number of Wannier functions. \\
 \texttt{WANNIER\_PROJ:} & Projections, e.g.\ \texttt{Ga:s;As:p}. \\
 \texttt{WANNIER\_EWIN:} & Energy window, e.g.\ \texttt{-5.0 to 15.0}. \\
+\texttt{LOBSTER\_MAX\_KPTS:} & Largest $N_1N_2N_3$ of the symmetry-off LOBSTER mesh
+  (default 10000, 0 = no limit). \\
 \texttt{LOBSTER\_MAX\_KPW:} & Memory budget of the symmetry-off LOBSTER NSCF: largest
   k-points $\times$ plane waves; a denser mesh is reduced (default $6\times10^6$, 0 = no cap;
   Appendix~\ref{app:lobster-mem}). \\
@@ -843,21 +845,22 @@ Two density tiers are available via the \texttt{KMESH\_DENSITY} key
 \thead
 Tier & kpra & Typical use & Notes \\ \midrule
 \texttt{coarse} & 1000 & Relaxation, convergence tests & Agent k-point sweeps start here \\
-\texttt{fine}   & 5000 & SCF, DOS, spectroscopic steps & Default for all production steps \\
+\texttt{fine}   & 6000 & SCF, DOS, spectroscopic steps & Default for all production steps \\
 \bottomrule
 \end{tabularx}
 
 Each axis gets a number of points proportional to its reciprocal-lattice length, so the spacing is the same in all directions; the formula is in Appendix~\ref{app:kmesh}.  The first line of each generated KPOINTS reports the mesh and the density reached.  Any integer may be given instead of \cmd{coarse}/\cmd{fine} (\cmd{KMESH_DENSITY: 3000}); the relaxation has its own density (\cmd{RELAX_KMESH_DENSITY}, default coarse).
 
-\textbf{DOS and LOBSTER meshes}: always $2N_x \times 2N_y \times 2N_z$ (the
-SCF ratios are preserved; a 2-D slab keeps $N_z = 1$), ensuring denser
-sampling for accurate spectral features and smoother COHP/COBI/COOP curves.
-Because the LOBSTER NSCF runs with \texttt{ISYM}=0 there is no symmetry
-reduction, so doubling in 3-D multiplies its k-point count by ${\sim}8$.
-\textbf{The LOBSTER mesh is kept within memory automatically}: if its k-points
-times plane waves would exceed \cmd{LOBSTER_MAX_KPW} ($6\times10^6$ by default),
-the mesh is reduced, keeping its ratios, until it fits, and the KPOINTS comment
-says so (Appendix~\ref{app:lobster-mem}).  The DFPT mesh is forced
+\textbf{DOS mesh}: always $2N_x \times 2N_y \times 2N_z$ (the SCF ratios are
+preserved; a 2-D slab keeps $N_z = 1$), for accurate spectral features.
+
+\textbf{LOBSTER mesh}: the SCF mesh.  The LOBSTER NSCF runs with \texttt{ISYM}=0,
+so it pays for every k-point of the mesh, not the irreducible wedge.  It is
+therefore \textbf{kept within limits automatically}: if the mesh has more than
+\cmd{LOBSTER_MAX_KPTS} points ($N_1N_2N_3$, default 10000, about 20$\times$20$\times$20)
+or its k-points times plane waves exceed \cmd{LOBSTER_MAX_KPW} ($6\times10^6$, the
+memory limit), it is reduced, keeping its ratios, until both hold; the KPOINTS
+comment says so (Appendix~\ref{app:lobster-mem}).  The DFPT mesh is forced
 to match the SCF mesh exactly.
 
 An explicit \texttt{KMESH: N1 N2 N3} entry overrides the automatic density
@@ -1352,9 +1355,9 @@ binary.
         With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
         coupling breaks time-reversal symmetry, which ISYM=0 would still
         assume.
-  \item The k-mesh is $2\times$ the SCF mesh, reduced automatically when the
-        symmetry-off run would not fit in memory (\cmd{LOBSTER_MAX_KPW},
-        Appendix~\ref{app:lobster-mem}).
+  \item The k-mesh is the SCF mesh, reduced automatically above 10000 points or when
+        the symmetry-off run would not fit in memory (\cmd{LOBSTER_MAX_KPTS},
+        \cmd{LOBSTER_MAX_KPW}, Appendix~\ref{app:lobster-mem}).
   \item \texttt{NBANDS} is auto-set to at least the LOBSTER
         basis-function count; \texttt{LMAXMIX} is chosen from the
         elements (6 for $f$, 4 for $d$, 2 for $sp$).
@@ -2342,14 +2345,16 @@ $N_\mathrm{PW} = V k_c^3/(6\pi^2)$ with $k_c = \sqrt{\mathrm{ENCUT}/3.81~\mathrm
 Two runs with $N_\mathrm{k}N_\mathrm{PW} = 1.5\times10^7$ and $1.8\times10^7$ stopped at
 set-up with \cmd{insufficient virtual memory}, on two 96-core nodes as well as on one
 40-core node with 375~GB --- more memory per rank did not help, a smaller mesh does.
-The generators therefore start from the usual LOBSTER mesh ($2\times$ SCF for the agents,
-$1\times$ SCF in \cmd{ht-semimetals.py}) and, if
+The generators therefore start from the SCF mesh and, if it has more than
+\cmd{LOBSTER_MAX_KPTS} points ($N_1N_2N_3$, default 10000) or
 $N_\mathrm{k}N_\mathrm{PW} > $ \cmd{LOBSTER_MAX_KPW} (default $6\times10^6$), scale all $N_i$
 by the same factor (even, at least 2; $N_z = 1$ for slabs; in-plane multiples of 6 for
-hexagonal cells) until it fits.  The KPOINTS comment then reads e.g.\
-\cmd{reduced from 24x24x24 for memory: 2052 k x ~2822 PW}.  The KPAR rule uses the reduced
-count.  Set \cmd{LOBSTER_MAX_KPW: 0} (or \opt{lobster-max-kpw 0}) to keep the full mesh,
-a larger value on nodes with more memory.  For COHP/ICOHP integrals a mesh of a few
+hexagonal cells) until both hold.  The point limit alone would not be enough:
+16$\times$16$\times$22 has only 5632 points but failed, because that cell has twice as
+many plane waves per k-point.  The KPOINTS comment then reads e.g.\
+\cmd{reduced from 24x24x24: 2052 k x ~2822 PW}.  The KPAR rule uses the reduced
+count.  Set either limit to 0 (\cmd{LOBSTER_MAX_KPTS: 0}, \opt{lobster-max-kpw 0}) to
+switch it off, or a larger \cmd{LOBSTER_MAX_KPW} on nodes with more memory.  For COHP/ICOHP integrals a mesh of a few
 hundred to two thousand k-points is ample for cells of up to $\sim$20 atoms.
 
 \subsection{Relaxation $\to$ SCF hand-off}
@@ -2602,7 +2607,7 @@ Option & Meaning \\ \midrule
 \texttt{-{}-relax-kpra} & k-density of the relaxation (default: \texttt{-{}-kpra}). \\
 \texttt{-{}-gga\_u auto|on|off} & GGA+U flag (default \texttt{auto}: only
   chalcogenides/halides). \\
-\texttt{-{}-kpra} & \texttt{coarse}, \texttt{fine} (5000) or an integer. \\
+\texttt{-{}-kpra} & \texttt{coarse}, \texttt{fine} (6000) or an integer. \\
 \texttt{-{}-kmesh} & Fixed $\Gamma$-mesh, e.g.\ \texttt{'8 8 8'}; overrides \texttt{-{}-kpra}. \\
 \texttt{-{}-encut} & ENCUT (eV); default 500. \\
 \texttt{-{}-functional} & PBE (default), PBEsol, R2SCAN, \ldots \\
@@ -2661,14 +2666,13 @@ Relax, SCF and bands use the same \texttt{NBANDS} $= 1.2\times$ VASP's default
 (from NELECT, NIONS and the starting moment; rounded up to even): VASP's default
 leaves too few empty bands for narrow d bands, the electron count then drifts
 between SCF steps (\texttt{BRMIX: very serious problems}) and the SCF diverges.
-The bands step never uses fewer bands than its SCF.  The LOBSTER NSCF uses the
-SCF mesh (not $2\times$), reduced further when its symmetry-off k-points times plane
-waves exceed \opt{lobster-max-kpw} (Appendix~\ref{app:lobster-mem}).  Every job
-requests the whole node's memory (\texttt{\#SBATCH -{}-mem=0}).  Without \opt{kpra}
-the mesh follows \opt{kspacing} (default 0.10~\AA$^{-1}$ including the $2\pi$, i.e.\
-$N_i = $ even$\lceil|\mathbf b_i^*|/0.10\rceil$): a dense mesh, e.g.\ 24$\times$24$\times$24
-for the 8-atom Sc$_2$Al$_2$C$_2$O$_2$ --- written as an explicit KMESH into each
-\cmd{instructions.txt}.
+The bands step never uses fewer bands than its SCF.  The k-point density is
+\opt{kpra} (default 8000 k-points per reciprocal atom), the same spacing along all
+axes.  The LOBSTER NSCF uses the SCF mesh, reduced when it exceeds
+\opt{lobster-max-kpts} or \opt{lobster-max-kpw} (Appendix~\ref{app:lobster-mem}).  Every
+job requests the whole node's memory (\texttt{\#SBATCH -{}-mem=0}).  \opt{kspacing} is
+an alternative to \opt{kpra}; before v2.5 it was the default (0.10~\AA$^{-1}$, very
+dense: 24$\times$24$\times$24 for the 8-atom Sc$_2$Al$_2$C$_2$O$_2$, 110592~kpra).
 3d elements (V--Ni) start spin-polarised.  GGA+U follows the default rule
 (only chalcogenides/halides, Section~\ref{sec:ggau}) unless
 \texttt{-{}-gga\_u on|off} is given.  There is no DFPT step (dielectric
@@ -2679,8 +2683,9 @@ loop tends not to converge) and no ELF (\texttt{ELF: off}).
 \thead
 Option & Meaning \\ \midrule
 \texttt{-{}-list}, \texttt{-{}-out} & ID file and directory to create. \\
-\texttt{-{}-kpra N} & k-points per reciprocal atom (e.g.\ 8000). \\
-\texttt{-{}-kspacing D} & used when \opt{kpra} is not given: $N_i$ = even$\lceil|\mathbf b_i^*|/D\rceil$, default 0.10~\AA$^{-1}$ (dense). \\
+\texttt{-{}-kpra N} & k-points per reciprocal atom (default 8000; 1000 = coarse). \\
+\texttt{-{}-kspacing D} & instead of \opt{kpra}: fixed spacing, $N_i$ = even$\lceil|\mathbf b_i^*|/D\rceil$ (0.10~\AA$^{-1}$ is very dense). \\
+\texttt{-{}-lobster-max-kpts N} & largest $N_1N_2N_3$ of the LOBSTER mesh (default 10000, 0 = no cap). \\
 \texttt{-{}-lobster-max-kpw X} & LOBSTER memory budget, k-points $\times$ plane waves (default $6\times10^6$, 0 = no cap). \\
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
 \texttt{-{}-gga\_u auto|on|off} & GGA+U flag written into every
@@ -3156,10 +3161,12 @@ as commented-out lines.
     calculations, high-throughput screens, checking and repairing runs; how things work in
     the appendices), with the \texttt{vasp\_diagnose.py} manual merged in.
   \item[\textcolor{mainblue}{v2.5} (2026-10-12)]
-    LOBSTER NSCF k-mesh kept within memory by default: with \texttt{ISYM = 0} its
-    k-points $\times$ plane waves are estimated at generation time and the mesh is
-    reduced (same ratios) above \texttt{LOBSTER\_MAX\_KPW} ($6\times10^6$;
-    \texttt{ht-semimetals.py -{}-lobster-max-kpw}); \texttt{vasp\_diagnose.py} halves the
+    k-meshes: \texttt{fine} = 6000~kpra (was 5000); \texttt{ht-semimetals.py} uses
+    \texttt{-{}-kpra 8000} by default (\texttt{-{}-kspacing} only on request).  The LOBSTER
+    NSCF uses the SCF mesh (was $2\times$), kept within limits by default: with
+    \texttt{ISYM = 0} the mesh is reduced (same ratios) above 10000 points
+    (\texttt{LOBSTER\_MAX\_KPTS}) or when k-points $\times$ plane waves exceed
+    \texttt{LOBSTER\_MAX\_KPW} ($6\times10^6$); \texttt{vasp\_diagnose.py} halves the
     LOBSTER mesh after an out-of-memory failure.  \texttt{test\_step.sh}: one-node tests
     go to the \texttt{standard} partition.
 \end{description}

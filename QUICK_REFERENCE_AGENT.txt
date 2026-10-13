@@ -41,7 +41,7 @@
 │ NSW: 100             max ionic steps                                          │
 │ EDIFFG: -0.01        force convergence criterion (eV/Å)                      │
 │ ENCUT: 520           manual ENCUT override (eV)                              │
-│ KMESH_DENSITY: fine  k-mesh density: coarse=1000 / fine=5000 / any integer   │
+│ KMESH_DENSITY: fine  k-mesh density: coarse=1000 / fine=6000 / any integer   │
 │ RELAX_KMESH_DENSITY: fine   relaxation mesh (default coarse)                 │
 │ KMESH: 8 8 8         explicit Gamma-mesh overriding KMESH_DENSITY            │
 │ NKPTS: 60            k-points per band segment                               │
@@ -52,7 +52,7 @@
 ┌─ AUTOMATIC K-MESH (kpra) ─────────────────────────────────────────────────────┐
 │ Density (KMESH_DENSITY / KPOINTS_DENSITY / KPRA):  coarse | fine | <integer>  │
 │   coarse  1000 kpra   relaxation (RELAX_KMESH_DENSITY), convergence tests     │
-│   fine    5000 kpra   SCF, DOS, DFPT, LOBSTER, Wannier90  (default)           │
+│   fine    6000 kpra   SCF, DOS, DFPT, LOBSTER, Wannier90  (default)           │
 │   3000    any integer is taken as the kpra target directly                    │
 │ kpra = Nx×Ny×Nz × N_atoms.  Ni ∝ |b_i*|, all EVEN, chosen so the k-point      │
 │ count lands as close to the target as possible (no round-up overshoot).       │
@@ -60,7 +60,9 @@
 │ Applies to ALL cells, hexagonal included; 2-D slabs: Nz=1, in-plane mesh      │
 │ Hexagonal lattices (a=b, γ=120°): in-plane N = multiple of 6 (6, 12, 18…).    │
 │ carries the whole target.  Each KPOINTS header reports the kpra reached.      │
-│ DOS, LOBSTER: 2× the SCF mesh.  DFPT, Wannier: = SCF mesh.  Phonons: coarse.  │
+│ DOS: 2× the SCF mesh.  LOBSTER, DFPT, Wannier: = SCF mesh.  Phonons: coarse.  │
+│ LOBSTER (ISYM=0) is reduced above 10000 mesh points (LOBSTER_MAX_KPTS) or     │
+│ k-points × plane waves > 6e6 (LOBSTER_MAX_KPW, memory); 0 = no limit.         │
 │ Precedence: KPOINTS <step>: block > KMESH: n1 n2 n3 > density tier            │
 └───────────────────────────────────────────────────────────────────────────────┘
 
@@ -100,7 +102,7 @@
 │      SCF mesh               (line 1 = comment; steps as above; the unnamed     │
 │      0                       block covers every step except bands)             │
 │      Gamma                                                                     │
-│      9 9 5                  DOS/LOBSTER (2×) and DFPT/Wannier (1×) follow an   │
+│      9 9 5                  DOS (2×), LOBSTER/DFPT/Wannier (1×) follow an      │
 │      0 0 0                  explicit SCF mesh.  The file is never touched by   │
 │   END_KPOINTS               the convergence phase-2 k-mesh patching.           │
 │                                                                                │

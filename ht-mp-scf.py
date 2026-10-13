@@ -411,7 +411,7 @@ def main():
                     help="force KPAR in the SCF (default: auto; the ELF pass always uses KPAR=1)")
     ap.add_argument('--kpra', default='coarse',
                     help="k-point density (default coarse): 'coarse' (1000), 'fine' "
-                         "(5000) or an integer k-points per reciprocal atom, e.g. 8000")
+                         "(6000) or an integer k-points per reciprocal atom, e.g. 8000")
     ap.add_argument('--ncore', type=int, default=None,
                     help="force NCORE (KPAR is then derived; the ELF pass always uses KPAR=1)")
     ap.add_argument('--profile', default='slurm',

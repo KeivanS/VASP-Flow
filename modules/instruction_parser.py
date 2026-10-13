@@ -83,7 +83,9 @@ class InstructionParser:
             # LOBSTER Gaussian smearing width (eV) for lobsterin; default applied later
             'lobster_sigma':  self._extract_str_key(content,
                               r'LOBSTER_SIGMA\s*[:,=]\s*([\d.]+)', default=None),
-            # LOBSTER NSCF memory budget: max NKPTS x plane waves (ISYM=0 mesh is shrunk to fit; 0 = no cap)
+            # LOBSTER NSCF limits (ISYM=0 mesh is shrunk to fit; 0 = no limit): full-mesh points, k x plane waves
+            'lobster_max_kpts': self._extract_int_key(content,
+                              r'LOBSTER_MAX_KPTS\s*[:,=]\s*(\d+)', default=None),
             'lobster_max_kpw': self._extract_float_key(content,
                               r'LOBSTER_MAX_KPW\s*[:,=]\s*([\d.Ee+]+)', default=None),
             # LOBSTER NSCF symmetry (must be 0 or -1); default applied later
@@ -141,7 +143,7 @@ class InstructionParser:
             # Band structure resolution
             'nkpts_bands':    self._extract_int_key(content,
                               r'(?:BANDS?_)?NKPTS?\s*[:,=]\s*(\d+)', default=None),
-            # k-mesh density: 'coarse' (1000 kpra) | 'fine' (5000 kpra) | int kpra
+            # k-mesh density: 'coarse' (1000 kpra) | 'fine' (6000 kpra) | int kpra
             'kmesh_density':  self._extract_kmesh_density(content),
             # Relaxation mesh density (default: coarse, whatever the SCF uses)
             'relax_kmesh_density': self._extract_relax_kmesh_density(content),
@@ -544,7 +546,7 @@ class InstructionParser:
             KMESH_DENSITY: coarse      KMESH_DENSITY = fine
             KPOINTS_DENSITY: 3000      KPRA: 3000
             KPOINTS: fine              KMESH: coarse
-        coarse = 1000 kpra, fine = 5000 kpra, an integer is used as the kpra
+        coarse = 1000 kpra, fine = 6000 kpra, an integer is used as the kpra
         target directly.  Returns 'fine' by default.  (`KMESH: 8 8 8` is the
         separate explicit-mesh override, and a `KPOINTS <step>:` block is an
         explicit file; neither is confused with this key.)

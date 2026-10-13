@@ -64,15 +64,17 @@ def load_u_defaults():
 
 
 # ── LOBSTER NSCF: keep the symmetry-off k-mesh within memory ────────────────
-# The LOBSTER NSCF runs ISYM = 0, so VASP keeps every k-point of the full mesh
-# (time reversal only halves it).  Its memory grows with
-#     NKPTS x NPW      (k-points x plane waves per k-point),
-# and VASP stops at set-up with "insufficient virtual memory" when it is too
+# The LOBSTER NSCF runs ISYM = 0 on the SCF mesh, so VASP keeps every k-point
+# of the full mesh (time reversal only halves it).  Two limits, both by default:
+#   * N1*N2*N3 <= LOBSTER_MAX_KPTS (10000, about 20x20x20 for one atom-ish cells);
+#   * memory: NKPTS x NPW (k-points x plane waves per k) <= LOBSTER_MAX_KPW.
+# VASP stops at set-up with "insufficient virtual memory" when the product is too
 # large: Sc2Al2C2O2 (24x24x24, 6916 k x ~2600 PW = 1.8e7) and mp-20352
-# (16x16x22, 2820 k x ~5400 PW = 1.5e7) failed on a 40-core / 375 GB node and
-# on 2 x 96 cores.  The mesh is shrunk (same ratios, even N_i) until the
-# product is below LOBSTER_MAX_KPW; `LOBSTER_MAX_KPW: <n>` in instructions.txt
-# changes the budget (0 = no cap).
+# (16x16x22 = 5632 points, 2820 k x ~5400 PW = 1.5e7 - below the k-point limit)
+# failed on a 40-core / 375 GB node and on 2 x 96 cores.  The mesh is shrunk
+# (same ratios, even N_i) until both hold; `LOBSTER_MAX_KPTS:` / `LOBSTER_MAX_KPW:`
+# in instructions.txt change the limits (0 = no limit).
+LOBSTER_MAX_KPTS = 10000
 LOBSTER_MAX_KPW = 6.0e6
 
 
@@ -89,8 +91,10 @@ def lobster_kpoints(mesh):
     return (n - t) // 2 + t
 
 
-def cap_lobster_mesh(mesh, volume, encut, budget=LOBSTER_MAX_KPW, two_d=False, hexagonal=False):
-    """Largest mesh with the ratios of *mesh* whose NKPTS x NPW stays within *budget*.
+def cap_lobster_mesh(mesh, volume, encut, budget=LOBSTER_MAX_KPW, two_d=False, hexagonal=False,
+                     max_kpts=LOBSTER_MAX_KPTS):
+    """Largest mesh with the ratios of *mesh* with N1*N2*N3 <= *max_kpts* and
+    NKPTS x NPW <= *budget* (either limit 0/None = off).
 
     Returns (mesh, nkpts, npw, reduced).  N_i are even (minimum 2), N_z stays 1
     for a 2-D slab, the in-plane N of a hexagonal lattice are multiples of 6
@@ -98,7 +102,11 @@ def cap_lobster_mesh(mesh, volume, encut, budget=LOBSTER_MAX_KPW, two_d=False, h
     """
     mesh = tuple(int(x) for x in mesh)
     npw = plane_waves_per_k(volume, encut)
-    if not budget or lobster_kpoints(mesh) * npw <= budget:
+
+    def fits(m):
+        return ((not max_kpts or m[0] * m[1] * m[2] <= max_kpts) and
+                (not budget or lobster_kpoints(m) * npw <= budget))
+    if fits(mesh):
         return mesh, lobster_kpoints(mesh), int(npw), False
 
     def snap(n, i):
@@ -113,7 +121,7 @@ def cap_lobster_mesh(mesh, volume, encut, budget=LOBSTER_MAX_KPW, two_d=False, h
     while f > 0.05:
         f *= 0.95
         new = tuple(snap(int(round(n * f)) if n > 1 else n, i) for i, n in enumerate(mesh))
-        if lobster_kpoints(new) * npw <= budget or all(x <= 2 for x in new):
+        if fits(new) or all(x <= 2 for x in new):
             break
     return new, lobster_kpoints(new), int(npw), True
 
@@ -672,7 +680,7 @@ class VASPInputGenerator:
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(incar_content)
         
-        # KPOINTS — user-selected density (default fine = 5000 kpra), KMESH
+        # KPOINTS — user-selected density (default fine = 6000 kpra), KMESH
         # override, or an explicit `KPOINTS scf:` block (which wins).
         self._write_kpoints(output_dir, 'scf')
 
@@ -914,7 +922,7 @@ fi
         A symmetry-off (ISYM=0) NSCF that reads 02_scf's CHGCAR and writes a
         WAVECAR LOBSTER can consume, followed by a LOBSTER run. NBANDS is set
         >= the number of LOBSTER basis functions and LMAXMIX from the elements.
-        The k-mesh is 2× the SCF mesh in every direction (ratios preserved).
+        The k-mesh is the SCF mesh, reduced to fit LOBSTER_MAX_KPTS / LOBSTER_MAX_KPW.
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -925,9 +933,8 @@ fi
         with open(f"{output_dir}/INCAR", 'w') as f:
             f.write(self._generate_incar_lobster(nbands=nbands, lmax=self._lmaxmix()))
 
-        # KPOINTS — 2× the SCF mesh in every direction (same ratios). The NSCF
-        # is cheap compared with the SCF, and COHP/COBI integrate over the BZ,
-        # so a denser mesh smooths the bonding curves at little extra cost.
+        # KPOINTS — the SCF mesh, reduced if the symmetry-off (ISYM=0) run would
+        # exceed LOBSTER_MAX_KPTS points or the memory budget (_lobster_mesh).
         self._write_kpoints(output_dir, 'lobster')
 
         # Editable lobsterin (run.sh uses it as-is if present). Energy window is
@@ -2494,14 +2501,14 @@ echo "      Data:  band.yaml  FORCE_SETS"
         return '\n'.join(lines) + '\n'
 
     # ── k-point meshes ────────────────────────────────────────────────────────
-    # Density vocabulary: 'coarse' = 1000 kpra, 'fine' = 5000 kpra, or an
+    # Density vocabulary: 'coarse' = 1000 kpra, 'fine' = 6000 kpra, or an
     # integer kpra.  kpra = (N1*N2*N3) * N_atoms  (k-points per reciprocal atom).
     #
     # Precedence, highest first (applied per step by kpoints_text()):
     #   1. an explicit `KPOINTS <step>:` / `KPOINTS:` block (written verbatim)
     #   2. the explicit `KMESH: n1 n2 n3` override
     #   3. the density (KMESH_DENSITY / RELAX_KMESH_DENSITY, default fine / coarse)
-    # Steps derived from the SCF (DOS, LOBSTER = 2x; DFPT, Wannier = 1x) follow
+    # Steps derived from the SCF (DOS = 2x; LOBSTER, DFPT, Wannier = 1x) follow
     # the SCF mesh actually in force, including an explicit SCF block.
 
     @staticmethod
@@ -2512,7 +2519,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         s = str(density).strip().lower()
         if s.isdigit():
             return max(1, int(s))
-        return {'coarse': 1000, 'fine': 5000}.get(s, 5000)
+        return {'coarse': 1000, 'fine': 6000}.get(s, 6000)
 
     def _density_label(self, density) -> str:
         s = str(density).strip().lower()
@@ -2613,7 +2620,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
         """Central mesh resolver: (Nx, Ny, Nz) for a density.
 
         1. Explicit `KMESH: n1 n2 n3` instruction (any system).
-        2. Otherwise the kpra target (coarse=1000, fine=5000, or an integer):
+        2. Otherwise the kpra target (coarse=1000, fine=6000, or an integer):
            subdivisions ∝ |b_i*|, even integers, chosen so N1*N2*N3*N_atoms
            lands as close to the target as possible (see _kpoints_from_kpra).
         """
@@ -2704,22 +2711,25 @@ echo "      Data:  band.yaml  FORCE_SETS"
         return (-sc if sc < 0 else vol * sc ** 3)
 
     def _lobster_mesh(self, density=None):
-        """LOBSTER NSCF mesh: 2x the SCF mesh, shrunk if NKPTS x NPW (ISYM=0) would
-        not fit in memory (see LOBSTER_MAX_KPW).  Returns (mesh, note)."""
-        mesh = self._mesh_x2(density)
+        """LOBSTER NSCF mesh: the SCF mesh, shrunk if the symmetry-off run would exceed
+        LOBSTER_MAX_KPTS points or LOBSTER_MAX_KPW (memory).  Returns (mesh, note)."""
+        mesh = self._scf_mesh(density)
         budget = self.instructions.get('lobster_max_kpw')
         budget = LOBSTER_MAX_KPW if budget is None else float(budget)
+        maxk = self.instructions.get('lobster_max_kpts')
+        maxk = LOBSTER_MAX_KPTS if maxk is None else int(maxk)
         try:
             vol = self._cell_volume()
         except Exception:
             return mesh, ''
         new, nk, npw, reduced = cap_lobster_mesh(
             mesh, vol, self._encut(), budget,
-            two_d=bool(self.instructions.get('is_2d')), hexagonal=self._is_hex_lattice())
+            two_d=bool(self.instructions.get('is_2d')), hexagonal=self._is_hex_lattice(),
+            max_kpts=maxk)
         if not reduced:
             return mesh, ''
-        return new, (f" - reduced from {mesh[0]}x{mesh[1]}x{mesh[2]} for memory: "
-                     f"ISYM=0 {nk} k x ~{npw} PW <= LOBSTER_MAX_KPW {budget:.3g}")
+        return new, (f" - reduced from {mesh[0]}x{mesh[1]}x{mesh[2]}: {nk} k x ~{npw} PW "
+                     f"(limits {maxk} points, {budget:.3g} k x PW)")
 
     def _generate_kpoints_x2(self, density=None, label: str = 'NSCF') -> str:
         """KPOINTS file at 2× the SCF mesh (see _mesh_x2)."""
@@ -2747,7 +2757,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
                 density if density is not None else self._relax_density())
         if step == 'lobster':
             mesh, note = self._lobster_mesh(density)
-            return self._kpoints_auto_text(mesh, f"Automatic Gamma mesh (LOBSTER, 2x SCF{note})")
+            return self._kpoints_auto_text(mesh, f"Automatic Gamma mesh (LOBSTER, SCF mesh, ISYM=0{note})")
         if step == 'dos':
             return self._generate_kpoints_x2(density, label=step.upper())
         if step == 'phonons':

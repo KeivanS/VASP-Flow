@@ -12,7 +12,7 @@ is allowed to differ (SLURM header vs. local launcher) but must call the same
 copy_from_*.sh scripts.  It also checks the semantics of each case:
 
   * MAGMOM / ISPIN (uniform, negative, per-element, per-atom list, SOC vector)
-  * k-mesh density reflected in the KPOINTS files (coarse 1000 / fine 5000 /
+  * k-mesh density reflected in the KPOINTS files (coarse 1000 / fine 6000 /
     custom kpra) and the DOS/LOBSTER = 2x SCF, DFPT = SCF relations
   * KPAR / NCORE valid for the rank count in relax, SCF and DOS (ELF => KPAR 1
     with NCORE re-derived), and KPAR/NCORE given in INCAR blocks respected
@@ -143,7 +143,7 @@ def cases():
              expect=dict(ispin=2, magmom='4*4.0', kpra=(1000, 0.3))),
         dict(name='magmom-negative', poscar=POSCAR_AFM,
              form=form(spin_mode='collinear', mag_moment=-3.0),
-             expect=dict(ispin=2, magmom='4*-3.0', kpra=(5000, 0.3))),
+             expect=dict(ispin=2, magmom='4*-3.0', kpra=(6000, 0.3))),
         dict(name='magmom-per-element', poscar=POSCAR_AFM,
              form=form(spin_mode='collinear', magmom='Fe=4.0, O=0.6'),
              expect=dict(ispin=2, magmom='2*4.0 2*0.6')),
@@ -156,13 +156,13 @@ def cases():
              expect=dict(ispin=None, magmom='3.0 2*0.0 3.0 8*0.0')),
         dict(name='density-custom-kpra', poscar=POSCAR_AFM,
              form=form(kmesh_kpra='3000', relax_kmesh_density='fine'),
-             expect=dict(kpra=(3000, 0.35), relax_kpra=(5000, 0.35))),
+             expect=dict(kpra=(3000, 0.35), relax_kpra=(6000, 0.35))),
         dict(name='density-2d-hex', poscar=POSCAR_HEX,
              form=form(is_2d=True, hexagonal=True, kmesh_density='coarse'),
              expect=dict(kpra=(1000, 0.35), hex6=True)),
         dict(name='lobster-dfpt-follow-scf', poscar=POSCAR_AFM,
              form=form(lobster=True, dfpt=True, bands=False, dos=False),
-             expect=dict(kpra=(5000, 0.3))),
+             expect=dict(kpra=(6000, 0.3))),
         dict(name='explicit-blocks', poscar=POSCAR_AFM,
              form=form(spin_mode='collinear', mag_moment=4.0, lobster=True,
                        explicit_blocks=blk),
@@ -325,8 +325,8 @@ def check_semantics(case, out_dir, instr):
                 bad.append(f"{s} mesh != SCF mesh")
         if '08_lobster' in steps:
             sm, lm = kpts_mesh(steps['02_scf'] / 'KPOINTS'), kpts_mesh(steps['08_lobster'] / 'KPOINTS')
-            if lm != tuple(2 * x for x in sm):
-                bad.append("08_lobster mesh is not 2x the SCF mesh")
+            if lm != sm and 'reduced from' not in (steps['08_lobster'] / 'KPOINTS').read_text():
+                bad.append("08_lobster mesh is not the SCF mesh")
     if ex.get('hex6'):
         for st in steps:
             m = kpts_mesh(steps[st] / 'KPOINTS')
@@ -435,7 +435,7 @@ def check_semantics(case, out_dir, instr):
             (kpts_mesh(steps['01_relax'] / 'KPOINTS') == (3, 3, 2), "relax explicit KPOINTS"),
             (kpts_mesh(steps['02_scf'] / 'KPOINTS') == (9, 9, 5), "scf explicit KPOINTS"),
             (kpts_mesh(steps['04_dos'] / 'KPOINTS') == (18, 18, 10), "dos = 2x explicit scf mesh"),
-            (kpts_mesh(steps['08_lobster'] / 'KPOINTS') == (18, 18, 10), "lobster = 2x explicit scf mesh"),
+            (kpts_mesh(steps['08_lobster'] / 'KPOINTS') == (9, 9, 5), "lobster = explicit scf mesh"),
             ((steps['02_scf'] / '.explicit_kpoints').exists(), "scf .explicit_kpoints marker"),
             (not (steps['04_dos'] / '.explicit_kpoints').exists(), "dos must not carry the marker"),
             ('Line-mode' in (steps['03_bands'] / 'KPOINTS').read_text(), "global KPOINTS never hits bands"),

@@ -15,10 +15,10 @@ generation is delegated to vasp-agent-slurm.py, exactly as in the existing
 high-throughput driver.  This script adds the screening-specific parts:
 
   * primitive-cell download with resume, and a hard <= --max-atoms filter;
-  * a per-material Gamma k-mesh at fixed --kspacing, with N_i proportional to
-    |b_i*| so that N_i * a_i is constant (commensurate with a, b, c) -- the
-    right choice for anisotropic primitive cells and dense enough for the
-    Fermi-surface features of a semimetal;
+  * a per-material Gamma k-mesh at --kpra k-points per reciprocal atom (default
+    8000), with N_i proportional to |b_i*| so that the spacing is the same on all
+    axes -- the right choice for anisotropic primitive cells (--kspacing instead
+    gives a fixed spacing);
   * per-material ENCUT from the POTCAR ENMAX values (1.3 x max ENMAX);
   * automatic spin polarisation for cells containing 3d magnetic elements;
   * the LOBSTER NSCF capped at 1x the SCF mesh (it runs ISYM=0, so its cost is
@@ -43,8 +43,8 @@ Typical use
     ./ht-semimetals.py --list lists/semimetals_test.txt  --out highthroughput_test
     ./ht-semimetals.py --list lists/semimetals_full.txt  --out highthroughput_full
 
-Add  --kpra 8000 --single-node  for the semimetal production settings
-(k-point density 8000, one 40-core node per material).
+Add  --single-node  for the semimetal production settings (one 40-core node
+per material); the k-point density is 8000 kpra unless --kpra is given.
 The three runs are identical in every setting; only the --list file (the
 materials) differs.  To try a different subset, write a new list file rather
 than passing ad-hoc overrides, so the run stays reproducible from its list.
@@ -304,7 +304,7 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
            f"# spacing), N1*N2*N3*N_atoms as close to {kpra} as possible.",
            f"KMESH_DENSITY: {kpra}"] if kpra else
           ["# Gamma-centred mesh with N_i proportional to |b_i*|, i.e. N_i * a_i is",
-           f"# constant across the three axes (k-spacing {KSPACING} A^-1).",
+           "# constant across the three axes (fixed k-spacing, --kspacing).",
            f"KMESH: {nx} {ny} {nz}"]),
         f"ENCUT: {encut}",
         "",
@@ -375,7 +375,7 @@ def make_run_sh_portable(step_dir):
     os.chmod(path, 0o755)
 
 
-def cap_lobster_mesh(proj_dir, budget=None):
+def cap_lobster_mesh(proj_dir, budget=None, max_kpts=None):
     """Set the LOBSTER NSCF mesh to 1x the SCF mesh, shrunk further to fit memory.
 
     generate_lobster_input() defaults to 2x the SCF mesh, which is sensible for
@@ -387,7 +387,7 @@ def cap_lobster_mesh(proj_dir, budget=None):
     reduced (same ratios) until NKPTS x plane waves <= budget (LOBSTER_MAX_KPW).
     """
     from vasp_input_generator import (VASPInputGenerator, cap_lobster_mesh as _cap,
-                                      LOBSTER_MAX_KPW)
+                                      LOBSTER_MAX_KPW, LOBSTER_MAX_KPTS)
     scf_kp = os.path.join(proj_dir, '02_scf', 'KPOINTS')
     lob_kp = os.path.join(proj_dir, '08_lobster', 'KPOINTS')
     if not (os.path.isfile(scf_kp) and os.path.isfile(lob_kp)):
@@ -406,12 +406,13 @@ def cap_lobster_mesh(proj_dir, budget=None):
                     encut = float(l.split('=')[1].split()[0])
         new, nk, npw, reduced = _cap(mesh, gen._cell_volume(), encut,
                                      LOBSTER_MAX_KPW if budget is None else budget,
-                                     hexagonal=gen._is_hex_lattice())
+                                     hexagonal=gen._is_hex_lattice(),
+                                     max_kpts=LOBSTER_MAX_KPTS if max_kpts is None else max_kpts)
     except (ValueError, IndexError, OSError):
         new, reduced = None, False
     with open(lob_kp, 'w') as f:
         if reduced:
-            f.write(f"{head} - reduced from {mesh[0]}x{mesh[1]}x{mesh[2]} for memory: "
+            f.write(f"{head} - reduced from {mesh[0]}x{mesh[1]}x{mesh[2]} (point/memory limit): "
                     f"{nk} k x ~{npw} PW\n0\nGamma\n  {new[0]}  {new[1]}  {new[2]}\n  0    0    0\n")
         else:
             f.write(head + "\n" + '\n'.join(lines[1:]))
@@ -1114,8 +1115,9 @@ resubmitted.
 * **k-mesh.**  @KMESH_NOTE@ Even subdivisions
   so the BZ boundary is always sampled.  The LOBSTER NSCF is capped at 1x the
   SCF mesh because ISYM=0 means it pays for the full mesh, not the irreducible
-  wedge, and reduced further (same ratios) when k-points x plane waves would
-  exceed the memory budget (`--lobster-max-kpw`, default 6e6).
+  wedge, and reduced further (same ratios) above 10000 mesh points
+  (`--lobster-max-kpts`) or when k-points x plane waves would exceed the memory
+  budget (`--lobster-max-kpw`, default 6e6).
 * **Spin.**  Cells containing V/Cr/Mn/Fe/Co/Ni start spin-polarised (ISPIN=2)
   with a high moment on the magnetic species.  Everything else is
   non-spin-polarised.
@@ -1284,12 +1286,15 @@ def main():
     ap.add_argument('--lobster-max-kpw', type=float, default=None,
                     help='LOBSTER NSCF memory budget: largest k-points x plane waves of the '
                          'symmetry-off mesh; a denser mesh is reduced (default %g, 0 = no cap)' % 6e6)
-    ap.add_argument('--kspacing', type=float, default=KSPACING,
-                    help=f'k-point spacing in A^-1 (default {KSPACING})')
+    ap.add_argument('--lobster-max-kpts', type=int, default=None,
+                    help='largest N1*N2*N3 of the symmetry-off LOBSTER mesh (default 10000, 0 = no cap)')
     ap.add_argument('--kpra', type=int, default=None,
-                    help='k-point density in k-points per reciprocal atom (e.g. 8000); '
-                         'replaces --kspacing.  Mesh rule: even N_i proportional to |b_i*|, '
-                         'in-plane multiples of 6 for hexagonal lattices.')
+                    help='k-point density in k-points per reciprocal atom (default 8000; '
+                         'coarse = 1000).  Mesh rule: even N_i proportional to |b_i*| (same '
+                         'spacing on all axes), in-plane multiples of 6 for hexagonal lattices.')
+    ap.add_argument('--kspacing', type=float, default=None,
+                    help='instead of --kpra: fixed k-spacing in A^-1 including 2 pi, '
+                         'N_i = even(ceil(|b_i*|/spacing)); 0.10 is very dense')
     ap.add_argument('--single-node', action='store_true',
                     help='every material runs on ONE node with --cores-per-node cores on '
                          '--partition; no multi-node tier')
@@ -1344,6 +1349,8 @@ def main():
                     help='materials prepared in parallel (default: min(8, CPUs))')
     ap.add_argument('--api-key', default=None)
     args = ap.parse_args()
+    if args.kspacing is None and args.kpra is None:
+        args.kpra = 8000            # default density: k-points per reciprocal atom
 
     ht = _load_module('ht_mp_scf', 'ht-mp-scf.py')
     api_key    = None            # asked for only if something must be downloaded
@@ -1362,7 +1369,7 @@ def main():
 
     print(f"\nSemimetal screen highthroughput directory: {htdir}")
     print(f"  materials  : {len(ids)}")
-    print(f"  k-spacing  : {args.kspacing} A^-1 (even, commensurate with a,b,c)")
+    print(f"  k-points   : " + (f"{args.kpra} kpra" if args.kpra else f"spacing {args.kspacing} A^-1"))
     print(f"  max atoms  : {args.max_atoms}")
     print(f"  resources  : up to {args.max_nodes} nodes x {args.cores_per_node} cores")
     print(f"  account    : {args.account}   partition: {args.partition}\n")
@@ -1469,7 +1476,7 @@ def main():
         if got != expected:
             return 'fail', f"[{n}/{len(ids)}] {mp_id}: WRONG STEPS {got}", None
 
-        cap_lobster_mesh(proj, args.lobster_max_kpw)
+        cap_lobster_mesh(proj, args.lobster_max_kpw, args.lobster_max_kpts)
         localise_analyze_sh(proj, '../../tools')
         for step in expected:
             make_run_sh_portable(os.path.join(proj, step))

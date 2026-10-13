@@ -2733,7 +2733,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
         <input id="manual_encut" value="520" placeholder="520"></div>
       <div class="f"><label>K-mesh density</label>
         <select id="kmesh_density">
-          <option value="fine">Fine — 5000 k·atom⁻¹ (SCF, DOS, DFPT, LOBSTER)</option>
+          <option value="fine">Fine — 6000 k·atom⁻¹ (SCF, DOS, DFPT, LOBSTER)</option>
           <option value="coarse">Coarse — 1000 k·atom⁻¹ (faster tests)</option>
         </select></div>
       <div class="f"><label title="Optional: overrides the density selector for all steps. Format: NxNxN or N N N">Explicit k-mesh override</label>
@@ -2743,14 +2743,14 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <div class="f"><label title="k-points per reciprocal atom for the relaxation mesh">Relaxation k-mesh density</label>
         <select id="relax_kmesh_density">
           <option value="coarse">Coarse — 1000 k·atom⁻¹ (default)</option>
-          <option value="fine">Fine — 5000 k·atom⁻¹</option>
+          <option value="fine">Fine — 6000 k·atom⁻¹</option>
         </select></div>
       <div class="f"><label title="Optional integer kpra target; replaces the Coarse/Fine selector above for SCF, DOS, DFPT, LOBSTER">Custom kpra target</label>
         <input id="kmesh_kpra" type="number" min="1" step="100" placeholder="e.g. 3000 — blank uses the selector"></div>
     </div>
     <div style="font-size:11px;color:var(--sub);margin-top:4px;">
       Subdivisions are even, proportional to the reciprocal cell lengths (Nx·a ≈ Ny·b ≈ Nz·c), and chosen so
-      N<sub>x</sub>N<sub>y</sub>N<sub>z</sub>·N<sub>atoms</sub> lands on the kpra target (Coarse 1000, Fine 5000).
+      N<sub>x</sub>N<sub>y</sub>N<sub>z</sub>·N<sub>atoms</sub> lands on the kpra target (Coarse 1000, Fine 6000).
       The relaxation uses its own density (default Coarse); DOS and LOBSTER use 2× the SCF mesh; DFPT and Wannier use the SCF mesh.
       The KPOINTS header of every step reports the mesh and the kpra actually reached.
     </div>
@@ -3785,7 +3785,7 @@ function buildWorkflow(steps,hasConv){
         <div class="f"><label>ENCUT (eV)</label><input id="encut_p2" placeholder="e.g. 520"></div>
         <div class="f"><label>K-mesh density (SCF / DFPT / LOBSTER)</label>
           <select id="kmesh_density_p2">
-            <option value="fine">Fine — 5000 k·atom⁻¹</option>
+            <option value="fine">Fine — 6000 k·atom⁻¹</option>
             <option value="coarse">Coarse — 1000 k·atom⁻¹</option>
           </select></div>
         <div class="f"><label title="Optional explicit override (NxNxN). Leave blank to use Fine/Coarse auto-grid.">Explicit k-mesh override</label>
