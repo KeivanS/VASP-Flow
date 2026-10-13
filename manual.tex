@@ -232,52 +232,79 @@ know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, walltime continuation, \l
 
 \subsection{Requirements}
 
-\begin{tabularx}{\linewidth}{@{}lX@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.3\linewidth}@{}}
 \thead
-Package & Notes \\ \midrule
-VASP 5.4+ & \texttt{vasp\_std}, \texttt{vasp\_ncl} (SOC), optionally
-            \texttt{vasp\_gam} \\
-POTCAR library & PAW pseudopotentials in per-element folders \\
-Python 3.8+ & Conda environment recommended \\
-Flask & \texttt{pip install flask} --- GUI only \\
-sumo $\geq$ 2.0 & \texttt{pip install sumo} --- band and DOS plots \\
-MPI & \texttt{mpirun}, \texttt{mpiexec}, or \texttt{srun} \\
-phonopy & optional; \texttt{conda install -c conda-forge phonopy} \\
-wannier90.x & optional; \texttt{conda install -c conda-forge wannier90} \\
+What & Needed for & How to get it \\ \midrule
+VASP 5.4+ & everything: \texttt{vasp\_std}, \texttt{vasp\_ncl} (SOC), \texttt{vasp\_gam} (optional) & your licence \\
+POTCAR library & everything: PAW potentials in per-element folders (\texttt{PAW\_PBE}; \texttt{PAW\_LDA} for LDA) & with VASP \\
+MPI & running VASP (\texttt{mpirun}, \texttt{mpiexec} or \texttt{srun}) & system / cluster module \\
+Python $\geq$ 3.8, numpy, matplotlib & everything (agents, \texttt{analyze.sh}) & \texttt{pip install numpy matplotlib} \\
+Flask, sumo $\geq$ 2.0 & the GUI and its band/DOS plots & \texttt{pip install flask sumo} \\
+pymatgen, mp-api, spglib & the high-throughput drivers (structures from Materials Project, the
+  Materials Project POTCAR choices); spglib also finds the band-structure k-path &
+  \texttt{pip install pymatgen mp-api spglib} \\
+Materials Project API key & the high-throughput drivers, for structures not downloaded before &
+  free, \url{https://materialsproject.org/api} \\
+LOBSTER & the LOBSTER bonding step (\texttt{08\_lobster}) & free for academics, \url{http://www.cohp.de} \\
+phonopy, wannier90.x & optional: phonons, Wannier functions & \texttt{conda install -c conda-forge phonopy wannier90} \\
 \bottomrule
 \end{tabularx}
 
+\medskip\noindent\textbf{Check the Python first.}  The system \texttt{python3} of a cluster is often too old
+(on Rivanna it is 3.6, without pymatgen): \texttt{ht\_runs.py} then stops with
+\texttt{unexpected keyword argument 'capture\_output'} or \texttt{No module named 'pymatgen'}.
+Make the environment of step~2 below once, and activate it at every login.
 
 % ============================================================
 \section{Installing and configuring VASP-Flow}
 \label{sec:install}
 % ============================================================
 
+The same steps on your computer and on a cluster (on the cluster run them on the login node;
+the high-throughput drivers need its internet access):
 
 \begin{lstlisting}[language=bash]
-# 1. Clone the repository
-git clone https://github.com/KeivanS/VASP-Flow.git
-cd VASP-Flow
+# 1. The code (later updates: cd ~/VASP-Flow && git pull)
+cd ~ && git clone https://github.com/KeivanS/VASP-Flow.git
 
-# 2. Install Python dependencies
-pip install flask sumo
+# 2. Python environment, once (cluster: load Python >= 3.8)
+python3 --version                      # must be 3.8 or newer
+python3 -m venv ~/vaspenv
+source ~/vaspenv/bin/activate          # at every login
+pip install numpy matplotlib flask sumo    # agents, GUI
+pip install pymatgen mp-api spglib         # HT drivers
+# optional (in a conda env instead of the venv):
+#   conda install -c conda-forge phonopy wannier90
 
-# 3. Optional: phonons and Wannier support
-conda install -c conda-forge phonopy wannier90
+# 3. Where VASP, MPI and the POTCARs are
+cd ~/VASP-Flow
+make setup && nano default_paths   # workstation
+nano profiles/slurm.json           # cluster
 
-# 4. First-time configuration (creates default_paths from template)
-make setup
-nano default_paths     # set VASP paths, POTCAR directory, MPI command
+# 4. HT runs only, at every login (or in ~/.bashrc)
+export MP_API_KEY=your_key
 \end{lstlisting}
 
-\subsection{default\_paths --- platform configuration}
+\noindent Which file each tool reads its paths from:
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.38\linewidth}>{\raggedright\arraybackslash}X@{}}
+\thead
+Tool & Paths of VASP, MPI, POTCARs \\ \midrule
+GUI (\texttt{make run}) & GUI \emph{System Setup} page; \texttt{default\_paths} for a new install \\
+\texttt{vasp-agent.py} & environment variables / \texttt{default\_paths}; \texttt{profiles/workstation.json}
+  with \texttt{-{}-profile workstation} \\
+\texttt{vasp-agent-slurm.py}, \texttt{ht-mp-scf.py -{}-agent slurm} & \texttt{profiles/slurm.json} (Section~\ref{sec:remote-setup}) \\
+\texttt{ht\_runs.py} & \texttt{env.sh}, written into each run folder (Section~\ref{sec:ht-scripts});
+  \texttt{default\_paths} is not needed on the cluster \\
+\bottomrule
+\end{tabularx}
+
+\subsection{default\_paths --- workstation configuration}
 \label{sec:defaultpaths}
 
-The file \texttt{default\_paths} (Makefile key=value syntax) is read at
-startup and its variables are exported as environment variables that the
-GUI uses as initial defaults.  Settings saved via the GUI \emph{System
-Setup} page take precedence; \texttt{default\_paths} acts as the
-fallback for new installs or CLI-only use.
+The file \texttt{default\_paths} (Makefile key=value syntax, made by \texttt{make setup} from
+\texttt{default\_paths.example}) is read by \texttt{make run}; its variables become the
+GUI's initial settings.  Settings saved on the GUI \emph{System Setup} page win.
 
 \begin{lstlisting}
 PYTHON          = python3
@@ -285,22 +312,13 @@ VASP_STD        = /path/to/vasp_std
 VASP_NCL        = /path/to/vasp_ncl
 VASP_GAM        = /path/to/vasp_gam       # optional
 VASP_POTCAR_DIR = /path/to/potpaw_PBE
-VASP_POTCAR_DIR_LDA = /path/to/potpaw_LDA # only for LDA; default: PBE -> LDA in the name
+VASP_POTCAR_DIR_LDA = /path/to/potpaw_LDA # LDA only
 MPI_LAUNCH      = mpirun -np              # or: srun
 MPI_NP          = 16
 WANNIER90_X     = wannier90.x
-LOBSTER_X       = lobster                 # lobster binary or full path
-VISUALIZER_X    = ~/bin/jmol             # Jmol, VESTA, OVITO, ...
+LOBSTER_X       = lobster                 # or full path
+VISUALIZER_X    = ~/bin/jmol              # Jmol, VESTA, ...
 \end{lstlisting}
-
-\noindent\textbf{Three-layer configuration precedence} (highest wins):
-\begin{enumerate}
-  \item GUI System Setup page $\to$ saved to \texttt{settings.json};
-        also auto-synced to \texttt{profiles/slurm.json} for SLURM agents.
-  \item \texttt{default\_paths} $\to$ Makefile bootstrap, read on every
-        \texttt{make run}.
-  \item Built-in code defaults.
-\end{enumerate}
 
 \noindent\textbf{Two POTCAR libraries.}  Every functional uses the PBE potentials of
 \texttt{VASP\_POTCAR\_DIR} except LDA, which needs the LDA potentials of
@@ -310,27 +328,13 @@ $\to$ \texttt{PAW\_LDA}, \texttt{potpaw\_PBE.54} $\to$ \texttt{potpaw\_LDA.54});
 folder does not exist an LDA run stops with an error instead of using PBE potentials.  The
 agents print which library they used (\texttt{POTCAR library: \ldots}); for the
 high-throughput driver the cluster path is \texttt{-{}-hpc-potcar-dir-lda}.
-\texttt{profiles/workstation.json} is used only when running
-\texttt{vasp-agent.py~-{}-profile~workstation} directly from the
-command line without the GUI.
 
 
 \subsection{Configuring a cluster without the GUI}
 \label{sec:remote-setup}
 
-When running on a remote supercomputer where the browser GUI is not
-available, executable paths and MPI settings must be configured
-directly in \texttt{profiles/slurm.json} (for the SLURM agent) or
-\texttt{profiles/workstation.json} (for the workstation agent).
-
-\begin{lstlisting}[language=bash]
-# On the cluster, after cloning VASP-Flow edit the file:
-nano profiles/slurm.json 
-# or
-vi profiles/slurm.json 
-\end{lstlisting}
-
-The relevant keys (to be edited) are:
+On a cluster without the GUI, the SLURM agent takes the VASP binaries, MPI command, modules
+and default job size from \texttt{profiles/slurm.json}; edit it once after cloning:
 
 \begin{lstlisting}[basicstyle=\ttfamily\small]
 {
@@ -358,10 +362,9 @@ set as environment variables in your \texttt{.bashrc}
 (\texttt{VASP\_STD}, \texttt{LOBSTER\_X}, etc.)\ and the profile values left
 as empty strings to inherit them.
 
-\noindent\textbf{Note:} \texttt{profiles/slurm.json} is auto-regenerated
-whenever you click \emph{Save Settings} in the GUI, so the authoritative
-source for GUI users is the System Setup page.  On a headless cluster, edit
-the JSON file directly and leave it in place.
+\noindent \textbf{Save Settings} in the GUI rewrites \texttt{profiles/slurm.json}; without the
+GUI, edit the file and leave it in place.  Per-project values (nodes, walltimes, \ldots) go into
+\texttt{instructions.txt} (Section~\ref{sec:resources}).
 
 % ============================================================
 \part{Learning by example}
@@ -593,10 +596,11 @@ To rerun one step by hand after editing its INCAR: \cmd{cd 03_bands && sbatch ru
 
 \cmd{ht-mp-scf.py} takes a list of Materials Project IDs, downloads each primitive
 cell and runs relax $\to$ SCF (+ ELF) $\to$ LOBSTER for each with
-\cmd{vasp-agent.py}.  It needs internet access, \cmd{pip install pymatgen mp-api}, and a
-free API key from \url{https://materialsproject.org/api}.
+\cmd{vasp-agent.py}.  It needs internet access and the Python environment with pymatgen and
+the Materials Project key of Section~\ref{sec:install}.
 
 \begin{lstlisting}[language=bash]
+source ~/vaspenv/bin/activate          # Section 2, step 2
 export MP_API_KEY=your_key
 export VASP_POTCAR_DIR=/path/to/potpaw_PBE
 mkdir -p ~/ht_small && cd ~/ht_small
@@ -641,7 +645,7 @@ Material & Why it is in the list \\ \midrule
 \paragraph{1. Generate the run.}  On the login node (it downloads from Materials Project):
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow && git pull
-source ~/vaspenv/bin/activate          # python with pymatgen, mp-api, spglib, numpy
+source ~/vaspenv/bin/activate          # Section 2, step 2 (pymatgen, mp-api, ...)
 export MP_API_KEY=your_key
 printf 'mp-149\nmp-972937\nmp-1080459\n' > lists/example5.txt
 python3 ht_runs.py --list lists/example5.txt --single-node \
@@ -1676,24 +1680,10 @@ SCF_NCORE: 8    BANDS_NCORE: 16   DOS_NCORE: 8
 RELAX_KPAR: 2   PHONONS_KPAR: 1   # DFPT is always KPAR=1, NCORE=1
 \end{lstlisting}
 
-\subsection{Cluster defaults: \texttt{profiles/slurm.json}}
-
-\begin{lstlisting}
-{
-  "vasp_std": "vasp_std",  "vasp_ncl": "vasp_ncl",
-  "mpi_cmd":  "srun",
-  "modules":  ["intel/2021", "impi/2021", "vasp/6.3.2"],
-  "slurm": {
-    "partition":       "standard",
-    "nodes":           2,
-    "ntasks_per_node": 64,
-    "time":            "12:00:00",
-    "account":         "mygroup"
-  }
-}
-\end{lstlisting}
-
 \subsection{Per-project resources (in \texttt{instructions.txt})}
+
+The cluster defaults (partition, nodes, tasks per node, account) are in
+\texttt{profiles/slurm.json} (Section~\ref{sec:remote-setup}); these lines override them for one project:
 
 \begin{lstlisting}
 NODES: 4     NTASKS_PER_NODE: 32     PARTITION: gpu     ACCOUNT: myallocation
@@ -2047,13 +2037,10 @@ drivers download from MP, so run them on the login node (internet access).
 
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow && git pull
-source ~/vaspenv/bin/activate    # python env (see below)
+source ~/vaspenv/bin/activate    # made once, Section 2 (step 2)
 export MP_API_KEY=your_key       # materialsproject.org/api
 export VASP_POTCAR_DIR=/path/to/PAW_PBE
 \end{lstlisting}
-First time only: \texttt{python3 -m venv \textasciitilde/vaspenv \&\&
-source \textasciitilde/vaspenv/bin/activate \&\& pip install pymatgen mp-api
-spglib numpy matplotlib}.
 
 \textbf{2. Put the list in a file}, e.g.\ \texttt{\textasciitilde/VASP-Flow/lists/mylist.txt}.
 
@@ -2616,6 +2603,8 @@ Script & Purpose \\ \midrule
 \cmd{fix_spilling.sh [--above 5] [--submit] [ID ...]} & Redo the LOBSTER step of materials whose
   charge spilling is above the limit: twice the bands, then a LOBSTER basis scan that keeps the
   lowest spilling (Appendix~\ref{app:spilling}); a dry run without \opt{submit}. \\
+\cmd{reduce_cell.py IN OUT} & The same crystal on its shortest lattice vectors (numpy only), for a
+  skewed primitive cell; stage the result with \cmd{ht_runs.py --poscar-dir}. \\
 \bottomrule
 \end{tabularx}
 
@@ -2628,9 +2617,12 @@ Full descriptions are in \cmd{ht_tools/README.md}.
 
 \subsection{Setting up and running}
 
-\begin{tabularx}{\linewidth}{@{}lX@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
 \thead
 Symptom & Solution \\ \midrule
+\texttt{No module named 'pymatgen'}, \texttt{unexpected keyword argument 'capture\_output'} &
+  The \texttt{python3} in use is the system one (too old, no pymatgen).  Activate the
+  environment of Section~\ref{sec:install}: \texttt{source \textasciitilde/vaspenv/bin/activate}. \\[3pt]
 POTCAR not found &
   Check \texttt{VASP\_POTCAR\_DIR} (LDA: \texttt{VASP\_POTCAR\_DIR\_LDA}) in
   \texttt{default\_paths} or GUI System Setup.  Use the POTCAR chooser for unusual variants
@@ -2681,10 +2673,13 @@ Bands/DOS/LOBSTER energies run away to $10^{6}$--$10^{10}$~eV &
   Halve its mesh in \cmd{08_lobster/KPOINTS} (\cmd{vasp_diagnose.py} does this; new runs
   are capped from the start, Appendix~\ref{app:lobster-mem}).  More memory per rank (one
   node, fewer ranks) did not help.  For other steps lower KPAR. \\[3pt]
-SCF reached EDIFF (the \cmd{1 F=} line is in OSZICAR) but the job still hit its time limit &
+SCF reached EDIFF (\cmd{aborting loop because EDIFF is reached} in OUTCAR) but the job still hit its time limit &
   VASP stalled after convergence (seen on two-node runs, in the MPI network layer), so more
   walltime will not help.  The diagnosis calls it \cmd{hang} and reruns the step on one
-  node; \cmd{show_material_status.sh ID scf} shows where it stopped. \\[3pt]
+  node; \cmd{show_material_status.sh ID scf} shows where it stopped.  A \cmd{1 F=} line
+  alone is no proof: the walltime guard's \cmd{LABORT} also ends the electronic loop with
+  it, and such a step (energy change still above EDIFF) was only too slow --- a
+  \cmd{timeout}, repaired with more walltime (or \cmd{set_params.sh ID scf "TIME=04:00:00; NODES=2"}). \\[3pt]
 A step ``finished'' in a few minutes, but its SCF is not converged (\cmd{hard stop encountered} in OUTCAR) &
   A \cmd{STOPCAR} from an earlier, killed job was still in the folder.  The diagnosis calls it
   \cmd{stopcar}, removes it and redoes the step and the ones that used its output.  Job
@@ -3391,8 +3386,10 @@ For a step that is not OK, the cause is read from the step's newest SLURM logs,
 \cmd{vasp.out}, the end of OUTCAR and the SLURM job record (state, run time,
 time limit).  The job record wins: a job SLURM ended for its time limit is a
 \cmd{timeout}, whatever else is in the logs --- or a \cmd{hang}, if the step is an SCF or
-fixed-density run whose electronic loop had already converged (its \cmd{1 F=} line is in
-OSZICAR) but which never reached the final timing block.  A VASP run stopped by the STOPCAR
+fixed-density run whose electronic loop had reached EDIFF (\cmd{aborting loop because EDIFF is
+reached} in OUTCAR, and its \cmd{1 F=} line in OSZICAR) but which never reached the final timing
+block.  An \cmd{F=} line without EDIFF comes from the walltime guard's stop, and is a
+\cmd{timeout}.  A VASP run stopped by the STOPCAR
 that the VASP-Flow scripts write 15 minutes before the time limit (\cmd{hard stop encountered},
 \cmd{soft stop encountered}) is a \cmd{timeout} as well; stopped that way long before its time
 limit (or with a STOPCAR still in the folder and no requeue pending), it is a \cmd{stopcar}.  Messages after which VASP carries on, such as
@@ -3773,7 +3770,8 @@ as commented-out lines.
     large files deleted) and recorded in \texttt{repair\_history.tsv}; held for review after the
     same cause twice or 5 repairs.  \texttt{ht\_tools/set\_params.sh}: your own INCAR tags,
     k-mesh, walltime and node count per material and step, applied by the next round.  New
-    causes \texttt{hang} (converged, then stalled on several nodes: rerun on one node) and
+    causes \texttt{hang} (reached EDIFF, then stalled on several nodes: rerun on one node; a step
+    the walltime guard stopped before EDIFF is a \texttt{timeout}) and
     \texttt{stopcar} (stopped early by a leftover STOPCAR); job scripts remove a leftover STOPCAR
     at the start.  \texttt{ht-semimetals.py} renamed \texttt{ht\_runs.py}.  Removed the
     superseded \texttt{fix\_failed.sh}, \texttt{reset\_stale.sh},
@@ -3781,7 +3779,8 @@ as commented-out lines.
     LOBSTER charge spilling: NBANDS of the LOBSTER NSCF covers the largest pbeVaspFit2015 basis;
     \texttt{LOBSTER\_BASIS} (auto/min/standard/max/scan/off) and an automatic basis scan above
     \texttt{LOBSTER\_SCAN\_ABOVE} (5\,\%) that keeps the lowest spilling
-    (\texttt{lobster\_basis.py}); \texttt{ht\_tools/fix\_spilling.sh} for older runs.
+    (\texttt{lobster\_basis.py}); \texttt{ht\_tools/fix\_spilling.sh} for older runs; \texttt{ht\_tools/reduce\_cell.py}
+    (shortest lattice vectors of a skewed cell, without pymatgen).
     R2SCAN is the default functional of the GUI, \texttt{vasp-agent.py} and
     \texttt{vasp-agent-slurm.py} (PBE, PBEsol, LDA and the others on request; the
     high-throughput drivers keep \texttt{-{}-functional PBE}); R2SCAN INCARs carry
@@ -3789,7 +3788,8 @@ as commented-out lines.
     times the tabulated PBE value.  LDA now sets \texttt{GGA = CA} and uses the LDA POTCARs
     (\texttt{VASP\_POTCAR\_DIR\_LDA}, default: the PBE folder with PBE $\to$ LDA); before,
     it ran with the PBE POTCARs, i.e.\ as PBE.
-    Manual reorganised for new users: installation, then five step-by-step examples (GUI,
+    Manual reorganised for new users: requirements per use and one installation procedure
+    (the Python environment with pymatgen for the high-throughput drivers), then five step-by-step examples (GUI,
     workstation, cluster, high throughput on a workstation and on a cluster with repair
     rounds), then how each part works and how to change it by hand.
 \end{description}
