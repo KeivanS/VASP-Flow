@@ -107,6 +107,10 @@
 % ============================================================
 \newcommand{\thead}{\rowcolor{lightblue}}
 
+% \cmd{text}: verbatim-ish inline code; \opt{name}: a --option
+\newcommand{\cmd}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\opt}[1]{\texttt{-{}-\detokenize{#1}}}
+
 % ============================================================
 %  Meta
 % ============================================================
@@ -115,24 +119,30 @@
   {\color{mainblue}\rule{\linewidth}{2pt}}\\[8pt]%
   \textbf{\Huge VASP Workflow}\\[4pt]%
   \large User Manual\\[6pt]%
-  \normalsize Browser GUI $\cdot$ CLI Agents $\cdot$ SLURM HPC\\[6pt]%
+  \normalsize Browser GUI $\cdot$ CLI Agents $\cdot$ SLURM HPC $\cdot$ High throughput $\cdot$ Diagnosis \& repair\\[6pt]%
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v2.2 $\cdot$ September 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v2.4 $\cdot$ October 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
 \begin{document}
 % ============================================================
+\sloppy
 
 \maketitle
 \tableofcontents
 \newpage
+% ============================================================
+\part{Getting started}
+% ============================================================
 
 % ============================================================
-\section{Introduction}
+\section{What VASP-Flow does and where to find what}
+\label{sec:start}
 % ============================================================
+
 
 VASP Workflow is a framework for setting up, running, and analysing DFT
 calculations with VASP.  Two interfaces are provided:
@@ -148,6 +158,31 @@ calculations with VASP.  Two interfaces are provided:
 \end{itemize}
 
 Both interfaces share the same \texttt{modules/} back-end.
+
+On a cluster, \cmd{vasp_diagnose.py} and the scripts in \cmd{ht_tools/} check finished runs, say why a step failed, write the repairs and resubmit them (Part~\ref{part:check}).
+
+\subsection{Find what you need}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.36\linewidth}@{}}
+\thead
+I want to \ldots & Go to \\ \midrule
+install VASP-Flow and tell it where VASP and the POTCARs are & Section~\ref{sec:install} \\
+set up and run one material with a form in the browser & Section~\ref{sec:gui} \\
+set up and run one material from the command line or on a cluster & Section~\ref{sec:agents} \\
+write or change \texttt{instructions.txt} & Section~\ref{sec:instructions} \\
+choose the functional, spin, SOC or GGA+U & Section~\ref{sec:methods} \\
+change the k-point mesh & Section~\ref{sec:kmesh} \\
+set any INCAR or KPOINTS tag myself & Section~\ref{sec:incar} \\
+get band structures, DOS, ELF, phonons, Born charges, Wannier functions or LOBSTER bonds & Sections~\ref{sec:spectra}--\ref{sec:extras} \\
+set cores, nodes, KPAR/NCORE and walltimes & Section~\ref{sec:resources} \\
+run hundreds of Materials Project IDs on a cluster & Section~\ref{sec:ht-howto} \\
+find out why runs failed and resubmit them & Section~\ref{sec:diagnose} \\
+check one material or one job quickly & Section~\ref{sec:lookup} \\
+try a different INCAR setting on one material before resubmitting & Section~\ref{sec:testfix} \\
+fix something that went wrong & Section~\ref{sec:trouble} \\
+know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, walltime continuation, \ldots) & Appendix~\ref{app:inputs} \\
+\bottomrule
+\end{tabularx}
 
 \subsection{Key features}
 
@@ -185,9 +220,12 @@ wannier90.x & optional; \texttt{conda install -c conda-forge wannier90} \\
 \bottomrule
 \end{tabularx}
 
+
 % ============================================================
-\section{Installation}
+\section{Installing and configuring VASP-Flow}
+\label{sec:install}
 % ============================================================
+
 
 \begin{lstlisting}[language=bash]
 # 1. Clone the repository
@@ -238,8 +276,62 @@ VISUALIZER_X    = ~/bin/jmol             # Jmol, VESTA, OVITO, ...
 \texttt{vasp-agent.py~-{}-profile~workstation} directly from the
 command line without the GUI.
 
+
+\subsection{Configuring a cluster without the GUI}
+\label{sec:remote-setup}
+
+When running on a remote supercomputer where the browser GUI is not
+available, executable paths and MPI settings must be configured
+directly in \texttt{profiles/slurm.json} (for the SLURM agent) or
+\texttt{profiles/workstation.json} (for the workstation agent).
+
+\begin{lstlisting}[language=bash]
+# On the cluster, after cloning VASP-Flow edit the file:
+nano profiles/slurm.json 
+# or
+vi profiles/slurm.json 
+\end{lstlisting}
+
+The relevant keys (to be edited) are:
+
+\begin{lstlisting}[basicstyle=\ttfamily\small]
+{
+  "vasp_std":   "/path/to/vasp_std",
+  "vasp_ncl":   "/path/to/vasp_ncl",
+  "vasp_gam":   "/path/to/vasp_gam",
+  "wannier90_x": "wannier90.x",
+  "lobster_x":  "/path/to/lobster",
+  "mpi_cmd":    "srun",
+  "mpi_np":     128,
+  "modules":    ["intel/2023", "vasp/6.4"],
+  "slurm": {
+    "partition": "standard",
+    "nodes":      2,
+    "ntasks_per_node": 64,
+    "time":       "12:00:00",
+    "account":    "your-project"
+  }
+}
+\end{lstlisting}
+
+\noindent The \texttt{modules} list is prepended as \texttt{module load \ldots}
+lines in every generated \texttt{run.sh}.  Alternatively, all path keys can be
+set as environment variables in your \texttt{.bashrc}
+(\texttt{VASP\_STD}, \texttt{LOBSTER\_X}, etc.)\ and the profile values left
+as empty strings to inherit them.
+
+\noindent\textbf{Note:} \texttt{profiles/slurm.json} is auto-regenerated
+whenever you click \emph{Save Settings} in the GUI, so the authoritative
+source for GUI users is the System Setup page.  On a headless cluster, edit
+the JSON file directly and leave it in place.
+
 % ============================================================
-\section{Browser GUI}
+\part{Single calculations}
+% ============================================================
+
+% ============================================================
+\section{Running a calculation from the browser (GUI)}
+\label{sec:gui}
 % ============================================================
 
 \subsection{Starting the GUI}
@@ -446,59 +538,11 @@ with trimmed OUTCARs, so the tarball opens directly; set
 \texttt{FULL\_OUTCAR=1} to keep the complete OUTCARs.
 
 % ============================================================
-\section{CLI Agents}
+\section{Running a calculation from the command line}
+\label{sec:agents}
 % ============================================================
 
-
-\subsection{Remote / headless setup (no GUI access)}
-\label{sec:remote-setup}
-
-When running on a remote supercomputer where the browser GUI is not
-available, executable paths and MPI settings must be configured
-directly in \texttt{profiles/slurm.json} (for the SLURM agent) or
-\texttt{profiles/workstation.json} (for the workstation agent).
-
-\begin{lstlisting}[language=bash]
-# On the cluster, after cloning VASP-Flow edit the file:
-nano profiles/slurm.json 
-# or
-vi profiles/slurm.json 
-\end{lstlisting}
-
-The relevant keys (to be edited) are:
-
-\begin{lstlisting}[basicstyle=\ttfamily\small]
-{
-  "vasp_std":   "/path/to/vasp_std",
-  "vasp_ncl":   "/path/to/vasp_ncl",
-  "vasp_gam":   "/path/to/vasp_gam",
-  "wannier90_x": "wannier90.x",
-  "lobster_x":  "/path/to/lobster",
-  "mpi_cmd":    "srun",
-  "mpi_np":     128,
-  "modules":    ["intel/2023", "vasp/6.4"],
-  "slurm": {
-    "partition": "standard",
-    "nodes":      2,
-    "ntasks_per_node": 64,
-    "time":       "12:00:00",
-    "account":    "your-project"
-  }
-}
-\end{lstlisting}
-
-\noindent The \texttt{modules} list is prepended as \texttt{module load \ldots}
-lines in every generated \texttt{run.sh}.  Alternatively, all path keys can be
-set as environment variables in your \texttt{.bashrc}
-(\texttt{VASP\_STD}, \texttt{LOBSTER\_X}, etc.)\ and the profile values left
-as empty strings to inherit them.
-
-\noindent\textbf{Note:} \texttt{profiles/slurm.json} is auto-regenerated
-whenever you click \emph{Save Settings} in the GUI, so the authoritative
-source for GUI users is the System Setup page.  On a headless cluster, edit
-the JSON file directly and leave it in place.
-
-\subsection{vasp-agent.py --- workstation}
+\subsection{On a workstation: \texttt{vasp-agent.py}}
 
 The vasp agents read by default the POSCAR file and the instructions.txt file which contains 
 the project name and type of calculation the user wants. 
@@ -514,7 +558,7 @@ cd ProjectName
 ./analyze.sh          # plots after all steps complete
 \end{lstlisting}
 
-\subsection{vasp-agent-slurm.py --- SLURM clusters}
+\subsection{On a SLURM cluster: \texttt{vasp-agent-slurm.py}}
 
 \begin{lstlisting}[language=bash]
 ./vasp-agent-slurm.py                  # uses profiles/slurm.json
@@ -534,7 +578,7 @@ Two-phase workflow when convergence tests are requested:
 ./submit_calculations.sh    # STEP 2 -- prompts ENCUT/k-mesh, submits
 \end{lstlisting}
 
-\subsection{Generated directory structure}
+\subsection{What the agent creates}
 
 \begin{lstlisting}
 ProjectName/
@@ -551,8 +595,919 @@ ProjectName/
   submit_all.sh        SLURM job submission (dependency chained)
   analyze.sh           post-processing: plots + OUTCAR extraction
 \end{lstlisting}
+
+Without the GUI on a cluster, first set the VASP paths and SLURM defaults in \cmd{profiles/slurm.json} (Section~\ref{sec:remote-setup}).
+
 % ============================================================
-\section{High-Throughput Calculations (Materials Project)}
+\section{Describing the calculation: \texttt{instructions.txt}}
+\label{sec:instructions}
+% ============================================================
+
+\subsection{An example to start from}
+
+\begin{lstlisting}
+Project: My material name
+
+Methods: PBEsol functional
+         collinear magnetization
+         GGA+U with U=4.0 on Fe-d orbitals
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Fe-d and O-p)
+
+Convergence: Test k-points 6x6x6 to 12x12x12
+             ENCUT 400-600 eV
+
+MAGMOM: 4.0
+NSW: 100
+EDIFFG: -0.01
+MPI: 128
+NODES: 2
+NTASKS_PER_NODE: 64
+WALLTIME: 12:00:00
+\end{lstlisting}
+
+The parser is case-insensitive and searches the entire file, so section
+order is flexible.
+
+\subsection{All keywords}
+\label{sec:keywords}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Keyword & Meaning \\ \midrule
+\texttt{Project:} & Project name; becomes the output folder. \\
+\texttt{MAGMOM:} & Initial magnetic moments in $\mu_{\mathrm{B}}$: one number
+  for all atoms (\texttt{4.0}, \texttt{-3.0}), per element
+  (\texttt{Fe=4.0, O=0.6}) or a per-atom list (\texttt{2*4.0 2*-4.0}).
+  Any \texttt{MAGMOM} line switches spin polarisation on; default 2.0 when only
+  ``collinear magnetization'' is given (Section~\ref{sec:magnetic}). \\
+\texttt{ISIF:} & Relaxation type: 3=full, 2=ions only, 4=fixed volume. \\
+\texttt{NSW:} & Max ionic steps. Default 100. \\
+\texttt{EDIFFG:} & Force criterion in eV/\AA. Default $-0.01$. \\
+\texttt{ENCUT:} & Manual plane-wave cutoff in eV. \\
+\texttt{KMESH:} & Explicit Gamma k-mesh overriding the automatic density,
+  e.g.\ \texttt{8 8 8} or \texttt{12} (cubic).  Applies to every automatic
+  mesh (relax/SCF/DOS); for 2-D give the third value (\texttt{12 12 1}). \\
+\texttt{KMESH\_DENSITY:} & Automatic k-mesh density tier: \texttt{coarse}
+  (1000~kpra, default for relaxation and convergence tests) or \texttt{fine}
+  (5000~kpra, default for SCF/DOS/spectroscopic steps).  kpra $= N_k \times
+  N_\mathrm{atoms}$ where $N_k = N_x N_y N_z$; subdivisions scale as
+  $N_i \propto |\mathbf{b}_i^*|$.  An integer is taken as the kpra target
+  itself (also \texttt{KPRA:}, \texttt{KPOINTS\_DENSITY:}).  Overridden by
+  explicit \texttt{KMESH} and by \texttt{KPOINTS} blocks. \\
+\texttt{RELAX\_KMESH\_DENSITY:} & Density of the relaxation mesh
+  (\texttt{coarse}, \texttt{fine} or an integer); default \texttt{coarse}
+  whatever the SCF uses. \\
+\texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
+  \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
+  \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
+\texttt{INCAR: \ldots\ END\_INCAR} & Block of literal INCAR tags merged
+  into the generated INCAR(s); optionally per-step
+  (Section~\ref{sec:incar-raw}). \\
+\texttt{NKPTS:} & k-points per band segment. Default 40. \\
+\texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
+\texttt{KPAR:} & Global k-point parallelisation. \\
+\texttt{NCORE:} & Global cores-per-orbital. \\
+\texttt{SCF\_KPAR:} \textit{etc.} &
+  Per-step KPAR: also BANDS\_, DOS\_, RELAX\_, PHONONS\_
+  (DFPT is forced to KPAR${}={}$NCORE${}={}$1). \\
+\texttt{SCF\_NCORE:} \textit{etc.} & Per-step NCORE; same prefixes. \\
+\texttt{NODES:} & Compute nodes (SLURM). \\
+\texttt{NTASKS\_PER\_NODE:} & MPI tasks per node (SLURM). \\
+\texttt{PARTITION:} & SLURM partition. \\
+\texttt{WALLTIME:} & One time limit for every step, e.g.\ \texttt{12:00:00}
+  (default: per step, Section~\ref{sec:slurm-time}). \\
+\texttt{RELAX\_WALLTIME:} \textit{etc.} & Per-step time limit (RELAX, SCF,
+  BANDS, DOS, WANNIER, DFPT, PHONONS, LOBSTER). \\
+\texttt{ACCOUNT:} & SLURM account / allocation. \\
+\texttt{DFPT\_EDIFF:} & EDIFF for DFPT. Default \texttt{1E-8}. \\
+\texttt{PHONONS\_DIM:} & Supercell, e.g.\ \texttt{2 2 2}. \\
+\texttt{PHONONS\_MESH:} & q-mesh, e.g.\ \texttt{20 20 20}. \\
+\texttt{PHONONS\_DISP:} & Displacement in \AA. Default 0.01. \\
+\texttt{PHONONS\_BAND:} & High-symmetry path for phonon bands. \\
+\texttt{PHONONS\_NAC:} & \texttt{FALSE} to disable NAC. \\
+\texttt{WANNIER\_NUM\_WANN:} & Number of Wannier functions. \\
+\texttt{WANNIER\_PROJ:} & Projections, e.g.\ \texttt{Ga:s;As:p}. \\
+\texttt{WANNIER\_EWIN:} & Energy window, e.g.\ \texttt{-5.0 to 15.0}. \\
+\bottomrule
+\end{tabularx}
+
+% ============================================================
+\section{Choosing functional, spin, SOC and GGA+U}
+\label{sec:methods}
+% ============================================================
+
+\subsection{Functionals}
+
+\begin{lstlisting}
+Methods: PBEsol functional    # recommended for solids
+Methods: R2SCAN functional    # meta-GGA
+Methods: HSE06 functional     # hybrid -- more accurate but slower
+Methods: RVV10 functional     # van der Waals
+\end{lstlisting}
+
+Default ENCUT values: PBE 400~eV, PBEsol 450~eV, R2SCAN 680~eV,
+HSE06 400~eV, RVV10 450~eV.
+
+\subsection{Spin-orbit coupling}
+
+\begin{lstlisting}
+Methods: SOC with magnetization in z-direction
+\end{lstlisting}
+
+Uses \texttt{vasp\_ncl}.  Sets \texttt{LSORBIT}, \texttt{LNONCOLLINEAR},
+and \texttt{SAXIS}.
+
+\subsection{Magnetic materials (collinear spin)}
+\label{sec:magnetic}
+
+\begin{lstlisting}
+Methods: collinear magnetization
+MAGMOM: 4.0
+\end{lstlisting}
+
+Sets \texttt{ISPIN = 2} and \texttt{MAGMOM = N * value} in every INCAR,
+where $N$ is the atom count from the POSCAR.  Three forms of the
+\texttt{MAGMOM:} line are understood (any of them switches spin polarisation
+on, with or without the words ``collinear magnetization''):
+
+\begin{lstlisting}
+MAGMOM: 4.0              # uniform; negative values keep their sign
+MAGMOM: Fe=4.0, O=0.6    # per element (unlisted elements start at 0)
+MAGMOM: 2*4.0 2*-4.0     # per atom in POSCAR order, n*value shorthand
+\end{lstlisting}
+
+A per-atom list must have exactly $N$ entries; the agent stops with an
+explanatory message rather than silently falling back to a default.
+
+\begin{tipbox}
+Typical starting moments: Fe, Co $\approx$ 4--5~$\mu_{\mathrm{B}}$;
+Ni $\approx$ 2~$\mu_{\mathrm{B}}$; Cr, Mn $\approx$ 3--4~$\mu_{\mathrm{B}}$;
+rare earths $\approx$ 7~$\mu_{\mathrm{B}}$.
+VASP converges the self-consistent value automatically.
+\end{tipbox}
+
+\textbf{Antiferromagnets} --- give the alternating signs directly, e.g.\
+\texttt{MAGMOM: 4.0 -4.0 4.0 -4.0}.
+
+\textbf{With SOC} (\texttt{Methods: SOC with magnetization in x-direction})
+the moments are $3N$ components in the non-collinear \texttt{MAGMOM}; the
+same \texttt{MAGMOM:} values are rotated onto the requested direction
+(without this VASP would start every moment along its default $(1,1,1)$).
+A list of exactly $3N$ numbers is used as the raw $x,y,z$ components.
+
+\textbf{Spin-resolved plots} produced automatically after DOS/bands run:
+
+\begin{itemize}
+  \item \emph{Cumulative DOS} --- spin-up above the x-axis; spin-down
+        mirrored below zero; elements colour-coded; solid = $\uparrow$,
+        dashed = $\downarrow$.
+  \item \emph{Band structure} --- spin-up in blue, spin-down in red
+        dashed, same k-axis, $E_F = 0$.
+  \item \emph{Projected DOS} --- sumo natively negates the spin-down
+        channel in the orbital-resolved PDF.
+\end{itemize}
+
+Check the converged moment:
+\begin{lstlisting}[language=bash]
+grep "magnetization (x)" OUTCAR | tail -5
+\end{lstlisting}
+
+\subsection{GGA+U}
+\label{sec:ggau}
+
+\begin{lstlisting}
+Methods: GGA+U with U=4.0 on Fe-d orbitals
+         GGA+U with U=3.0 on Ni-d orbitals
+         GGA+U with U=6.0 on Ce-f orbitals
+\end{lstlisting}
+
+Dudarev scheme (LDAUTYPE=2); $U_{\mathrm{eff}} = U - J$ with $J = 0$ set
+automatically.  In the Dudarev formalism the parameter labelled $U$ is already
+$U_{\mathrm{eff}}$, so no separate $J$ entry is needed.
+Combine freely with \texttt{collinear magnetization}.
+
+Default values come from \texttt{hubbard\_u\_defaults.csv} (repo root:
+element, orbital, $U_{\mathrm{eff}} = U - J$, \ldots; 3d, 4d, 5d, 4f, 5f
+elements) --- the only source of default values (there are no built-in
+ones).  Dudarev's scheme uses $U_{\mathrm{eff}}$ only, so the INCAR gets
+\texttt{LDAUU} $= U_{\mathrm{eff}}$ and \texttt{LDAUJ} $= 0$ (a J column in
+the file is ignored); rows with $U_{\mathrm{eff}} = 0$ (Zn, Cd) get no
+correction.  These values were fitted
+for oxides, chalcogenides and halides, so their use is set by one optional flag in
+\texttt{instructions.txt}:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Flag & Effect \\ \midrule
+(none) & \textbf{default}: GGA+U on the tabulated d/f elements only if the
+  POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I);
+  otherwise $U = 0$. \\
+\texttt{GGA\_U: ON} & tabulated $U_{\mathrm{eff}}$ on every tabulated element,
+  whatever the compound. \\
+\texttt{GGA\_U: OFF} & no U (also \texttt{no GGA+U}). \\
+\texttt{GGA\_U: AUTO} & same as no flag. \\
+\texttt{GGA+U with U=\ldots\ on El-orb} & explicit values; always win. \\
+\bottomrule
+\end{tabularx}
+
+The key may also be written \texttt{GGA-U}, \texttt{GGA+U} or \texttt{GGAU},
+and key and value are case-insensitive (\texttt{gga+u: on}); likewise the
+command-line option of the high-throughput drivers accepts
+\texttt{-{}-gga\_u}, \texttt{-{}-gga-u}, \texttt{-{}-gga+u} (or upper case)
+with \texttt{auto}, \texttt{on}, \texttt{off} in any case.
+
+The same U block is written to every step (relax, SCF, bands, DOS, LOBSTER,
+\ldots), so all steps share one Hamiltonian.  Never automatic under
+R2SCAN/HSE06.  All three routes honour the flag: the GUI (Setup,
+\emph{Default Hubbard U}: auto / on / off), \texttt{vasp-agent.py} and
+\texttt{vasp-agent-slurm.py}; the high-throughput drivers write it with
+\texttt{-{}-gga\_u auto|on|off}.
+
+% ============================================================
+\section{Choosing the k-point mesh}
+\label{sec:kmesh}
+% ============================================================
+
+All Gamma-centred meshes are generated automatically from the POSCAR geometry.
+Two density tiers are available via the \texttt{KMESH\_DENSITY} key
+(Section~\ref{sec:keywords}):
+
+\begin{tabularx}{\linewidth}{@{}lllX@{}}
+\thead
+Tier & kpra & Typical use & Notes \\ \midrule
+\texttt{coarse} & 1000 & Relaxation, convergence tests & Agent k-point sweeps start here \\
+\texttt{fine}   & 5000 & SCF, DOS, spectroscopic steps & Default for all production steps \\
+\bottomrule
+\end{tabularx}
+
+Each axis gets a number of points proportional to its reciprocal-lattice length, so the spacing is the same in all directions; the formula is in Appendix~\ref{app:kmesh}.  The first line of each generated KPOINTS reports the mesh and the density reached.  Any integer may be given instead of \cmd{coarse}/\cmd{fine} (\cmd{KMESH_DENSITY: 3000}); the relaxation has its own density (\cmd{RELAX_KMESH_DENSITY}, default coarse).
+
+\textbf{DOS and LOBSTER meshes}: always $2N_x \times 2N_y \times 2N_z$ (the
+SCF ratios are preserved; a 2-D slab keeps $N_z = 1$), ensuring denser
+sampling for accurate spectral features and smoother COHP/COBI/COOP curves.
+Because the LOBSTER NSCF runs with \texttt{ISYM}=0 there is no symmetry
+reduction, so doubling in 3-D multiplies its k-point count by ${\sim}8$; edit
+\texttt{08\_lobster/KPOINTS} if that is too costly.  The DFPT mesh is forced
+to match the SCF mesh exactly.
+
+An explicit \texttt{KMESH: N1 N2 N3} entry overrides the automatic density
+for all steps, and a \texttt{KPOINTS} block (Section~\ref{sec:kpoints-block})
+overrides everything for the step it names.
+
+% ============================================================
+\section{Setting INCAR and KPOINTS tags yourself}
+\label{sec:incar}
+% ============================================================
+
+\textbf{Any VASP keyword can be specified explicitly} --- nothing is
+hard-wired.  Three routes, in increasing precedence:
+(1)~an \texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in the
+instructions file (global or per-step);
+(2)~the agents' \texttt{--incar} command-line option;
+(3)~direct editing --- in the GUI every generated INCAR is editable per
+step (Workflow tab $\to$ \emph{Edit files}, with an automatic
+\texttt{.bak} backup), and of course the files on disk can be edited
+before running.  This section covers the first two plus
+\textbf{constant-pressure relaxation}.
+
+\subsection{Raw INCAR passthrough}
+\label{sec:incar-raw}
+
+Place literal INCAR lines --- in ordinary VASP syntax --- inside an
+\texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in your
+\texttt{instructions.txt}.  They are merged into the generated INCAR(s):
+
+\begin{lstlisting}
+INCAR:                  # global block -- applies to every step
+   LREAL  = Auto
+   ALGO   = Fast
+   NELMIN = 6
+END_INCAR
+\end{lstlisting}
+
+A tag that the agent already writes is \textbf{overwritten in place}
+(so \texttt{ALGO = Fast} above replaces the default \texttt{ALGO =
+Normal}); any tag the agent does not normally emit is appended under a
+clearly labelled \texttt{\# User INCAR overrides} section, so nothing is
+silently lost.
+
+To target a single step, name it on the header line.  Recognised steps
+are \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
+\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}:
+
+\begin{lstlisting}
+INCAR scf:              # applies only to 02_scf
+   EDIFF = 1E-8
+   SIGMA = 0.10
+END_INCAR
+\end{lstlisting}
+
+\begin{notebox}
+Precedence: a \emph{per-step} block beats the \emph{global} block, and
+both beat the agent's generated defaults.  This is the recommended way to
+set tags the parser has no dedicated keyword for (e.g.\ \texttt{LMAXMIX},
+\texttt{ADDGRID}, \texttt{LVTOT}, \texttt{IVDW}, \texttt{AMIX}).
+Full-line \texttt{\#} comments in the instructions file are ignored by
+the parser, so a task keyword inside a comment does not enable that task.
+\end{notebox}
+
+\subsection{Explicit KPOINTS blocks}
+\label{sec:kpoints-block}
+
+The same block syntax writes a complete KPOINTS file, \emph{unchanged}, for
+a step:
+
+\begin{lstlisting}
+KPOINTS scf:            # or KPOINTS_SCF:
+   my SCF mesh          # first line = KPOINTS comment
+   0
+   Gamma
+   9 9 5
+   0 0 0
+END_KPOINTS
+\end{lstlisting}
+
+Steps: \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
+\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}; an
+unnamed \texttt{KPOINTS:} block applies to every step except the band path.
+Explicit blocks (INCAR and KPOINTS alike) \textbf{override every other
+setting}: keywords, \texttt{KMESH}, the density tier and the automatic
+\texttt{KPAR}/\texttt{NCORE}.  Steps derived from the SCF mesh --- DOS and
+LOBSTER ($2\times$), DFPT and Wannier90 ($1\times$) --- follow an explicit
+SCF block.  A marker file \texttt{.explicit\_kpoints} is left beside such a
+KPOINTS so that the convergence phase-2 k-mesh patching never overwrites
+it.  \texttt{KPAR} and \texttt{NCORE} written in an INCAR block also steer the
+companion value (e.g.\ \texttt{KPAR = 2} on 16 ranks gives \texttt{NCORE = 2}).
+In the GUI both block kinds are entered under
+\emph{Setup $\to$ Advanced --- explicit INCAR / KPOINTS}.
+
+\subsection{Command-line INCAR overrides (\texttt{--incar})}
+\label{sec:incar-cli}
+
+Both \texttt{vasp-agent.py} and \texttt{vasp-agent-slurm.py} accept a
+repeatable \texttt{--incar} option that injects explicit VASP tags at
+invocation time, without touching the instructions file:
+
+\begin{lstlisting}[language=bash]
+./vasp-agent.py -i instructions.txt -s POSCAR \
+    --incar "ALGO=Fast; NELMIN=6" \      # every step
+    --incar "scf:NBANDS=64"              # 02_scf only
+\end{lstlisting}
+
+Multiple tags in one option are separated by \texttt{;} (not commas ---
+values such as \texttt{MAGMOM} may contain commas).  An optional step
+prefix (\texttt{relax}/\texttt{scf}/\texttt{bands}/\texttt{dos}/%
+\texttt{wannier}/\texttt{dfpt}/\texttt{phonons}/\texttt{lobster})
+targets a single step.  Command-line tags are applied \emph{after} the
+instructions-file blocks, so they win on conflicts.
+
+\begin{notebox}
+Exceptions: physics-critical guards are re-imposed regardless of
+overrides --- \texttt{ISYM=2} and \texttt{KPAR=NCORE=1} in
+\texttt{06\_dfpt}, and the symmetry-off \texttt{ISYM} in
+\texttt{08\_lobster}.
+\end{notebox}
+
+\subsection{Constant-pressure relaxation}
+\label{sec:pressure}
+
+A single \texttt{PRESSURE} line turns the relaxation into a
+constant-pressure optimisation: the agent forces \texttt{ISIF = 3} (cell
+shape + volume + ions) and \texttt{IBRION = 2}, and imposes the target
+pressure through \texttt{PSTRESS}.
+
+\begin{lstlisting}
+PRESSURE: 10 GPa        # also accepted: "5 kbar", "constant pressure 8"
+\end{lstlisting}
+
+VASP's \texttt{PSTRESS} tag is in \textbf{kBar} (1~GPa $=$ 10~kBar).  The
+agent converts automatically; if no unit is given, \textbf{GPa is
+assumed}.  The resulting \texttt{01\_relax/INCAR} reads, e.g.:
+
+\begin{lstlisting}
+# Constant-pressure relaxation @ 10 GPa  (PSTRESS = 100 kBar)
+IBRION = 2
+ISIF   = 3
+NSW    = 100
+EDIFFG = -0.01
+PSTRESS = 100   ! external pressure in kBar (10 GPa)
+\end{lstlisting}
+
+\begin{tipbox}
+\texttt{PSTRESS} adds the $PV$ term so the relaxed cell sits at the
+requested external pressure.  Use a tight \texttt{EDIFFG} and a
+well-converged \texttt{ENCUT}; the Pulay stress error grows at high
+pressure, so verify with a higher \texttt{ENCUT} before trusting the
+equilibrium volume.
+\end{tipbox}
+
+How the SCF starts from the relaxation (which files are copied, \cmd{ISTART}/\cmd{ICHARG}) is described in Appendix~\ref{sec:handoff}; which eigensolver each step uses in Appendix~\ref{app:algo}.
+
+% ============================================================
+\section{Band structures, DOS projections and ELF profiles}
+\label{sec:spectra}
+% ============================================================
+
+\subsection{Band-structure k-path}
+\label{sec:kpath}
+
+\subsubsection{Auto-detection (recommended)}
+
+Omit the path in \texttt{instructions.txt} or leave the field blank in
+the GUI:
+
+\begin{lstlisting}
+Tasks: band structure        # no "along ..." -> auto-detect from POSCAR
+\end{lstlisting}
+
+The path is the standard Setyawan--Curtarolo path of the actual space group (found with spglib), or a geometric guess when spglib is missing; details and the table of default paths are in Appendix~\ref{app:kpath}.
+
+\begin{notebox}
+For \textbf{conventional} FCC or BCC cells (right angles, 4 or 2 atoms),
+auto-detection returns the cubic (cP) path.
+Use the \textbf{primitive} cell for an unfolded FCC/BCC band structure ---
+the primitive FCC cell has angles $\approx 60^\circ$ and is recognised
+automatically.
+\end{notebox}
+
+The detection route appears in the KPOINTS comment:
+\begin{lstlisting}
+Line-mode KPOINTS  [spglib ... -- auto-detected]   # spglib route
+Line-mode KPOINTS  [FCC -- auto-detected]          # geometric fallback
+\end{lstlisting}
+\subsubsection{Manual override}
+
+\begin{lstlisting}
+Tasks: band structure along G-X-W-K-G-L
+\end{lstlisting}
+
+\begin{tabularx}{\linewidth}{@{}lllX@{}}
+\thead
+Label & Coords & Use & \\ \midrule
+G & (0, 0, 0) & all & $\Gamma$ \\
+M & (0.5, 0.5, 0) & cubic, tet & (0.5, 0, 0) in hexagonal \\
+K & (1/3, 1/3, 0) & hexagonal & \\
+R & (0.5, 0.5, 0.5) & cubic & \\
+Z & (0, 0, 0.5) & general & \\
+A & (0, 0, 0.5) & hex, tet & \\
+L & (0.5, 0, 0.5) & hexagonal & \\
+H & (1/3, 1/3, 0.5) & hexagonal & \\
+S & (0.5, 0.5, 0) & orthorhombic & \\
+W & (0.5, 0.25, 0.75) & \textbf{FCC primitive} & \\
+P & (0.25, 0.25, 0.25) & \textbf{BCC primitive} & \\
+N & (0, 0, 0.5) & \textbf{BCC primitive} & \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Projected DOS}
+
+All of the following forms are accepted:
+
+\begin{lstlisting}
+DOS (projected on Mo-d and S-p)
+DOS with projections on Ni:d and Ni:s
+DOS with projection on Fe-d and O-p
+\end{lstlisting}
+
+Orbital channels: \texttt{s}, \texttt{p}, \texttt{d}, \texttt{f}.
+Separator is either \texttt{-} or \texttt{:}.
+Sumo generates an orbital-resolved PDF in \texttt{analysis/}.
+
+\subsection{ELF bond profiles}
+
+If an SCF calculation writes an \texttt{ELFCAR} (electron localization
+function, requested with \texttt{LELF = .TRUE.} --- the high-throughput
+driver sets this automatically), the utility \texttt{elf\_bonds.py} plots ELF
+along each non-equivalent nearest-neighbour bond, sampled from one atom centre
+to the other:
+
+\begin{lstlisting}[language=bash]
+./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]
+\end{lstlisting}
+
+It parses the \texttt{ELFCAR} grid directly (only numpy + matplotlib), groups
+bonds by element pair and length (rounded to 0.01~\AA{}) to pick the
+non-equivalent ones, and interpolates ELF along each bond with periodic
+boundary conditions.  Output is \texttt{FORMULA\_elf\_bonds.png/pdf} (the prefix
+defaults to the reduced formula, e.g.\ \texttt{MoSe2\_elf\_bonds.pdf}; override
+with \texttt{--out}) showing ELF vs.\ distance along the bond, with the
+ELF~$=0.5$ homogeneous-electron-gas reference marked.  \texttt{analyze.sh}
+runs it automatically when \texttt{02\_scf/ELFCAR} is present, and the GUI
+Results tab shows the same plot whenever the SCF wrote an \texttt{ELFCAR}.
+
+\begin{tipbox}
+Reading the profile: ELF is high (near~1) where electrons are paired and
+localized.  A covalent bond therefore shows an ELF \emph{maximum} in the
+bonding region \emph{between} the atoms (e.g.\ Si--Si $\approx 0.95$ at
+mid-bond), not at the nuclei.  Because VASP builds the \texttt{ELFCAR} from the
+pseudo (valence) density, the value \emph{at} an atom centre is a PAW artifact
+--- often low, even $\approx 0$ for heavy atoms --- so read the bonding region,
+not the endpoints.
+\end{tipbox}
+
+\begin{notebox}
+VASP does \emph{not} compute ELF for non-collinear / spin-orbit runs
+(\texttt{LSORBIT}/\texttt{LNONCOLLINEAR}); it prints
+\texttt{"WARNING: ELF not implemented for non collinear case"} and writes an
+all-zero \texttt{ELFCAR}.  \texttt{elf\_bonds.py} detects this and reports it
+rather than producing a blank plot --- re-run the SCF \emph{without} SOC to get
+ELF.
+\end{notebox}
+
+\paragraph{ELF without slowing down the SCF.}  \texttt{LELF} needs KPAR${}={}$1.  With \cmd{ELF: separate} (or \cmd{ELF: two-step}) in \cmd{instructions.txt} the SCF runs at full KPAR and a short KPAR${}={}$1 restart in \cmd{02_scf/elf/} writes the ELFCAR (Appendix~\ref{sec:elf-separate}); \cmd{ht-mp-scf.py} does this by default.
+
+% ============================================================
+\section{Convergence tests for ENCUT and k-points}
+\label{sec:conv}
+% ============================================================
+
+\begin{lstlisting}
+# Range (auto-steps)
+Convergence: Test k-points from 6x6x1 to 18x18x1    # 2D material
+             Test k-points from 6x6x6 to 12x12x12   # 3D material
+             ENCUT 400-600 eV
+
+# Explicit mesh list
+Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9
+
+# ENCUT: all of these are equivalent (step defaults to 50 eV)
+Test ENCUT 350-650      Test ENCUT 350 650     Test ENCUT 350 to 650
+Test ENCUT 350,650      Test ENCUT 350:50:650  # start:step:stop
+\end{lstlisting}
+
+The \texttt{start:step:stop} form is the only one that sets the step; the
+others sweep in 50~eV increments.  A convergence line that cannot be parsed
+now emits a \texttt{[warn]} on stderr rather than silently generating no
+tests at all.
+
+Convergence INCARs are trimmed to what the test actually reads --- the total
+energy in \texttt{OUTCAR}.  \texttt{LWAVE}, \texttt{LCHARG}, \texttt{LORBIT}
+and \texttt{LELF} are dropped, which avoids writing a full WAVECAR per point
+and, because \texttt{LELF} pins KPAR to 1, restores k-point parallelism for
+the sweep.
+
+Results in \texttt{00\_convergence/kpoints/} and
+\texttt{00\_convergence/encut/}.
+
+\begin{lstlisting}[language=bash]
+./run_convergence.sh          # workstation
+./submit_convergence.sh       # SLURM
+./analyze_convergence.sh      # plots: energy / pressure / forces
+\end{lstlisting}
+
+After the runs the smallest ENCUT and k-mesh that meet the force and stress criteria are written to \cmd{00_convergence/converged_params.txt} and offered as defaults for phase~2 (Appendix~\ref{app:conv}).
+
+% ============================================================
+\section{Cores, nodes, KPAR/NCORE and walltimes}
+\label{sec:resources}
+% ============================================================
+
+\subsection{KPAR and NCORE}
+
+KPAR and NCORE are set automatically per step from the number of MPI ranks and the step's k-points (rule in Appendix~\ref{app:kpar}).  To set them yourself:
+
+\begin{lstlisting}
+MPI: 128        KPAR: 4        NCORE: 8
+
+# Per-step (take priority over globals)
+SCF_KPAR: 4     BANDS_KPAR: 1     DOS_KPAR: 8
+SCF_NCORE: 8    BANDS_NCORE: 16   DOS_NCORE: 8
+RELAX_KPAR: 2   PHONONS_KPAR: 1   # DFPT is always KPAR=1, NCORE=1
+\end{lstlisting}
+
+\subsection{Cluster defaults: \texttt{profiles/slurm.json}}
+
+\begin{lstlisting}
+{
+  "vasp_std": "vasp_std",  "vasp_ncl": "vasp_ncl",
+  "mpi_cmd":  "srun",
+  "modules":  ["intel/2021", "impi/2021", "vasp/6.3.2"],
+  "slurm": {
+    "partition":       "standard",
+    "nodes":           2,
+    "ntasks_per_node": 64,
+    "time":            "12:00:00",
+    "account":         "mygroup"
+  }
+}
+\end{lstlisting}
+
+\subsection{Per-project resources (in \texttt{instructions.txt})}
+
+\begin{lstlisting}
+NODES: 4     NTASKS_PER_NODE: 32     PARTITION: gpu     ACCOUNT: myallocation
+RELAX_WALLTIME: 12:00:00      # one step
+WALLTIME: 48:00:00            # every step (instead of the per-step defaults)
+\end{lstlisting}
+
+\subsection{Walltime per step}
+\label{sec:slurm-time}
+
+Each step is its own SLURM job with its own time limit, so short steps get
+short limits (and better queue priority).  Defaults:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Step & Walltime \\ \midrule
+\texttt{01\_relax} & 08:00:00 \\
+\texttt{02\_scf} & 04:00:00 \\
+\texttt{03\_bands}, \texttt{04\_dos} & 02:00:00 \\
+\texttt{08\_lobster} & 04:00:00 (symmetry-off NSCF over the full mesh, plus the
+  LOBSTER projection) \\
+others & the profile time \\
+\bottomrule
+\end{tabularx}
+
+Priority: \texttt{<STEP>\_WALLTIME} $>$ \texttt{WALLTIME} $>$ these defaults
+$>$ \texttt{profiles/slurm.json}.  In \texttt{ht-semimetals.py} directories
+the same defaults sit in \texttt{env.sh} (\texttt{TIME\_RELAX} \ldots;
+\texttt{retune.sh -{}-time-relax \ldots}); that is the only place to change
+them --- the per-material \texttt{instructions.txt} carry no walltime.
+
+A step that reaches its limit is stopped cleanly 15~minutes before and continued automatically in a requeued job (Appendix~\ref{sec:slurm-continue}).
+
+% ============================================================
+\section{Wannier90, DFPT, phonons and LOBSTER}
+\label{sec:extras}
+% ============================================================
+
+\subsection{Wannier90}
+\label{sec:wannier}
+
+\begin{lstlisting}
+Tasks: Wannier90 wannierization
+
+WANNIER_NUM_WANN: 8
+WANNIER_PROJ: Ga:s;As:p
+WANNIER_EWIN: -5.0 to 15.0
+\end{lstlisting}
+
+The agent generates \texttt{05\_wannier/wannier90.win} with the NSCF
+k-mesh and projection block.  After the NSCF run, execute
+\texttt{wannier90.x} from the \texttt{05\_wannier/} directory.
+
+\subsection{Born charges, dielectric and piezoelectric tensors (DFPT)}
+\label{sec:dfpt}
+
+The \texttt{DFPT} task creates \texttt{06\_dfpt}, which computes Born
+effective charges $Z^{*}$, the macroscopic dielectric tensor, and the
+piezoelectric stress tensor from the converged SCF charge density.
+
+Two routes are generated automatically depending on the method:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Method & Route \\ \midrule
+PBE, PBEsol, LDA, AM05 (no SOC) &
+  Linear response: \texttt{IBRION=8}, \texttt{LEPSILON=.TRUE.} \\
+SOC, HSE06, or R2SCAN &
+  Finite field (PEAD): \texttt{IBRION=6}, \texttt{LCALCEPS=.TRUE.}
+  --- VASP's DFPT is not implemented for noncollinear magnetism,
+  hybrids, or meta-GGAs.  Requires an insulating system. \\
+\bottomrule
+\end{tabularx}
+
+KPAR, NCORE and ISYM are fixed for this step (Appendix~\ref{app:dfpt}).
+
+\texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
+writes:
+
+\begin{itemize}
+  \item \texttt{BORN} --- phonopy NAC format: electronic
+        $\varepsilon_{\infty}$ + $Z^{*}$ per atom.
+  \item \texttt{born\_charges.txt} --- human-readable summary shown in
+        the GUI Results tab: electronic (ion-clamped)
+        $\varepsilon_{\infty}$, ionic contribution, total static
+        $\varepsilon_{0}=\varepsilon_{\infty}+\varepsilon_{\mathrm{ion}}$;
+        $Z^{*}$ tensors labelled by element; an acoustic-sum-rule check
+        ($\sum_{\mathrm{ions}} Z^{*}$ should vanish --- a large residual
+        indicates an under-converged k-mesh or EDIFF); and the
+        piezoelectric stress tensors $e$ (C/m$^2$, clamped-ion, ionic,
+        and relaxed-ion total; meaningful only for non-centrosymmetric
+        crystals).
+\end{itemize}
+
+\texttt{DFPT\_EDIFF} in \texttt{instructions.txt} tightens the
+electronic convergence (default \texttt{1E-8}).
+
+\subsubsection{Example}
+
+\begin{lstlisting}
+Project: GaAs
+Methods: PBE functional
+Tasks: relaxation, SCF, DFPT Born charges and dielectric
+DFPT_EDIFF: 1E-8
+MPI: 16
+\end{lstlisting}
+
+In the GUI, tick \textbf{Born Charges \& Dielectric Constant (DFPT)} on
+the Setup tab (the DFPT EDIFF field is optional); after running
+\texttt{06\_dfpt} from the Workflow tab, the full summary appears in
+the \textbf{Born charges} panel of the Results tab.  With SOC, HSE06
+or R2SCAN selected under Methods, the finite-field INCAR is generated
+automatically --- no extra input is needed.  For LO-TO splitting in
+phonon spectra, combine with the phonon task as in the GaAs worked
+example (Section~\ref{sec:example-gaas-nac}).
+
+\subsection{Phonons (phonopy)}
+
+\begin{lstlisting}
+Tasks: phonons lattice dynamics
+
+PHONONS_DIM: 2 2 2
+PHONONS_MESH: 20 20 20
+PHONONS_DISP: 0.01
+PHONONS_BAND: G M K G A
+PHONONS_NAC: FALSE      # disable non-analytic correction
+\end{lstlisting}
+
+\begin{notebox}
+For the non-analytic correction (important for polar materials), include
+\texttt{DFPT} in your task list so Born effective charges are computed.
+\end{notebox}
+
+\subsection{LOBSTER bonding analysis (COHP / COBI / COOP)}
+\label{sec:lobster}
+
+Adding \texttt{LOBSTER COHP/COBI analysis} (keywords: \texttt{lobster},
+\texttt{cohp}, \texttt{cobi}, \texttt{coop}, \texttt{bonding}) to the
+task list creates \texttt{08\_lobster}: a symmetry-off NSCF that reads
+\texttt{02\_scf/CHGCAR}, followed by a run of the \texttt{lobster}
+binary.
+
+\begin{itemize}
+  \item \textbf{ISYM=0 is required} --- a symmetrised k-mesh gives
+        unusable COHP/ICOHP values (wrong sign, errors above 100\%).
+        The generated INCAR sets it automatically.
+        With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
+        coupling breaks time-reversal symmetry, which ISYM=0 would still
+        assume.
+  \item \texttt{NBANDS} is auto-set to at least the LOBSTER
+        basis-function count; \texttt{LMAXMIX} is chosen from the
+        elements (6 for $f$, 4 for $d$, 2 for $sp$).
+  \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
+        \texttt{site.env} (default \texttt{lobster-5.1.0-OSX}); it can
+        be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
+\end{itemize}
+
+\begin{lstlisting}
+Project: NaCl
+Methods: PBE functional
+Tasks: SCF, LOBSTER COHP/COBI analysis
+MPI: 16
+\end{lstlisting}
+
+Run with \texttt{./vasp-agent.py} (builds and runs \texttt{02\_scf} +
+\texttt{08\_lobster}); the GUI shows COHP/COBI/COOP plots on the
+Results tab.  To aggregate averaged COHP/COBI over many projects into
+\texttt{lobster\_acohp\_acobi.csv}, run
+\texttt{python3 lobster\_postprocess.py}.
+
+Why the LOBSTER projected DOS and the VASP DOS differ is explained in Appendix~\ref{app:lobster-dos}.
+
+% ============================================================
+\section{Worked examples}
+\label{sec:examples}
+% ============================================================
+
+\subsection{MoS\textsubscript{2} monolayer with SOC}
+
+\begin{lstlisting}
+Project: MoS2 monolayer
+
+Methods: PBEsol functional
+         SOC with magnetization in z-direction
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Mo-d and S-p)
+
+Convergence: Test k-points 8x8 to 20x20
+             ENCUT 400-600 eV
+
+MPI: 64
+\end{lstlisting}
+
+The generator detects hexagonal (hP) and uses G-M-K-G-A-L-H-A.
+
+\subsection{Nickel: magnetism + GGA+U}
+
+\begin{lstlisting}
+Project: Nickel GGA+U
+
+Methods: PBEsol functional
+         collinear magnetization
+         GGA+U with U=4.0 on Ni-d orbitals
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Ni-d and Ni-s)
+
+MAGMOM: 2.0
+MPI: 128
+NODES: 2
+NTASKS_PER_NODE: 64
+WALLTIME: 08:00:00
+\end{lstlisting}
+
+With a primitive FCC POSCAR (angles $\approx 60^\circ$) the generator
+detects cF and uses G-X-W-K-G-L-U-W.  Band and DOS plots show both spin
+channels.
+
+\subsection{GaAs: phonons with NAC}
+\label{sec:example-gaas-nac}
+
+\begin{lstlisting}
+Project: GaAs phonons
+
+Methods: PBEsol functional
+
+Tasks: SCF calculation
+       DFPT Born charges and dielectric
+       phonons lattice dynamics
+
+PHONONS_DIM: 4 4 4
+PHONONS_MESH: 20 20 20
+PHONONS_BAND: G X W L G K
+
+MPI: 64     WALLTIME: 24:00:00
+\end{lstlisting}
+
+\subsection{High-pressure relaxation with custom INCAR tags}
+\label{sec:ex-pressure}
+
+A constant-pressure cell relaxation at 10~GPa, combined with raw INCAR
+passthrough to tighten convergence and add tags the parser has no
+dedicated keyword for:
+
+\begin{lstlisting}
+Project: Silicon 10GPa
+
+Methods: PBEsol functional
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+
+PRESSURE: 10 GPa          # constant-P relax -> ISIF=3, IBRION=2, PSTRESS=100
+
+# Tags applied to every step
+INCAR:
+   LREAL  = .FALSE.
+   ADDGRID = .TRUE.
+   LMAXMIX = 4
+END_INCAR
+
+# Tighter electronic convergence for the relaxation only
+INCAR relax:
+   EDIFF  = 1E-8
+   EDIFFG = -0.005
+END_INCAR
+
+ENCUT: 600
+MPI: 64
+\end{lstlisting}
+
+The \texttt{01\_relax/INCAR} is generated with \texttt{ISIF=3},
+\texttt{PSTRESS=100}, the global tags appended, and \texttt{EDIFF}/%
+\texttt{EDIFFG} overridden to the per-step values; \texttt{02\_scf} and
+\texttt{03\_bands} receive only the global block.
+
+\subsection{Bi\textsubscript{2}Se\textsubscript{3}: topological insulator}
+
+\begin{lstlisting}
+Project: Bi2Se3 topological
+
+Methods: PBEsol functional
+         SOC with magnetization in z-direction
+
+Tasks: structure relaxation
+       SCF calculation
+       band structure
+       DOS (projected on Bi-p and Se-p)
+       Wannier90 wannierization
+
+Convergence: Test k-points from 8x8x4 to 16x16x8
+             ENCUT 400-600 eV
+
+WANNIER_NUM_WANN: 18
+WANNIER_PROJ: Bi:p;Se:p
+WANNIER_EWIN: -2.0 to 2.0
+MPI: 128
+\end{lstlisting}
+
+% ============================================================
+\part{High-throughput screens}
+% ============================================================
+
+% ============================================================
+\section{Running a high-throughput screen step by step}
 \label{sec:highthroughput}
 % ============================================================
 
@@ -664,6 +1619,912 @@ grep "Elapsed time" */0*/OUTCAR               # ht-mp-scf
 unpack \texttt{screen\_results.tar.gz} on your computer (or run the GUI on
 the cluster with \texttt{ssh -L 5001:localhost:5001}) and use
 \textbf{Open results folder}; missing plots are drawn there.
+
+All options of the two drivers are listed in Appendix~\ref{app:ht}.  When the jobs have finished, check and repair the runs as described in Part~\ref{part:check}.
+
+% ============================================================
+\section{Scripts inside a high-throughput directory}
+\label{sec:ht-scripts}
+% ============================================================
+
+A directory made by \cmd{ht-semimetals.py} contains these scripts; run them from that directory.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
+\thead
+Script (in the directory) & Purpose \\ \midrule
+\texttt{env.sh} & The one file to edit on the cluster: modules,
+  \texttt{VASP\_STD}, \texttt{LOBSTER\_BIN}, \texttt{VASP\_POTCAR\_DIR},
+  \texttt{ANALYSIS\_PYTHON}, step walltimes \texttt{TIME\_*},
+  \texttt{VF\_MAX\_RESTARTS}, disk policy. \\
+\texttt{submit\_all.sh [N]} & Build missing POTCARs, submit each material's
+  unfinished steps as a chain (at most \texttt{MAX\_QUEUED}=200 jobs queued);
+  skips finished/queued materials, so it is also the resume command. \\
+\texttt{status.sh} & Per-step completion counts; writes \texttt{incomplete.txt}. \\
+\texttt{retune.sh} & Change the step walltimes in \texttt{env.sh}
+  (\texttt{-{}-time-relax}, \texttt{-{}-time-scf}, \texttt{-{}-time-bands},
+  \texttt{-{}-time-lobster}, or \texttt{-{}-time} for all) or
+  partition/account in every job script. \\
+\texttt{make\_potcars.sh} & Build and verify the POTCARs (run automatically). \\
+\texttt{analyze\_all.sh [id]} & Redo the plots (each job already runs \texttt{analyze.sh}). \\
+\texttt{postprocess\_all.sh} & Per-material and combined LOBSTER bond tables. \\
+\texttt{collect\_results.sh} & Small \texttt{screen\_results.tar.gz} with the
+  per-step layout (trimmed OUTCARs; \texttt{FULL\_OUTCAR=1} for full). \\
+\bottomrule
+\end{tabularx}
+
+% ============================================================
+\part{Checking and repairing runs}
+\label{part:check}
+% ============================================================
+
+% ============================================================
+\section{Finding and repairing failed runs (\texttt{vasp\_diagnose.py})}
+\label{sec:diagnose}
+% ============================================================
+
+After a batch of VASP-Flow calculations --- one project or a few thousand
+materials --- some runs will not have finished: a job ran out of memory or time,
+an SCF did not converge, a band structure diverged, LOBSTER stopped, a
+convergence test broke off.  \cmd{vasp_diagnose.py} finds these runs, tells you
+why each one failed and writes, for each of them, a shell script that repairs
+the inputs and resubmits exactly what has to be redone.  One more script
+submits all of these repairs.
+
+It checks the steps \cmd{00_convergence}, \cmd{01_relax}, \cmd{02_scf},
+\cmd{03_bands}, \cmd{04_dos}, \cmd{06_dfpt} and \cmd{08_lobster}, for runs made
+with \cmd{vasp-agent.py}, \cmd{vasp-agent-slurm.py} or the high-throughput
+drivers.
+
+\begin{tipbox}
+Running \cmd{vasp_diagnose.py} never changes or submits anything.  It only
+writes a report and scripts.  Your runs are touched only when you run those
+scripts.
+\end{tipbox}
+
+\subsection{Quick start}
+On the cluster, in your VASP-Flow folder, give it the list file you made the
+runs from:
+
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow
+python3 vasp_diagnose.py my_list.txt --out diag_round1   # 1. diagnose (read-only)
+bash ht_tools/show_problems.sh diag_round1               # 2. what failed, what will change
+nohup bash diag_round1/submit_all_fixes.sh > fixes1.log 2>&1 &   # 3. resubmit
+\end{lstlisting}
+
+That is all.  \cmd{my_list.txt} stands for your own list, e.g.\
+\cmd{semimetals_list.txt}: the file of material names that the runs were created
+from, one per line.  A name is whatever the material's folder is called ---
+a Materials Project ID (\cmd{mp-149}), a formula (\cmd{GaAs}), \cmd{GaAs_PBE}, \dots  The script finds each material's folder
+by itself.  When the resubmitted jobs have finished, run step~1 again to check
+that everything is now fine.
+
+\begin{notebox}
+Run it when your jobs have left the queue.  Materials that still have jobs
+queued or running are skipped (shown as \cmd{queued}).
+\end{notebox}
+
+\subsection{A worked example}
+Without \opt{out}, the output folder is named \cmd{vasp_diagnose_<date>_<time>}, as in this example.
+
+Say you created 300 materials with a high-throughput driver from
+\cmd{~/VASP-Flow/semimetals_list.txt}, into the run folder
+\cmd{~/VASP-Flow/HT_semimetals/}, and the queue is now empty.
+
+\subsubsection{The list}
+
+The list is the file you already have, for example
+
+\begin{lstlisting}
+# ~/VASP-Flow/semimetals_list.txt
+mp-149
+mp-2534
+mp-20351
+Bi2Se3
+GaAs_PBE
+...
+\end{lstlisting}
+
+Each name is looked up in the folder that holds the list file, so
+\cmd{mp-149} is found as \cmd{~/VASP-Flow/HT_semimetals/materials/mp-149}, and
+\cmd{Bi2Se3} as \cmd{~/VASP-Flow/HT_semimetals/materials/Bi2Se3} or as a project folder
+\cmd{~/VASP-Flow/Bi2Se3}.  Names must match the folder names exactly
+(\cmd{GaAs} does not match \cmd{GaAs_PBE}).  You can also list folder paths, or
+mix names and paths (section~\ref{sec:list}).
+
+\subsubsection{Step 1: diagnose}
+
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow
+python3 vasp_diagnose.py semimetals_list.txt
+\end{lstlisting}
+
+It prints a summary --- how many materials are fine and how many failed for which reason:
+
+\begin{lstlisting}
+Folders checked: 300   (layouts: ht 300)
+  ok              262
+  oom              14
+  scf_nelm          6
+  timeout           5
+  spilling_high     5
+  lobster_fail      4
+  nscf_diverged     2
+  missing           1
+  unknown           1
+Fix scripts: 31 to submit, 1 to review (unknown cause)
+  review: .../vasp_diagnose_20261012_1530/fix/HT_semimetals__mp-20351.sh
+Report : .../vasp_diagnose_20261012_1530/diagnosis.tsv
+Submit : nohup bash .../submit_all_fixes.sh > .../submit_all_fixes.log 2>&1 &
+\end{lstlisting}
+
+Here 262 materials are fine.  31 failed for a known reason and have a fix script
+ready.  One failed for a reason the tool does not recognise; its script is kept
+back for you to look at.  5 finished but have a high LOBSTER charge spilling (reported
+only), and one name of the list has no folder at all (\cmd{missing}).
+Section~\ref{sec:classes} explains each name.
+
+Everything is written into a new folder \cmd{vasp_diagnose_<date>_<time>/}:
+
+\begin{lstlisting}
+vasp_diagnose_20261012_1530/
+  diagnosis.tsv          the report: one line per material
+  fix/<name>.sh          one repair script per failed material
+  submit_all_fixes.sh    runs all the repair scripts
+\end{lstlisting}
+
+\subsubsection{Step 2: look at the result}
+
+\cmd{diagnosis.tsv} has one line per material: the status of every step and what will be done:
+
+\begin{lstlisting}
+label                 ...  steps                                         action
+HT_semimetals__mp-149      relax:ok scf:ok bands:ok lobster:ok           ok
+HT_semimetals__mp-2534     relax:ok scf:oom bands:not_run lobster:not_run oom -> scf>bands>lobster
+HT_semimetals__mp-8062     relax:ok scf:scf_nelm bands:ok lobster:ok     scf_nelm -> scf>bands>lobster
+HT_semimetals__mp-20351    relax:unknown scf:ok ...                      REVIEW unknown -> relax>scf>bands>lobster
+\end{lstlisting}
+
+Read it with \cmd{bash ht_tools/show_problems.sh vasp_diagnose_20261012_1530}, which lists only the problem lines and what each fix changes (Section~\ref{sec:lookup}), or with \cmd{less -S} or a spreadsheet.
+Then open one or two repair scripts to see what they will do, e.g.
+
+\begin{lstlisting}[language=bash]
+less vasp_diagnose_20261012_1530/fix/HT_semimetals__mp-2534.sh
+\end{lstlisting}
+
+The top of each script says what was found, including the error lines from the logs:
+
+\begin{lstlisting}
+# vasp_diagnose fix for HT_semimetals__mp-2534
+# folder : /home/me/VASP-Flow/HT_semimetals/materials/mp-2534   (layout: ht)
+# diagnosed 2026-10-12 15:30:  relax: ok  scf: oom  bands: not_run  lobster: not_run
+#   scf | forrtl: severe (41): insufficient virtual memory
+# resubmits: scf -> bands -> lobster
+\end{lstlisting}
+
+and further down you see the changes and the submission:
+
+\begin{lstlisting}
+set_tag 02_scf/INCAR KPAR 8                 # KPAR was 40
+stash 02_scf                                # old outputs -> stale_<date>/02_scf/
+...
+J_scf=$(sbatch --parsable --job-name=mp-2534_scf --time=00:30:00 --mem=0 job.sbatch scf)
+J_bands=$(sbatch ... --dependency=afterok:$J_scf job.sbatch bands)
+J_lobster=$(sbatch ... --dependency=afterany:$J_bands job.sbatch lobster)
+\end{lstlisting}
+
+You may edit a script before submitting it (another walltime, another KPAR, \dots).
+
+\subsubsection{Step 3: submit}
+
+\begin{lstlisting}[language=bash]
+nohup bash vasp_diagnose_20261012_1530/submit_all_fixes.sh > fixes.log 2>&1 &
+tail -f fixes.log
+\end{lstlisting}
+
+\cmd{fixes.log} shows one block per material:
+
+\begin{lstlisting}
+== HT_semimetals__mp-2534
+  scf: KPAR 40 -> 8 (40 ranks)
+  submitted scf = 4512301 (00:30:00)
+  submitted bands = 4512302 (00:30:00)
+  submitted lobster = 4512303 (03:00:00)
+\end{lstlisting}
+
+\cmd{nohup} lets it keep running after you log out.  It never puts more than 200 of your
+jobs in the queue at once (it waits until there is room).  If it is interrupted, start it again: materials it
+already submitted are skipped.
+
+\subsubsection{Step 4: check again}
+
+When the queue is empty again, diagnose once more, into a new folder:
+
+\begin{lstlisting}[language=bash]
+python3 vasp_diagnose.py semimetals_list.txt --out diagnose_round2
+\end{lstlisting}
+
+The repaired materials now show \cmd{ok}.  The ones that failed again get a new
+diagnosis and a new script.  Repeat until only \cmd{ok} (and cases you accept,
+such as \cmd{spilling_high}) are left.
+
+\subsubsection{Materials held back for review}
+
+Two kinds of scripts are held back: \cmd{unknown} causes, and failures whose usual repair is already
+in the INCAR (shown as \cmd{(fix already in INCAR)} --- running the same repair again would fail
+the same way).  For these, read the error lines at the top of the script.
+Then either repair the run by hand, or let the script run as it is: open
+\cmd{submit_all_fixes.sh}, where these scripts appear at the end as commented-out
+lines, and remove the \texttt{\#}.  To submit all unknown cases without editing, diagnose again with
+\opt{retry-unknown}.
+
+\subsection{Common situations}
+\paragraph{Only some runs, or a single project.}  Make a short list with just
+those material names, or give a folder:
+
+\begin{lstlisting}[language=bash]
+echo GaAs_test > one.txt;  python3 vasp_diagnose.py one.txt
+echo HT_semimetals > run.txt; python3 vasp_diagnose.py run.txt   # all materials of that run
+\end{lstlisting}
+
+\paragraph{Runs moved to another disk (e.g.\ scratch).}  If a run folder holds a
+\cmd{MOVED_TO_SCRATCH.txt} note (written by \cmd{ht_tools/resume_in_scratch.sh}),
+its new place is used automatically.  Otherwise tell the script where to look:
+
+\begin{lstlisting}[language=bash]
+python3 vasp_diagnose.py semimetals_list.txt --root /scratch/$USER/VASP-Flow
+\end{lstlisting}
+
+\paragraph{The same name in two runs.}  If a name is found in more than one run
+folder, all copies are checked and a line \cmd{!! GaAs found in 2 runs} is printed.
+To check only one of them, put its path in the list instead of the name.
+
+\paragraph{Projects with convergence tests.}  For a project made in two phases
+(convergence tests first, then \cmd{submit_calculations.sh} or
+\cmd{run_calculations.sh}), broken ENCUT/k-point tests are repaired and
+resubmitted; the production steps are \emph{not} started for you, since you choose
+their ENCUT and k-mesh from the tests.  Such a project shows
+\cmd{phase2_pending} once the tests are complete.
+
+\paragraph{Local projects (no SLURM).}  Their repair script runs VASP directly, one step after
+the other.  Run that script on a machine where VASP may run (not on a login node):
+\cmd{bash vasp_diagnose_*/fix/projects__GaAs_test.sh}.
+
+\paragraph{Leave a material out.}  \cmd{bash ht_tools/skip_fixes.sh DIAG_DIR NAME ...} comments its line in \cmd{submit_all_fixes.sh} out (\opt{undo} puts it back), e.g.\ for a duplicate that another run replaces.
+
+\paragraph{Fewer jobs in the queue.}
+\cmd{MAX_QUEUED=50 nohup bash .../submit_all_fixes.sh > fixes.log 2>&1 &}
+
+\paragraph{Stop submitting.}  \cmd{pkill -f submit_all_fixes.sh}.  Jobs already
+submitted keep running; cancel them with \cmd{scancel} if needed.
+
+\paragraph{Undo a repair.}  Nothing is deleted.  Cancel the material's jobs,
+move the files from \cmd{<folder>/stale_<date>/<step>/} back into \cmd{<step>/}
+and remove the \cmd{TAG = value} lines added at the end of the INCAR.
+\cmd{01_relax/POSCAR.orig} is the structure before the first restart.
+
+\paragraph{Problems in the log.}  \texttt{awk '/\textasciicircum !!!|\textasciicircum -{}- /' fixes.log} lists failed
+submissions (\cmd{!!!}) and materials skipped because they had jobs in the queue or
+their outputs had changed since the diagnosis (\texttt{-{}-}); for the latter, diagnose again.
+
+How the tool decides what failed and what to redo --- options, the list file, the failure classes and their repairs, the outputs and the limitations --- is in Appendix~\ref{app:diagnose}.
+
+% ============================================================
+\section{Looking up one material or job quickly}
+\label{sec:lookup}
+% ============================================================
+
+Five short scripts in \cmd{ht_tools/} answer the questions that come up while
+checking runs, so that you do not have to remember long \cmd{grep}/\cmd{awk}
+commands.  Run them from \cmd{~/VASP-Flow}.  A material can be given by its
+name (\cmd{mp-20352}, \cmd{GaAs}) --- it is looked up in
+\cmd{/scratch/$USER/VASP-Flow/*/materials/} (and \cmd{~/VASP-Flow/*/materials/},
+skipping runs that were moved to scratch) --- or as a folder path.  A name found
+in two runs is shown for both.  Started without arguments, each script prints how
+to use it.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.37\linewidth}X@{}}
+\thead
+Question & Command \\ \midrule
+Which materials failed, and what will each fix change? &
+  \cmd{bash ht_tools/show_problems.sh diag_round3} (\opt{all}: also the \cmd{spilling_high} ones) \\
+Leave some materials out of the resubmission &
+  \cmd{bash ht_tools/skip_fixes.sh diag_round3 NAME ...} (\opt{undo} puts them back) \\
+How far did each step of a material get? &
+  \cmd{bash ht_tools/show_material_status.sh mp-20352 [relax scf bands dos lobster]} \\
+What did SLURM do with its jobs? &
+  \cmd{bash ht_tools/show_job_history.sh mp-20352 [mp-6430 ...] [-S 2026-10-01]} \\
+What do the job logs say at the end? &
+  \cmd{bash ht_tools/show_job_log.sh mp-20352 lobster [LINES] [JOBID]} \\
+\bottomrule
+\end{tabularx}
+
+\noindent Only \cmd{skip_fixes.sh} changes a file (it comments lines of
+\cmd{submit_all_fixes.sh} in or out); the others only read.
+
+\subsection{A typical checking round}
+
+\begin{lstlisting}[language=bash]
+cd ~/VASP-Flow
+python3 vasp_diagnose.py ht_list.txt --since 2026-10-01 --out diag_round4
+bash ht_tools/show_problems.sh diag_round4               # what failed, what the fixes do
+bash ht_tools/show_material_status.sh mp-20352 lobster   # a closer look at one material
+bash ht_tools/show_job_log.sh mp-20352 lobster           # ... and at its last log
+bash ht_tools/skip_fixes.sh diag_round4 HT_1-500__mp-6430   # do not resubmit this one
+nohup bash diag_round4/submit_all_fixes.sh > fixes4.log 2>&1 &
+\end{lstlisting}
+
+\subsection{\texttt{show\_problems.sh}: what failed and what the fixes will do}
+
+Prints three blocks: every material of \cmd{diagnosis.tsv} that is not
+\cmd{ok} (label, per-step status, planned action); which fix scripts
+\cmd{submit_all_fixes.sh} will \cmd{RUN} and which are \cmd{skipped}; and, per fix
+script, the changes it makes (e.g.\ \cmd{lobster: nscf_diverged -> ALGO = Fast},
+\cmd{scf: walltime 01:00:00}).  Check this before every submission.
+
+\subsection{\texttt{skip\_fixes.sh}: leave materials out}
+
+\begin{lstlisting}[language=bash]
+bash ht_tools/skip_fixes.sh diag_round4 HT_1-500__mp-6430 HT_1-500__mp-7889
+bash ht_tools/skip_fixes.sh diag_round4 --undo HT_1-500__mp-6430
+\end{lstlisting}
+Each name is matched as part of the fix script's name, so \cmd{mp-6430} skips the
+material in every run.  It prints the new \cmd{RUN}/\cmd{skipped} list.  Typical
+uses: a duplicate of a material that another run replaces, or a material whose
+result you accept as it is (e.g.\ a relaxation that stops just short of EDIFFG with
+tiny forces).
+
+\subsection{\texttt{show\_material\_status.sh}: how far each step got}
+
+For every step folder of the material (or only the steps named):
+\begin{itemize}
+  \item a header: \cmd{finished} or \cmd{not finished}, and \textbf{how long VASP
+        ran} --- the \cmd{Elapsed time} of a finished OUTCAR, or, for an unfinished
+        one, the time from VASP's start to the last write of OUTCAR.  This is the
+        real running time, not the walltime limit of the job;
+  \item the INCAR tags that matter for failures (ALGO, KPAR, NCORE, NBANDS, NELM,
+        NSW, EDIFF, EDIFFG, ISYM, ICHARG, ISTART, LDAU);
+  \item \textbf{every ionic step} of OSZICAR with the last 5 electronic steps before it;
+  \item for the relaxation: converged or not, the last max force and pressure;
+  \item when VASP did not finish: when OUTCAR was last written and its last 10 lines,
+        which show where VASP stopped (also when it never got to an electronic step).
+\end{itemize}
+
+\begin{lstlisting}
+== 01_relax (finished, ran 02:13:26)
+   ALGO = Normal
+   NSW = 100
+   EDIFFG = -0.01
+   ...
+   DAV:   6    -0.310074960321E+02   -0.42113E-05   ...
+   DAV:   7    -0.310074982731E+02   -0.15960E-05   ...
+   DAV:   8    -0.310074981222E+02    0.15085E-06   ...
+    100 F= -.31007498E+02 E0= -.31007498E+02  d E =0.675983E-02   (8 electronic steps)
+   relax NOT converged
+   FORCES: max atom, RMS     0.032426    0.027855
+   external pressure =       -0.12 kB  Pullay stress =        0.00 kB
+\end{lstlisting}
+
+\paragraph{Reading OSZICAR.}  Lines starting with \cmd{DAV:} (Davidson),
+\cmd{RMM:} (RMM-DIIS) or \cmd{CG:} are \emph{electronic} steps: step number, total
+energy, its change dE, the change of the band energies, the number of
+$H\psi$ evaluations and the density residual.  A line \cmd{N F= ... E0= ... d E = ...}
+closes \emph{ionic} step $N$ (one relaxation or MD step): \cmd{F} is the free
+energy, \cmd{E0} the energy extrapolated to zero smearing, \cmd{d E} the change from
+the previous ionic step (an MD run adds \cmd{T=} and \cmd{EK=}).  An SCF, bands, DOS
+or LOBSTER run has one ionic line at the end.  The status prints the number of
+electronic steps of each ionic step; if the run stopped in the middle of one it says
+\cmd{... ionic step N still running}.
+
+\subsection{\texttt{show\_job\_history.sh} and \texttt{show\_job\_log.sh}: what SLURM and the logs say}
+
+\cmd{show_job_history.sh} lists, for every job whose name contains one of the
+patterns, SLURM's record since \cmd{-S} (default: 3 days ago): job id, name, state
+(\cmd{COMPLETED}, \cmd{TIMEOUT}, \cmd{FAILED}, \cmd{OUT_OF_MEMORY}, \cmd{CANCELLED}),
+elapsed time, time limit, exit code and end time --- and which of these jobs are in the
+queue now.  It shows at a glance whether a step ran out of time, crashed after a minute
+(an input or memory problem) or was cancelled.
+
+\cmd{show_job_log.sh} prints the last lines (default 15) of the newest \cmd{.out}
+and \cmd{.err} log of one step, or of the job id given.  VASP's own error message is
+usually in \cmd{.out}, the crash trace of MPI in \cmd{.err}.
+
+% ============================================================
+\section{Testing a fix on one material first}
+\label{sec:testfix}
+% ============================================================
+
+When it is not clear which setting cures a failure, try a few on one material in
+short test jobs before changing the production run.  Two scripts make test copies
+in \cmd{tests/} of the run folder --- outside \cmd{materials/}, so the production
+chain, the diagnosis and the collection scripts never see them.
+
+\begin{lstlisting}[language=bash]
+cd /scratch/$USER/VASP-Flow/HT_redo_plainRe
+bash ../ht_tools/test_step.sh mp-7889 bands fast    "ALGO=Fast"
+bash ../ht_tools/test_step.sh mp-7889 bands kpar4   "KPAR=4; NCORE=2"
+bash ../ht_tools/test_step.sh mp-7889 bands ref     ""          # unchanged, for comparison
+bash ../ht_tools/test_step.sh --report tests/mp-7889_bands_*    # while they run, and after
+\end{lstlisting}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.36\linewidth}X@{}}
+\thead
+Script & What it tests \\ \midrule
+\cmd{test_step.sh ID scf|bands|lobster TAG "T=V; ..."} &
+  The SCF, bands or LOBSTER NSCF of material \cmd{ID} in \cmd{tests/ID_STEP_TAG/}: the
+  step's INCAR and KPOINTS, the material's POTCAR and POSCAR and, for bands/LOBSTER,
+  \cmd{02_scf/CHGCAR} (no WAVECAR).  Only VASP runs, not the LOBSTER program. \\
+\cmd{test_relax.sh ID TAG "T=V; ..."} &
+  The relaxation, from the original input cell, in \cmd{tests/ID_TAG/}. \\
+\bottomrule
+\end{tabularx}
+
+Each \cmd{TAG=VALUE} replaces that tag in the INCAR (or adds it); \cmd{TAG=} with no
+value removes it (\cmd{"NSW=0; IBRION=-1; ISIF="} turns a relax into an SCF).  KPAR is
+lowered to a divisor of the core count if needed.  The tests are small and short so
+that they start soon: 40 cores and 1~hour by default, changed with
+\cmd{T_NTASKS=}, \cmd{T_TIME=}, \cmd{T_PARTITION=} in front of the command.
+
+\opt{report} prints one line per test: status (\cmd{queued}, \cmd{running},
+\cmd{ended}, \cmd{finished}, \cmd{timeout}), whether EDIFF was reached, the number of
+electronic steps, the first, last and largest $|E|$.  A largest $|E|$ above
+${\sim}10^5$~eV means the run diverged.  \cmd{test_relax.sh} \opt{report} gives energy,
+volume, pressure and max force per ionic step.
+
+\begin{tipbox}
+Once a setting works, put it into production: let \cmd{vasp_diagnose.py} write the
+fix (it knows the common ones), or edit the step's INCAR in \cmd{materials/ID/}
+yourself and resubmit that step, e.g.\
+\cmd{cd materials/ID && sbatch --job-name=ID_bands --time=01:00:00 job.sbatch bands}.
+Delete \cmd{tests/} when done.
+\end{tipbox}
+
+% ============================================================
+\section{Maintenance tools for high-throughput directories}
+\label{sec:ht-tools}
+% ============================================================
+
+Besides the diagnosis (Section~\ref{sec:diagnose}), the look-up tools
+(Section~\ref{sec:lookup}) and the test scripts (Section~\ref{sec:testfix}),
+\cmd{ht_tools/} holds scripts that act on a whole high-throughput directory.
+Run them from that directory:
+\begin{lstlisting}[language=bash]
+cd /scratch/$USER/VASP-Flow/HT_1-500
+bash ../ht_tools/audit_run.sh             # read-only
+bash ../ht_tools/cleanup_large.sh         # dry run
+bash ../ht_tools/cleanup_large.sh --apply # do it
+\end{lstlisting}
+All of them are dry runs unless \opt{apply} is given, skip materials with
+queued jobs, and never delete outputs (except \cmd{cleanup_large.sh}, whose job is
+to delete large files no step needs any more): they are moved into a
+\cmd{stale_<date>} folder of the material.  Full descriptions are in
+\cmd{ht_tools/README.md}.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}X@{}}
+\thead
+Script & Purpose \\ \midrule
+\cmd{audit_run.sh [BACKUP ...]} & Read-only check before adding a run to the database:
+  per material missing / queued / relax not converged / SCF not finished or hit NELM /
+  LOBSTER not finished, empty ICOHPLIST or spilling above \cmd{SPILL_MAX}; whether it is
+  in a collected archive and in each backup given.  Writes \cmd{audit_<date>.tsv}. \\
+\cmd{collect_lobster.sh} & Tarball of the data the descriptor database needs
+  (raw LOBSTER files, structures, EIGENVALs, trimmed OUTCARs, \cmd{_status.tsv});
+  incremental.  \cmd{SCF_EIG_ONLY=1} packs only the SCF EIGENVALs of all
+  finished materials. \\
+\cmd{resume_in_scratch.sh} & Moves a run out of the home quota to
+  \cmd{/scratch/$USER/VASP-Flow/<run>} (leaves \cmd{MOVED_TO_SCRATCH.txt} behind, which
+  \cmd{vasp_diagnose.py} follows) and resubmits every unfinished material from its first
+  unfinished step.  Run under \cmd{nohup}. \\
+\cmd{cleanup_large.sh} & Delete WAVECAR/CHGCAR no remaining step needs
+  (\cmd{02_scf/CHGCAR} is kept unless \opt{deep}). \\
+\cmd{reset_stale.sh} & Redo steps whose inputs changed (relax unconverged
+  or finished after the SCF, truncated LOBSTER files, blank EIGENVAL). \\
+\cmd{fix_failed.sh [ids]} & The older, high-throughput-only predecessor of
+  \cmd{vasp_diagnose.py}: finds broken chains (a step FAILED / TIMEOUT /
+  OUT\_OF\_MEMORY, the rest \cmd{DependencyNeverSatisfied}), repairs and resubmits
+  them.  Prefer \cmd{vasp_diagnose.py}. \\
+\cmd{patch_relax_ibrion.sh}, \cmd{patch_lean_outputs.sh} & One-off
+  patches of a directory generated before those fixes. \\
+\bottomrule
+\end{tabularx}
+
+% ============================================================
+\section{Troubleshooting: symptom and remedy}
+\label{sec:trouble}
+% ============================================================
+
+\subsection{Setting up and running}
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Symptom & Solution \\ \midrule
+POTCAR not found &
+  Check \texttt{VASP\_POTCAR\_DIR} in \texttt{site.env} or GUI System
+  Setup.  Use the POTCAR chooser for unusual variants
+  (\texttt{Ga\_d}, \texttt{Fe\_sv}). \\[3pt]
+\texttt{vasp\_std} not found &
+  Set the full binary path in \texttt{site.env} or GUI System Setup. \\[3pt]
+WARNING: may not have converged &
+  Increase NSW (ionic) or NELM (electronic) in INCAR and re-run. \\[3pt]
+Wrong bands ($W = \Gamma$) &
+  Conventional cubic cell detected; use the \textit{primitive} cell
+  for FCC/BCC so auto-detection picks cF/cI. \\[3pt]
+Projected DOS missing &
+  Check instructions.txt: \texttt{projected on} and \texttt{projections on}
+  are both accepted.  Verify element names match POSCAR. \\[3pt]
+KPAR error &
+  KPAR $\times$ NCORE must divide total MPI tasks.  Use auto-defaults or
+  set explicitly valid values. \\[3pt]
+GUI unreachable &
+  Check SSH tunnel: \texttt{ssh -L 5001:localhost:5001 user@cluster}. \\[3pt]
+Project missing from dropdown &
+  Folder must contain \texttt{POSCAR} + \texttt{settings.json} in the
+  directory where \texttt{vasp-gui.py} was started. \\[3pt]
+Band plot empty or not shown &
+  Usually \texttt{sumo-bandplot} crashed on this band structure; the GUI now
+  falls back to a built-in plotter automatically.  An empty plot also means a
+  wrong $E_F$: the Fermi level is read from \texttt{04\_dos/OUTCAR} (then
+  \texttt{02\_scf/OUTCAR}), since \texttt{03\_bands} eigenvalues share the
+  NSCF/DOS energy reference. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{High-throughput runs on a cluster}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
+\thead
+Symptom & What to do \\ \midrule
+Jobs stay in the queue as \cmd{DependencyNeverSatisfied} &
+  A step before them did not end OK, so they can never start.  \cmd{scancel} them,
+  then run \cmd{vasp_diagnose.py} (Section~\ref{sec:diagnose}); it finds the failed
+  step and writes the repair. \\[3pt]
+Bands/DOS/LOBSTER energies run away to $10^{6}$--$10^{10}$~eV &
+  Pure Davidson diverging at fixed density (seen for Ba$_2$YReO$_6$, Sr$_2$YReO$_6$).
+  New runs use \cmd{ALGO = Fast} in these steps; \cmd{vasp_diagnose.py} sets it, then
+  \cmd{VeryFast}, for older ones (Appendix~\ref{app:algo}). \\[3pt]
+\cmd{forrtl: severe (41): insufficient virtual memory}, the job fails within a minute &
+  Out of memory while setting up.  Lower KPAR in that step's INCAR (each k-group holds
+  its own copy of the grids), or run fewer MPI ranks per node.  The LOBSTER NSCF
+  (\cmd{ISYM = 0}, full k-mesh) is the usual case. \\[3pt]
+SCF reached EDIFF (the \cmd{1 F=} line is in OSZICAR) but the job still hit its time limit &
+  VASP stalled after convergence, so more walltime will not help.  Look at where it
+  stopped (\cmd{show_material_status.sh ID scf} prints the OUTCAR tail and the time of
+  its last write) and at the job log before resubmitting. \\[3pt]
+The relax ends \cmd{relax_unconv} in every round, with small forces &
+  Check the last max force and pressure (\cmd{show_material_status.sh ID relax}).  If
+  they are close to EDIFFG and a few kB, accept the structure and leave the material
+  out (\cmd{skip_fixes.sh}). \\[3pt]
+A material shows \cmd{queued} in two runs, although only one has jobs &
+  Both runs use the same job name (\cmd{<material>_<step>}); diagnose again when the
+  queue is empty. \\[3pt]
+A run folder in \cmd{~/VASP-Flow} looks empty &
+  It was moved to \cmd{/scratch/$USER/VASP-Flow} (see its \cmd{MOVED_TO_SCRATCH.txt});
+  work there. \\
+\bottomrule
+\end{tabularx}
+
+
+\subsection{Quick OUTCAR checks}
+
+\begin{lstlisting}[language=bash]
+grep "reached required accuracy"   OUTCAR          # converged?
+grep "energy  without"             OUTCAR | tail -1 # total energy
+grep "E-fermi"                     OUTCAR | tail -1 # Fermi level
+grep "magnetization (x)"           OUTCAR | tail -5 # moment
+grep "TOTAL-FORCE"                 OUTCAR | tail -20
+grep -A3 "BORN EFFECTIVE CHARGES"  OUTCAR | head -20
+\end{lstlisting}
+
+% ============================================================
+\addpart{Appendices: how it works}
+\appendix
+% ============================================================
+
+% ============================================================
+\section{How the inputs are generated}
+\label{app:inputs}
+% ============================================================
+
+\subsection{k-mesh formula}
+\label{app:kmesh}
+
+\medskip
+\textbf{kpra} (k-points per reciprocal atom) $= N_x N_y N_z \times N_\mathrm{atoms}$.
+Given a target kpra and the reciprocal lattice vectors $\mathbf{b}_i^*$
+(columns of $2\pi(\mathbf{A}^{-1})^\top$), the mesh follows from one formula,
+with no search:
+
+\[
+  N_i = \mathrm{round}_{2}\bigl(s \, |\mathbf{b}_i^*|\bigr), \qquad
+  s = \left(\frac{N_k}{|\mathbf{b}_1^*||\mathbf{b}_2^*||\mathbf{b}_3^*|}\right)^{1/3},
+  \quad N_k = \mathrm{kpra}/N_\mathrm{atoms},
+\]
+
+where $\mathrm{round}_2$ rounds to the nearest \emph{even} integer (minimum 2),
+so that BZ boundary points ($k = 1/2$) are on the mesh.  Because every axis
+uses the same $s$, the spacing $|\mathbf{b}_i^*|/N_i$ is the same along all
+three axes up to that rounding (a uniform mesh), axes with equal
+$|\mathbf{b}_i^*|$ get equal $N_i$, and $N_1N_2N_3N_\mathrm{atoms}\approx$ kpra.
+For hexagonal lattices ($a=b$, $\gamma=120^\circ$, detected from the POSCAR)
+the two in-plane $N$ are rounded to multiples of 6 ($6,12,18,\dots$) so that
+$K$ and $M$ lie on the mesh.  For 2-D slabs the same formula is used in the
+plane (square root instead of cube root) and $N_z = 1$, so the in-plane mesh carries the
+whole target.  The first line of each generated KPOINTS reports the mesh and
+the kpra actually reached.  Any integer may be given instead of
+\texttt{coarse}/\texttt{fine} (\texttt{KMESH\_DENSITY: 3000}); the relaxation
+has its own density (\texttt{RELAX\_KMESH\_DENSITY}, default coarse).
+
+\subsection{KPAR and NCORE rule}
+\label{app:kpar}
+
+When KPAR/NCORE are not specified they are set \emph{per step} from two
+numbers only: the total MPI rank count $N$ and that step's irreducible
+k-point count $n_k$ (the spglib reduction of the step's own KPOINTS; the
+LOBSTER NSCF runs \texttt{ISYM=0}, so its full mesh counts).
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Quantity & Rule \\ \midrule
+KPAR & the largest divisor of $N$ that is ${}\le n_k$.  k-point groups scale
+  almost perfectly, so use as many as there are k-points; a divisor, so no rank
+  is idle. \\
+NCORE & the largest divisor of $r = N/\mathrm{KPAR}$ (ranks per k-group) that
+  is ${}\le \sqrt{r}$, VASP's own recommendation (NCORE${}=1$ for 1--3 ranks
+  per group). \\
+\bottomrule
+\end{tabularx}
+
+Examples with $N=40$: $n_k \ge 40 \Rightarrow$ KPAR${}=40$, NCORE${}=1$;
+$n_k=20 \Rightarrow 20/1$; $n_k=7 \Rightarrow 5/2$; $n_k=1 \Rightarrow 1/5$.
+If only one of the pair is given (instruction key, per-step key or an
+\texttt{INCAR} block), it is kept --- snapped down to a divisor of $N$ --- and
+the other is derived from it: a fixed KPAR gets NCORE from the rule above; a
+fixed NCORE gets the largest KPAR${}\le n_k$ that leaves a multiple of NCORE
+ranks per group.  Priority, highest first: ELF pin (KPAR${}=1$) $>$
+\texttt{INCAR} block $>$ per-step key (\texttt{SCF\_KPAR}, \ldots) $>$ global
+\texttt{KPAR}/\texttt{NCORE} $>$ the rule.
+
+Three steps opt out: \textbf{DFPT} is always KPAR${}={}$NCORE${}={}$1 (linear
+response supports neither); \textbf{phonons} and \textbf{Wannier90} default to
+KPAR${}={}$1 (independent supercell jobs / the Wannier interface), with NCORE
+from the rule.  With 40 ranks and the dense meshes of a small cell
+(${\le}\,20$ atoms, hundreds of irreducible k-points), KPAR${}=40$,
+NCORE${}=1$ is therefore the expected, correct result; it costs one copy of
+the wavefunctions per rank, which is small for such cells.
+
+\begin{notebox}
+\texttt{LELF=.TRUE.} requires KPAR${}={}$1.  With \texttt{ELF: on} (the
+default) the SCF itself runs LELF and is pinned to KPAR${}={}$1.  With
+\texttt{ELF: separate} the SCF keeps the automatic KPAR and a short
+KPAR${}={}$1 restart writes the ELFCAR afterwards
+(Section~\ref{sec:elf-separate}).  Convergence tests drop \texttt{LELF}
+automatically.
+\end{notebox}
+
+\subsection{Eigensolver (ALGO) of each step}
+\label{app:algo}
+
+Relaxation and SCF use \cmd{ALGO = Normal} (blocked Davidson), the robust choice
+while the density still changes.  The fixed-density steps --- bands, DOS and the
+LOBSTER NSCF (\cmd{ICHARG = 11}) --- use \cmd{ALGO = Fast}: a few Davidson steps,
+then RMM-DIIS.  With the density fixed, pure Davidson ran away to
+$|E|\sim10^{10}$~eV for Ba$_2$YReO$_6$ and Sr$_2$YReO$_6$ (independent of KPAR/NCORE);
+\cmd{ALGO = Fast} converged in 20 steps and \cmd{ALGO = VeryFast} (RMM-DIIS only)
+also converged, while \cmd{ALGO = All} (conjugate gradients) is not allowed with
+\cmd{ICHARG = 11} and stops VASP.  A functional's own ALGO (HSE06: \cmd{Damped}) and
+any INCAR block win over these defaults.  \cmd{vasp_diagnose.py} repairs a diverged or
+unconverged fixed-density step along \cmd{Normal} $\to$ \cmd{Fast} $\to$ \cmd{VeryFast},
+and a non-converging SCF with \cmd{ALGO = All}.
+
+\subsection{Relaxation $\to$ SCF hand-off}
+\label{sec:handoff}
+
+The relaxation starts from scratch (\texttt{ISTART = 0}, \texttt{ICHARG = 2})
+and writes \texttt{WAVECAR} and \texttt{CHGCAR}.  \texttt{02\_scf/copy\_from\_relax.sh}
+copies the relaxed geometry and the CHGCAR; if the SCF k-mesh, spin and cutoff
+equal the relaxation's it also copies the WAVECAR and the SCF starts from both
+(\texttt{ISTART = 1}, \texttt{ICHARG = 1}), otherwise it starts from the CHGCAR
+alone (\texttt{ISTART = 0}, \texttt{ICHARG = 1}) because wavefunctions on
+different k-meshes are not interchangeable.  The decision is made at run time,
+so k-meshes edited or patched after generation are handled.  Putting
+\texttt{ISTART} or \texttt{ICHARG} in an \texttt{INCAR scf:} block disables the
+mechanism.
+
+\subsection{Band-path detection}
+\label{app:kpath}
+
+Since v1.6 the generator first determines the \emph{actual space group}
+of the POSCAR with spglib (via pymatgen's
+\texttt{KPathSetyawanCurtarolo}) and uses the standard
+Setyawan--Curtarolo high-symmetry path for that space group.  Every
+high-symmetry point is transformed through Cartesian reciprocal space
+into the reciprocal basis of \emph{this} POSCAR, so the path is correct
+for the actual cell used in the SCF regardless of orientation or
+setting.
+
+If spglib or pymatgen is not installed (or the symmetry analysis
+fails), the generator falls back to the geometric classifier below: it
+reads the POSCAR lattice vectors, computes cell lengths and angles, and
+selects a default path by Bravais type.  2-D structures always use the
+geometric route so the in-plane path is preserved.
+
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\thead
+Type & Detection criterion & Default path \\ \midrule
+cF (FCC) & $a{=}b{=}c$, angles $\approx 60^\circ$
+         & G-X-W-K-G-L-U-W \\
+cI (BCC) & $a{=}b{=}c$, angles $\approx 109.5^\circ$
+         & G-H-N-G-P-H \\
+cP (cubic) & $a{=}b{=}c$, $90^\circ$
+          & G-X-M-G-R-X \\
+hP (hexagonal) & $a{\approx}b$, $\gamma{=}120^\circ$
+              & G-M-K-G-A-L-H-A \\
+tP (tetragonal) & $a{\approx}b{\neq}c$, $90^\circ$
+               & G-X-M-G-Z-R-A-Z \\
+oP (orthorhombic) & $90^\circ$, $a{\neq}b{\neq}c$
+                 & G-X-S-Y-G-Z-U-R-T-Z \\
+rP (rhombohedral) & $a{=}b{=}c$, equal angles
+                 & G-T-F-G-L \\
+mP (monoclinic) & $\alpha{=}\gamma{=}90^\circ$, $\beta{\neq}90^\circ$
+               & G-Y-A-Z-G-B-D \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Two-step ELF (\texttt{ELF: separate})}
+\label{sec:elf-separate}
+
+\texttt{LELF} only works with KPAR${}={}$1, which removes the k-point
+parallelism that makes an SCF on a small cell fast.  With
+\begin{lstlisting}
+ELF: separate        # or  ELF: two-step
+\end{lstlisting}
+the ELF is produced in two steps inside \texttt{02\_scf}, in the same job:
+\begin{enumerate}
+\item The SCF runs normally --- automatic KPAR/NCORE, no \texttt{LELF},
+  \texttt{LWAVE}/\texttt{LCHARG=.TRUE.}.
+\item \texttt{run\_elf.sh} (called by \texttt{run.sh} after VASP) copies the
+  converged \texttt{WAVECAR}, \texttt{CHGCAR}, \texttt{POSCAR},
+  \texttt{KPOINTS} and \texttt{POTCAR} into \texttt{02\_scf/elf/} and runs
+  VASP there with \texttt{02\_scf/elf/INCAR}: the SCF INCAR (same ENCUT,
+  smearing, MAGMOM, $+U$, user overrides) plus \texttt{ISTART=1},
+  \texttt{ICHARG=1}, \texttt{LELF=.TRUE.}, \texttt{LWAVE}/\texttt{LCHARG=.FALSE.},
+  KPAR${}={}$1 and NCORE from the rule for one k-group.  \texttt{NBANDS} is
+  set at run time to the value the SCF used (read from its \texttt{OUTCAR}),
+  so the WAVECAR is read as is.  Starting from converged wavefunctions, this
+  restart needs only a few electronic steps.
+\item \texttt{ELFCAR} is copied back to \texttt{02\_scf/ELFCAR}, where
+  \texttt{analyze.sh}, \texttt{elf\_bonds.py} and the GUI look for it; the
+  copied WAVECAR/CHGCAR in \texttt{elf/} are deleted.
+\end{enumerate}
+If the SCF left no WAVECAR/CHGCAR, the ELF pass is skipped with a message.
+The DOS, bands and LOBSTER steps still read \texttt{02\_scf/CHGCAR}, which the
+ELF pass does not touch.  \texttt{ht-mp-scf.py} uses this mode by default;
+write \texttt{ELF: on} in \texttt{instructions.txt} for the old single run.
+
+\subsection{Convergence tests: test structure and parameter choice}
+\label{app:conv}
+
+\subsubsection{Shifted test structure}
+
+The POSCAR used in \texttt{00\_convergence} has \textbf{atom 1 displaced
+by $(0.01,\,0.02,\,0.03)$\,\AA{} (Cartesian)} so that the force on it is
+non-zero and its convergence can be tracked --- at the equilibrium
+(high-symmetry) positions the forces would vanish identically and the
+force panel would be meaningless.  The displacement is converted through
+the lattice for Direct-mode POSCARs.  All production steps
+(\texttt{01\_relax}, \texttt{02\_scf}, \dots) use the \emph{original,
+unshifted} positions.
+
+\subsubsection{Automatic parameter selection}
+
+After the runs, \texttt{00\_convergence/choose\_params.py} (invoked by
+\texttt{run\_convergence.sh}, \texttt{analyze\_convergence.sh}, and the
+phase-2 scripts) selects the smallest ENCUT and k-mesh from which every
+subsequent change stays below
+\[
+  \max_i \bigl|\Delta F_i^{\text{atom 1}}\bigr| < 5~\text{meV/\AA}
+  \quad\text{and}\quad
+  \max_i \bigl|\Delta \sigma_{ii}\bigr| < 0.5~\text{kbar},
+\]
+and writes the result to \texttt{00\_convergence/converged\_params.txt}.
+Phase 2 (\texttt{run\_calculations.sh}, \texttt{submit\_calculations.sh},
+and the GUI form) offers these values as defaults; when run
+\emph{non-interactively} --- e.g.\ a convergence test automatically
+followed by the SCF in a chained/nohup run --- they are applied without
+prompting.  If the criteria are not met within the tested range, the
+largest tested value is used and a \texttt{NOT CONVERGED} warning is
+issued.  Thresholds can be overridden:
+\texttt{choose\_params.py --ftol 3 --ptol 0.2}.
+
+\subsection{DFPT: fixed parallel and symmetry settings}
+\label{app:dfpt}
+
+\begin{notebox}
+Both routes support neither k-point nor band parallelisation:
+\textbf{KPAR and NCORE are forced to 1} in the generated INCAR
+(overriding any global or per-step setting).  The full MPI task count
+is still used for plane-wave parallelisation.
+Likewise \textbf{ISYM=2 is enforced} (symmetry imposed): perturbation
+theory relies on the symmetry-reduced perturbation set, so a
+symmetry-off \texttt{ISYM=0}/\texttt{$-$1} --- e.g.\ from a global
+\texttt{INCAR:} override block intended for the LOBSTER/NSCF steps ---
+is never inherited by \texttt{06\_dfpt}.
+\end{notebox}
+
+\texttt{copy\_from\_scf.sh} (invoked by \texttt{run.sh}) pulls
+\texttt{WAVECAR} and \texttt{CHGCAR} from \texttt{02\_scf} at run time.
+If \texttt{02\_scf} has been converted in place for LOBSTER
+(\texttt{ISYM=0}/\texttt{$-$1} in its INCAR, as done by the
+high-throughput \texttt{run\_scf\_for\_lobster.sh}), the
+\texttt{WAVECAR} copy is skipped --- it holds the full, unsymmetrised
+k-mesh, which the ISYM=2 run cannot restart from --- and VASP
+regenerates the orbitals from the \texttt{CHGCAR}, which the LOBSTER
+conversion (a fixed-charge NSCF with \texttt{LCHARG=.FALSE.}) leaves
+untouched.  If the symmetry-off INCAR is \emph{not} a fixed-charge
+NSCF, a warning is printed that the \texttt{CHGCAR} itself may stem
+from a symmetry-off SCF and a symmetric SCF should be re-run first.
+
+\subsection{LOBSTER projected DOS vs.\ the VASP DOS}
+\label{app:lobster-dos}
+
+The LOBSTER card also carries a projected-DOS plot
+(\texttt{analysis/*\_lobster\_dos.\{png,pdf\}}, generated by every interface
+but displayed only in the GUI), drawn in the same cumulative-stacked layout as
+the \texttt{04\_dos} projected DOS.  It answers a question the two DOS files
+raise on their own.
+
+VASP's \texttt{LORBIT=11} PDOS projects onto spherical harmonics \emph{inside
+the PAW augmentation spheres}, which do not fill space, so the interstitial
+charge is unassigned and $\sum \mathrm{PDOS} < $ total DOS --- severely so for
+free-electron-like metals (only 25\% of the electrons for fcc Al; 72\% for
+MoSe\textsubscript{2}, whose Mo-$d$ and Se-$p$ states are compact).  LOBSTER
+instead re-expands the PAW states in a local atomic-orbital basis and performs
+a Mulliken population analysis, so its decomposition is complete by
+construction: the stacked areas sum \emph{exactly} to LOBSTER's own total.
+
+The plot therefore shows three things: the stacked LOBSTER channels, LOBSTER's
+total (dashed grey, identically the top of the stack), and the projection-free
+VASP total from \texttt{04\_dos} (solid black).  The gap between the last two
+is the charge spilling, reported in \texttt{lobsterout} and typically 1--4\%.
+For the \emph{total} DOS the VASP curve is the reference --- it is a direct
+eigenvalue count under the tetrahedron method, with no projection at all --
+whereas for \emph{orbital-resolved} weights the LOBSTER decomposition is the
+more complete one, and is the same basis that produces the COHP/COBI curves.
+Note that the two curves also carry different broadening (\texttt{04\_dos} uses
+\texttt{ISMEAR=-5}; the LOBSTER NSCF is forced to Gaussian smearing, and
+LOBSTER applies its own \texttt{gaussianSmearingWidth} on a coarser energy
+grid), so some of the visible difference is resolution rather than physics.
+Both smearing settings are stated in the plot legend.
+
+% ============================================================
+\section{How SLURM steps continue past the time limit}
+\label{sec:slurm-continue}
+% ============================================================
+
+\textbf{A step that reaches its limit is continued, not lost.}  Every step
+script asks SLURM for a warning 15~min before the limit
+(\texttt{-{}-signal=B:USR1@900}).  On the warning it writes a
+\texttt{STOPCAR} (\texttt{LSTOP} for a relaxation: stop after the current
+ionic step; \texttt{LABORT} otherwise), lets VASP finish cleanly and requeues
+the job with \texttt{scontrol requeue} --- same job id, so jobs chained after
+it with \texttt{afterok} keep waiting.  The requeued job then
+\begin{itemize}
+  \item \textbf{relaxation}: continues from the \texttt{CONTCAR} (or, if that
+    is empty, from the last \texttt{XDATCAR} frame, cell included);
+  \item \textbf{LOBSTER}: skips the NSCF if it had finished and reruns only
+    the LOBSTER binary;
+  \item other steps: rerun.
+\end{itemize}
+The interrupted \texttt{OUTCAR}/\texttt{XDATCAR} are kept as
+\texttt{*.timeout0}, \texttt{*.timeout1}, \ldots  If requeueing is not
+allowed on the cluster, the job resubmits a copy of itself with the same
+name and time limit and re-points dependent jobs to it.  At most
+\texttt{VF\_MAX\_RESTARTS} (default 5) continuations per step.
+
+% ============================================================
+\section{High-throughput drivers: all options}
+\label{app:ht}
+% ============================================================
 
 \subsection{\texttt{ht-mp-scf.py} in detail}
 \label{sec:ht-mp-scf}
@@ -800,1275 +2661,281 @@ Option & Meaning \\ \midrule
 \bottomrule
 \end{tabularx}
 
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
-\thead
-Script (in the directory) & Purpose \\ \midrule
-\texttt{env.sh} & The one file to edit on the cluster: modules,
-  \texttt{VASP\_STD}, \texttt{LOBSTER\_BIN}, \texttt{VASP\_POTCAR\_DIR},
-  \texttt{ANALYSIS\_PYTHON}, step walltimes \texttt{TIME\_*},
-  \texttt{VF\_MAX\_RESTARTS}, disk policy. \\
-\texttt{submit\_all.sh [N]} & Build missing POTCARs, submit each material's
-  unfinished steps as a chain (at most \texttt{MAX\_QUEUED}=200 jobs queued);
-  skips finished/queued materials, so it is also the resume command. \\
-\texttt{status.sh} & Per-step completion counts; writes \texttt{incomplete.txt}. \\
-\texttt{retune.sh} & Change the step walltimes in \texttt{env.sh}
-  (\texttt{-{}-time-relax}, \texttt{-{}-time-scf}, \texttt{-{}-time-bands},
-  \texttt{-{}-time-lobster}, or \texttt{-{}-time} for all) or
-  partition/account in every job script. \\
-\texttt{make\_potcars.sh} & Build and verify the POTCARs (run automatically). \\
-\texttt{analyze\_all.sh [id]} & Redo the plots (each job already runs \texttt{analyze.sh}). \\
-\texttt{postprocess\_all.sh} & Per-material and combined LOBSTER bond tables. \\
-\texttt{collect\_results.sh} & Small \texttt{screen\_results.tar.gz} with the
-  per-step layout (trimmed OUTCARs; \texttt{FULL\_OUTCAR=1} for full). \\
-\bottomrule
-\end{tabularx}
+% ============================================================
+\section{How \texttt{vasp\_diagnose.py} works}
+\label{app:diagnose}
+% ============================================================
 
-\subsubsection*{Maintenance tools (\texttt{ht\_tools/})}
-Run them from the highthroughput directory:
+\subsection{Command line}
+
 \begin{lstlisting}[language=bash]
-cd ~/VASP-Flow/HT_1-500
-bash ../ht_tools/fix_failed.sh            # dry run
-bash ../ht_tools/fix_failed.sh --apply    # do it
+python3 vasp_diagnose.py LIST [options]
 \end{lstlisting}
-All of them are dry runs unless \texttt{-{}-apply} is given, skip materials with
-queued jobs, and never delete outputs: they are moved into a
-\texttt{stale\_<date>} folder of the material.  Full descriptions are in
-\texttt{ht\_tools/README.md}.
 
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}X@{}}
-\thead
-Script & Purpose \\ \midrule
-\texttt{fix\_failed.sh [ids]} & Finds broken chains (a step FAILED / TIMEOUT /
-  OUT\_OF\_MEMORY, the rest \texttt{DependencyNeverSatisfied}), classifies the
-  cause from sacct, the job logs and OUTCAR/OSZICAR, applies the matching fix
-  (timeout: walltime $\times2$; out of memory: whole node, KPAR $\le 8$; WAVECAR
-  read crash: start from CHGCAR; diverged bands: more bands), cancels the dead
-  jobs and resubmits from the failed step.  EDIFF is never changed.  Unknown
-  causes are only reported (\texttt{-{}-retry-unknown} resubmits them). \\
-\texttt{test\_relax.sh id tag "TAG=VAL; ..."} & Test copy of one material in
-  \texttt{tests/<id>\_<tag>/} with changed INCAR tags (\texttt{TAG=} with no value
-  removes a tag, e.g.\ \texttt{"NSW=0; IBRION=-1; ISIF="} for an SCF-only test);
-  small short jobs (\texttt{T\_NTASKS}, \texttt{T\_TIME}) start sooner.
-  \texttt{-{}-report tests/<dir>} summarises the result. \\
-\texttt{collect\_lobster.sh} & Tarball of the data the descriptor database needs
-  (raw LOBSTER files, structures, EIGENVALs, trimmed OUTCARs, \texttt{\_status.tsv});
-  incremental.  \texttt{SCF\_EIG\_ONLY=1} packs only the SCF EIGENVALs of all
-  finished materials (own DOS moments). \\
-\texttt{reset\_stale.sh} & Redo steps whose inputs changed (relax unconverged
-  or finished after the SCF, truncated LOBSTER files, blank EIGENVAL). \\
-\texttt{cleanup\_large.sh} & Delete WAVECAR/CHGCAR no remaining step needs. \\
-\texttt{patch\_relax\_ibrion.sh}, \texttt{patch\_lean\_outputs.sh} & One-off
-  patches of a directory generated before those fixes. \\
+\begin{center}
+\begin{tabularx}{\linewidth}{l l >{\raggedright\arraybackslash}X}
+\toprule
+\thead Option & Default & Meaning \\
+\midrule
+\opt{out DIR}       & \cmd{vasp_diagnose_<date>_<time>} & folder for the report and the scripts \\
+\opt{root DIR}      & --- & another folder to look up material names in (can be repeated) \\
+\opt{since DATE}    & 14 days ago & how far back SLURM's job records (\cmd{sacct}) are read, YYYY-MM-DD;
+                                    must reach back to the jobs being diagnosed \\
+\opt{kpar-max N}    & 8 & largest KPAR written by the out-of-memory repair \\
+\opt{spill-max X}   & 5 & LOBSTER charge spilling (\%) above which a material is flagged \\
+\opt{retry-unknown} & off & also submit the materials whose failure was not recognised \\
+\opt{max-queued N}  & 200 & default queue limit of \cmd{submit_all_fixes.sh}
+                            (override later with \cmd{MAX_QUEUED=}) \\
 \bottomrule
 \end{tabularx}
+\end{center}
 
-% ============================================================
-\section{instructions.txt Format}
-\label{sec:instructions}
-% ============================================================
+It needs only Python~$\geq$~3.6 (no extra packages) and uses \cmd{sacct} and
+\cmd{squeue} when they exist.
 
-\subsection{Example}
+\subsection{The list file}\label{sec:list}
 
-\begin{lstlisting}
-Project: My material name
+One entry per line; empty lines, \texttt{\#} comments and anything after the first word are ignored.
+An entry is
 
-Methods: PBEsol functional
-         collinear magnetization
-         GGA+U with U=4.0 on Fe-d orbitals
-
-Tasks: structure relaxation
-       SCF calculation
-       band structure
-       DOS (projected on Fe-d and O-p)
-
-Convergence: Test k-points 6x6x6 to 12x12x12
-             ENCUT 400-600 eV
-
-MAGMOM: 4.0
-NSW: 100
-EDIFFG: -0.01
-MPI: 128
-NODES: 2
-NTASKS_PER_NODE: 64
-WALLTIME: 12:00:00
-\end{lstlisting}
-
-The parser is case-insensitive and searches the entire file, so section
-order is flexible.
-
-\subsection{Keyword reference}
-\label{sec:keywords}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Keyword & Meaning \\ \midrule
-\texttt{Project:} & Project name; becomes the output folder. \\
-\texttt{MAGMOM:} & Initial magnetic moments in $\mu_{\mathrm{B}}$: one number
-  for all atoms (\texttt{4.0}, \texttt{-3.0}), per element
-  (\texttt{Fe=4.0, O=0.6}) or a per-atom list (\texttt{2*4.0 2*-4.0}).
-  Any \texttt{MAGMOM} line switches spin polarisation on; default 2.0 when only
-  ``collinear magnetization'' is given (Section~\ref{sec:magnetic}). \\
-\texttt{ISIF:} & Relaxation type: 3=full, 2=ions only, 4=fixed volume. \\
-\texttt{NSW:} & Max ionic steps. Default 100. \\
-\texttt{EDIFFG:} & Force criterion in eV/\AA. Default $-0.01$. \\
-\texttt{ENCUT:} & Manual plane-wave cutoff in eV. \\
-\texttt{KMESH:} & Explicit Gamma k-mesh overriding the automatic density,
-  e.g.\ \texttt{8 8 8} or \texttt{12} (cubic).  Applies to every automatic
-  mesh (relax/SCF/DOS); for 2-D give the third value (\texttt{12 12 1}). \\
-\texttt{KMESH\_DENSITY:} & Automatic k-mesh density tier: \texttt{coarse}
-  (1000~kpra, default for relaxation and convergence tests) or \texttt{fine}
-  (5000~kpra, default for SCF/DOS/spectroscopic steps).  kpra $= N_k \times
-  N_\mathrm{atoms}$ where $N_k = N_x N_y N_z$; subdivisions scale as
-  $N_i \propto |\mathbf{b}_i^*|$.  An integer is taken as the kpra target
-  itself (also \texttt{KPRA:}, \texttt{KPOINTS\_DENSITY:}).  Overridden by
-  explicit \texttt{KMESH} and by \texttt{KPOINTS} blocks. \\
-\texttt{RELAX\_KMESH\_DENSITY:} & Density of the relaxation mesh
-  (\texttt{coarse}, \texttt{fine} or an integer); default \texttt{coarse}
-  whatever the SCF uses. \\
-\texttt{PRESSURE:} & External pressure for constant-$P$ relaxation, e.g.\
-  \texttt{10 GPa} or \texttt{50 kbar}.  Forces \texttt{ISIF=3},
-  \texttt{IBRION=2}, \texttt{PSTRESS} (Section~\ref{sec:pressure}). \\
-\texttt{INCAR: \ldots\ END\_INCAR} & Block of literal INCAR tags merged
-  into the generated INCAR(s); optionally per-step
-  (Section~\ref{sec:incar-raw}). \\
-\texttt{NKPTS:} & k-points per band segment. Default 40. \\
-\texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
-\texttt{KPAR:} & Global k-point parallelisation. \\
-\texttt{NCORE:} & Global cores-per-orbital. \\
-\texttt{SCF\_KPAR:} \textit{etc.} &
-  Per-step KPAR: also BANDS\_, DOS\_, RELAX\_, PHONONS\_
-  (DFPT is forced to KPAR${}={}$NCORE${}={}$1). \\
-\texttt{SCF\_NCORE:} \textit{etc.} & Per-step NCORE; same prefixes. \\
-\texttt{NODES:} & Compute nodes (SLURM). \\
-\texttt{NTASKS\_PER\_NODE:} & MPI tasks per node (SLURM). \\
-\texttt{PARTITION:} & SLURM partition. \\
-\texttt{WALLTIME:} & One time limit for every step, e.g.\ \texttt{12:00:00}
-  (default: per step, Section~\ref{sec:slurm-time}). \\
-\texttt{RELAX\_WALLTIME:} \textit{etc.} & Per-step time limit (RELAX, SCF,
-  BANDS, DOS, WANNIER, DFPT, PHONONS, LOBSTER). \\
-\texttt{ACCOUNT:} & SLURM account / allocation. \\
-\texttt{DFPT\_EDIFF:} & EDIFF for DFPT. Default \texttt{1E-8}. \\
-\texttt{PHONONS\_DIM:} & Supercell, e.g.\ \texttt{2 2 2}. \\
-\texttt{PHONONS\_MESH:} & q-mesh, e.g.\ \texttt{20 20 20}. \\
-\texttt{PHONONS\_DISP:} & Displacement in \AA. Default 0.01. \\
-\texttt{PHONONS\_BAND:} & High-symmetry path for phonon bands. \\
-\texttt{PHONONS\_NAC:} & \texttt{FALSE} to disable NAC. \\
-\texttt{WANNIER\_NUM\_WANN:} & Number of Wannier functions. \\
-\texttt{WANNIER\_PROJ:} & Projections, e.g.\ \texttt{Ga:s;As:p}. \\
-\texttt{WANNIER\_EWIN:} & Energy window, e.g.\ \texttt{-5.0 to 15.0}. \\
+\begin{center}
+\begin{tabularx}{\linewidth}{l >{\raggedright\arraybackslash}X}
+\toprule
+\thead Entry & Checked \\
+\midrule
+a \textbf{material name} --- any folder name: \cmd{mp-149}, \cmd{GaAs}, \cmd{Bi2Se3_soc}, \dots &
+  the folders of that name in \emph{R}, \emph{R}\cmd{/*/} or \emph{R}\cmd{/*/materials/},
+  where \emph{R} is the folder holding the list file, and each \opt{root} \\
+a \textbf{material or project folder} (has \cmd{00_convergence}, \cmd{01_relax}, \dots) & that folder \\
+a \textbf{run folder} with \cmd{materials/} & every material in \cmd{materials/};
+  if the run has a \cmd{material_list.txt}, only the materials in it (other folders are named and skipped) \\
+any \textbf{other folder} & every sub-folder that is a material/project folder \\
 \bottomrule
 \end{tabularx}
+\end{center}
 
-% ============================================================
-\section{Methods}
-% ============================================================
+A word that is a folder (relative to the list file's folder) is taken as a path;
+otherwise it is a material name.  Names are matched exactly, so \cmd{GaAs} finds
+\cmd{.../GaAs} but not \cmd{.../GaAs_PBE}, and a name may contain any characters a
+folder name can.  A name that is found nowhere is reported as \cmd{missing}.
 
-\subsection{Functionals}
+\subsection{Kinds of runs}
 
-\begin{lstlisting}
-Methods: PBEsol functional    # recommended for solids
-Methods: R2SCAN functional    # meta-GGA
-Methods: HSE06 functional     # hybrid -- more accurate but slower
-Methods: RVV10 functional     # van der Waals
-\end{lstlisting}
+How the jobs are resubmitted depends on how the run was made:
 
-Default ENCUT values: PBE 400~eV, PBEsol 450~eV, R2SCAN 680~eV,
-HSE06 400~eV, RVV10 450~eV.
+\begin{center}
+\begin{tabularx}{\linewidth}{l >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+\thead Layout & Recognised by & Resubmitted with \\
+\midrule
+\cmd{ht} & \cmd{job.sbatch} in the material folder (high-throughput drivers) &
+  \cmd{sbatch job.sbatch <step>}, walltimes from \cmd{TIME_*} in the run's \cmd{env.sh};
+  steps relax, scf, bands, lobster \\
+\cmd{slurm} & \cmd{run.sh} files with \texttt{\#SBATCH} lines (\cmd{vasp-agent-slurm.py}) &
+  \cmd{sbatch <step>/run.sh}, with its job name and walltime \\
+\cmd{local} & anything else (\cmd{vasp-agent.py}) &
+  \cmd{(cd <step> && bash run.sh)}, in the foreground \\
+\bottomrule
+\end{tabularx}
+\end{center}
 
-\subsection{Spin-orbit coupling}
+Each material gets a \emph{label}, \cmd{<run folder>__<material>}
+(e.g.\ \cmd{HT_semimetals__mp-149}, \cmd{projects__GaAs_test}); it names the
+repair script and the report line.
 
-\begin{lstlisting}
-Methods: SOC with magnetization in z-direction
-\end{lstlisting}
+\subsection{When is a step OK?}
 
-Uses \texttt{vasp\_ncl}.  Sets \texttt{LSORBIT}, \texttt{LNONCOLLINEAR},
-and \texttt{SAXIS}.
+\begin{center}
+\begin{tabularx}{\linewidth}{l >{\raggedright\arraybackslash}X}
+\toprule
+\thead Step & OK when \\
+\midrule
+\cmd{00_convergence} & every point of the ENCUT test (\cmd{encut/encut_<E>/}) and of the k-point test
+  (\cmd{kpoints/<N1>x<N2>x<N3>/}) that its \cmd{run.sh} will make has finished with a converged SCF.
+  If \cmd{converged_params.txt} says a quantity did not converge in the tested range, this is
+  noted in the report (widen the range yourself) \\
+\cmd{01_relax}  & OUTCAR has \cmd{reached required accuracy} \\
+\cmd{02_scf}    & OUTCAR finished (\cmd{General timing and accounting}) and the SCF converged
+                  (\cmd{aborting loop because EDIFF is reached}) \\
+\cmd{03_bands}  & finished, converged, and no energy above $10^6$~eV in OSZICAR \\
+\cmd{04_dos}    & as bands, and a non-empty DOSCAR \\
+\cmd{06_dfpt}   & finished with Born charges or the dielectric tensor in OUTCAR \\
+\cmd{08_lobster}& \cmd{lobster.out} has \cmd{finished in}; a charge spilling above
+                  \opt{spill-max} is reported but counts as OK \\
+\bottomrule
+\end{tabularx}
+\end{center}
 
-\subsection{Magnetic materials (collinear spin)}
-\label{sec:magnetic}
+\cmd{05_wannier} and \cmd{07_phonons} are not checked (noted as \cmd{unchecked}).
 
-\begin{lstlisting}
-Methods: collinear magnetization
-MAGMOM: 4.0
-\end{lstlisting}
+For a step that is not OK, the cause is read from the step's newest SLURM logs,
+\cmd{vasp.out}, the end of OUTCAR and the SLURM job record (state, run time,
+time limit).  The job record wins: a job SLURM ended for its time limit is a
+\cmd{timeout}, whatever else is in the logs.  So is a VASP run stopped by the STOPCAR
+that the VASP-Flow scripts write shortly before the time limit (\cmd{hard stop encountered},
+\cmd{soft stop encountered}).  Messages after which VASP carries on, such as
+\cmd{Sub-Space-Matrix is not hermitian} or \cmd{The number of bands has changed}, are
+shown in the script header but never taken as the cause.
 
-Sets \texttt{ISPIN = 2} and \texttt{MAGMOM = N * value} in every INCAR,
-where $N$ is the atom count from the POSCAR.  Three forms of the
-\texttt{MAGMOM:} line are understood (any of them switches spin polarisation
-on, with or without the words ``collinear magnetization''):
+\subsection{Failure causes and their repairs}\label{sec:classes}
 
-\begin{lstlisting}
-MAGMOM: 4.0              # uniform; negative values keep their sign
-MAGMOM: Fe=4.0, O=0.6    # per element (unlisted elements start at 0)
-MAGMOM: 2*4.0 2*-4.0     # per atom in POSCAR order, n*value shorthand
-\end{lstlisting}
+\renewcommand{\arraystretch}{1.05}
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{>{\ttfamily}l >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X}
+\toprule
+\thead \normalfont Name & Meaning & Repair \\
+\midrule
+oom & out of memory (\cmd{insufficient virtual memory}, \cmd{Cannot allocate memory},
+  killed by the OOM handler, MPI time-outs between nodes) &
+  KPAR lowered to at most \opt{kpar-max} (a divisor of the MPI ranks); all node memory requested \\
+timeout & the job hit its time limit & walltime doubled; a relax continues from its last structure \\
+scf\_nelm & SCF stopped at NELM without converging & \cmd{ALGO = All}, \cmd{NELM} $\geq 150$ \\
+nscf\_diverged & bands/DOS/LOBSTER energies exploded & 30\% more bands than the SCF (not for LOBSTER);
+  eigensolver \cmd{Normal} (Davidson, VASP's default) $\to$ \cmd{Fast} $\to$ \cmd{VeryFast} (RMM-DIIS), then held;
+  \cmd{NELM} $\geq 150$ \\
+nscf\_unconv & bands/DOS stopped at NELM & \cmd{ALGO} as for nscf\_diverged, \cmd{NELM} $\geq 150$ \\
+relax\_unconv & relax ended without reaching the force criterion & continues from CONTCAR (or the last XDATCAR frame) \\
+zbrent & \cmd{ZBRENT: fatal error} in a relax & \cmd{IBRION} 2 $\to$ 1, continue \\
+symmetry & VASP symmetry errors & \cmd{SYMPREC = 1E-4} (\cmd{ISYM = 0} if SYMPREC was set) \\
+edddav & \cmd{EDDDAV}/\cmd{ZHEGV} errors & SCF: \cmd{ALGO = All}; relax: \cmd{ALGO = Normal}, if that fails again \cmd{ALGO = All}; bands etc.: as nscf\_diverged \\
+wavecar & WAVECAR does not fit the new run & WAVECAR moved aside, start from CHGCAR \\
+chgcar & CHGCAR unreadable or cut off & SCF started from scratch (\cmd{ICHARG = 2}) \\
+chgcar\_missing & a later step needs \cmd{02_scf/CHGCAR}, which is missing or cut off & SCF redone first \\
+lobster\_fail & VASP part of the LOBSTER step finished, the LOBSTER program did not & only the LOBSTER program is rerun \\
+quota & disk full / quota exceeded & resubmitted unchanged --- \textbf{free space first} \\
+mpi\_init & MPI failed to start (bad node) & resubmitted unchanged \\
+not\_run & never ran (e.g.\ an earlier step failed) & submitted \\
+unknown & none of the above & script written but held back for review \\
+\emph{(any)} \dots\ \cmd{(fix already in INCAR)} & the repair for this cause is already in the INCAR, so it did not help &
+  script written but held back for review \\
+\midrule
+spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & none (report only) \\
+missing & a listed name has no folder & none (report only) \\
+phase2\_pending & convergence tests done, production steps not started & none: start them with
+  \cmd{submit_calculations.sh} / \cmd{run_calculations.sh} \\
+queued & the material still has jobs in the queue & none: diagnose later \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\renewcommand{\arraystretch}{1.0}
 
-A per-atom list must have exactly $N$ entries; the agent stops with an
-explanatory message rather than silently falling back to a default.
+A material is counted under the cause of its \emph{first} failed step.
+A charge spilling is a property of the LOBSTER basis set, so rerunning does not
+change it; lowering it needs other basis functions in \cmd{lobsterin}.
 
-\begin{tipbox}
-Typical starting moments: Fe, Co $\approx$ 4--5~$\mu_{\mathrm{B}}$;
-Ni $\approx$ 2~$\mu_{\mathrm{B}}$; Cr, Mn $\approx$ 3--4~$\mu_{\mathrm{B}}$;
-rare earths $\approx$ 7~$\mu_{\mathrm{B}}$.
-VASP converges the self-consistent value automatically.
-\end{tipbox}
-
-\textbf{Antiferromagnets} --- give the alternating signs directly, e.g.\
-\texttt{MAGMOM: 4.0 -4.0 4.0 -4.0}.
-
-\textbf{With SOC} (\texttt{Methods: SOC with magnetization in x-direction})
-the moments are $3N$ components in the non-collinear \texttt{MAGMOM}; the
-same \texttt{MAGMOM:} values are rotated onto the requested direction
-(without this VASP would start every moment along its default $(1,1,1)$).
-A list of exactly $3N$ numbers is used as the raw $x,y,z$ components.
-
-\textbf{Spin-resolved plots} produced automatically after DOS/bands run:
+\subsection{What is redone}
 
 \begin{itemize}
-  \item \emph{Cumulative DOS} --- spin-up above the x-axis; spin-down
-        mirrored below zero; elements colour-coded; solid = $\uparrow$,
-        dashed = $\downarrow$.
-  \item \emph{Band structure} --- spin-up in blue, spin-down in red
-        dashed, same k-axis, $E_F = 0$.
-  \item \emph{Projected DOS} --- sumo natively negates the spin-down
-        channel in the orbital-resolved PDF.
+  \item If the relax or the SCF failed, that step and \emph{all} later steps are redone.
+  \item Otherwise only the failed later steps (bands, DOS, DFPT, LOBSTER).  If they need
+        \cmd{02_scf/CHGCAR} and it is missing or cut off, the SCF is redone first.
+  \item \textbf{Convergence tests} are repaired on their own: only the broken points
+        are moved aside, the fix of their cause goes into the test's INCAR, and the test's
+        \cmd{run.sh} is resubmitted --- it skips the points that are already done.
+        Production steps are not redone because of a convergence test.
+  \item \textbf{LOBSTER only}: when the VASP part of the LOBSTER step finished and its
+        WAVECAR is there, only the LOBSTER program reruns (not for local projects).
+  \item In high-throughput runs \cmd{job.sbatch} cannot run DOS or DFPT; such steps are
+        reported (\cmd{job.sbatch cannot run: dos}) but not resubmitted.
 \end{itemize}
 
-Check the converged moment:
-\begin{lstlisting}[language=bash]
-grep "magnetization (x)" OUTCAR | tail -5
-\end{lstlisting}
+What a repair script changes in a material folder:
 
-\subsection{GGA+U}
-\label{sec:ggau}
+\begin{itemize}
+  \item \textbf{INCAR}: every line of a changed tag is removed and \cmd{TAG = value} is
+        added at the end.  No other tags are touched.
+  \item \textbf{Old outputs} of every redone step (OUTCAR, OSZICAR, CHGCAR, WAVECAR,
+        \cmd{*.lobster}, \dots, or the whole broken convergence point) are moved to
+        \cmd{<folder>/stale_<date>/}.  Inputs stay in place; nothing is deleted.
+  \item \textbf{Relax restarts} from the newest complete CONTCAR (else the last XDATCAR frame);
+        the original POSCAR is kept once as \cmd{POSCAR.orig}.
+  \item \textbf{SCF start}: if the relax's CHGCAR is cut off, the SCF starts from scratch.
+\end{itemize}
 
-\begin{lstlisting}
-Methods: GGA+U with U=4.0 on Fe-d orbitals
-         GGA+U with U=3.0 on Ni-d orbitals
-         GGA+U with U=6.0 on Ce-f orbitals
-\end{lstlisting}
+\subsection{Order of the resubmitted jobs}
 
-Dudarev scheme (LDAUTYPE=2); $U_{\mathrm{eff}} = U - J$ with $J = 0$ set
-automatically.  In the Dudarev formalism the parameter labelled $U$ is already
-$U_{\mathrm{eff}}$, so no separate $J$ entry is needed.
-Combine freely with \texttt{collinear magnetization}.
-
-Default values come from \texttt{hubbard\_u\_defaults.csv} (repo root:
-element, orbital, $U_{\mathrm{eff}} = U - J$, \ldots; 3d, 4d, 5d, 4f, 5f
-elements) --- the only source of default values (there are no built-in
-ones).  Dudarev's scheme uses $U_{\mathrm{eff}}$ only, so the INCAR gets
-\texttt{LDAUU} $= U_{\mathrm{eff}}$ and \texttt{LDAUJ} $= 0$ (a J column in
-the file is ignored); rows with $U_{\mathrm{eff}} = 0$ (Zn, Cd) get no
-correction.  These values were fitted
-for oxides, chalcogenides and halides, so their use is set by one optional flag in
-\texttt{instructions.txt}:
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Flag & Effect \\ \midrule
-(none) & \textbf{default}: GGA+U on the tabulated d/f elements only if the
-  POSCAR contains a chalcogen or halogen (O, S, Se, Te, F, Cl, Br, I);
-  otherwise $U = 0$. \\
-\texttt{GGA\_U: ON} & tabulated $U_{\mathrm{eff}}$ on every tabulated element,
-  whatever the compound. \\
-\texttt{GGA\_U: OFF} & no U (also \texttt{no GGA+U}). \\
-\texttt{GGA\_U: AUTO} & same as no flag. \\
-\texttt{GGA+U with U=\ldots\ on El-orb} & explicit values; always win. \\
+\begin{center}
+\begin{tabularx}{\linewidth}{l >{\raggedright\arraybackslash}X}
+\toprule
+\thead Layout & Order \\
+\midrule
+\cmd{ht} & each step waits for the previous one to succeed (\cmd{afterok}); LOBSTER after
+  bands waits only for it to end (\cmd{afterany}), as it does not need the bands \\
+\cmd{slurm} & SCF waits for the relax; bands, DOS, DFPT and LOBSTER wait for the SCF \\
+\cmd{local} & one after the other; stops at the first failure \\
 \bottomrule
 \end{tabularx}
+\end{center}
 
-The key may also be written \texttt{GGA-U}, \texttt{GGA+U} or \texttt{GGAU},
-and key and value are case-insensitive (\texttt{gga+u: on}); likewise the
-command-line option of the high-throughput drivers accepts
-\texttt{-{}-gga\_u}, \texttt{-{}-gga-u}, \texttt{-{}-gga+u} (or upper case)
-with \texttt{auto}, \texttt{on}, \texttt{off} in any case.
+Convergence tests are submitted without waiting for anything.  Walltimes are the
+run's own (\cmd{env.sh}, \texttt{\#SBATCH -{}-time}, or relax 8\,h, SCF 4\,h, bands/DOS 2\,h,
+DFPT 8\,h, LOBSTER 4\,h, tests 8\,h), doubled after a time-out.
 
-The same U block is written to every step (relax, SCF, bands, DOS, LOBSTER,
-\ldots), so all steps share one Hamiltonian.  Never automatic under
-R2SCAN/HSE06.  All three routes honour the flag: the GUI (Setup,
-\emph{Default Hubbard U}: auto / on / off), \texttt{vasp-agent.py} and
-\texttt{vasp-agent-slurm.py}; the high-throughput drivers write it with
-\texttt{-{}-gga\_u auto|on|off}.
+\subsection{Output files}
 
-% ============================================================
-\subsection{Automatic k-mesh generation}
-\label{sec:kmesh}
-% ============================================================
+\paragraph{\cmd{diagnosis.tsv}} --- tab-separated, one line per material:
 
-All Gamma-centred meshes are generated automatically from the POSCAR geometry.
-Two density tiers are available via the \texttt{KMESH\_DENSITY} key
-(Section~\ref{sec:keywords}):
-
-\begin{tabularx}{\linewidth}{@{}lllX@{}}
-\thead
-Tier & kpra & Typical use & Notes \\ \midrule
-\texttt{coarse} & 1000 & Relaxation, convergence tests & Agent k-point sweeps start here \\
-\texttt{fine}   & 5000 & SCF, DOS, spectroscopic steps & Default for all production steps \\
+\begin{center}
+\begin{tabularx}{\linewidth}{l >{\raggedright\arraybackslash}X}
+\toprule
+\thead Column & Content \\
+\midrule
+\cmd{label}  & the material's label \\
+\cmd{layout} & \cmd{ht}, \cmd{slurm}, \cmd{local} (\cmd{-} for a missing name) \\
+\cmd{path}   & its folder \\
+\cmd{steps}  & \cmd{step:status} for each step (\cmd{conv:encut}, \cmd{conv:kpoints}, \cmd{relax}, \dots) and notes \\
+\cmd{action} & \cmd{ok}, a report-only name, or \cmd{<cause> -> <steps redone>}; \cmd{REVIEW} in front when held back \\
+\cmd{script} & its repair script, if any \\
 \bottomrule
 \end{tabularx}
-
-\medskip
-\textbf{kpra} (k-points per reciprocal atom) $= N_x N_y N_z \times N_\mathrm{atoms}$.
-Given a target kpra and the reciprocal lattice vectors $\mathbf{b}_i^*$
-(columns of $2\pi(\mathbf{A}^{-1})^\top$), the mesh follows from one formula,
-with no search:
-
-\[
-  N_i = \mathrm{round}_{2}\bigl(s \, |\mathbf{b}_i^*|\bigr), \qquad
-  s = \left(\frac{N_k}{|\mathbf{b}_1^*||\mathbf{b}_2^*||\mathbf{b}_3^*|}\right)^{1/3},
-  \quad N_k = \mathrm{kpra}/N_\mathrm{atoms},
-\]
-
-where $\mathrm{round}_2$ rounds to the nearest \emph{even} integer (minimum 2),
-so that BZ boundary points ($k = 1/2$) are on the mesh.  Because every axis
-uses the same $s$, the spacing $|\mathbf{b}_i^*|/N_i$ is the same along all
-three axes up to that rounding (a uniform mesh), axes with equal
-$|\mathbf{b}_i^*|$ get equal $N_i$, and $N_1N_2N_3N_\mathrm{atoms}\approx$ kpra.
-For hexagonal lattices ($a=b$, $\gamma=120^\circ$, detected from the POSCAR)
-the two in-plane $N$ are rounded to multiples of 6 ($6,12,18,\dots$) so that
-$K$ and $M$ lie on the mesh.  For 2-D slabs the same formula is used in the
-plane (square root instead of cube root) and $N_z = 1$, so the in-plane mesh carries the
-whole target.  The first line of each generated KPOINTS reports the mesh and
-the kpra actually reached.  Any integer may be given instead of
-\texttt{coarse}/\texttt{fine} (\texttt{KMESH\_DENSITY: 3000}); the relaxation
-has its own density (\texttt{RELAX\_KMESH\_DENSITY}, default coarse).
-
-\textbf{DOS and LOBSTER meshes}: always $2N_x \times 2N_y \times 2N_z$ (the
-SCF ratios are preserved; a 2-D slab keeps $N_z = 1$), ensuring denser
-sampling for accurate spectral features and smoother COHP/COBI/COOP curves.
-Because the LOBSTER NSCF runs with \texttt{ISYM}=0 there is no symmetry
-reduction, so doubling in 3-D multiplies its k-point count by ${\sim}8$; edit
-\texttt{08\_lobster/KPOINTS} if that is too costly.  The DFPT mesh is forced
-to match the SCF mesh exactly.
-
-An explicit \texttt{KMESH: N1 N2 N3} entry overrides the automatic density
-for all steps, and a \texttt{KPOINTS} block (Section~\ref{sec:kpoints-block})
-overrides everything for the step it names.
-
-% ============================================================
-\section{Advanced INCAR Control}
-\label{sec:incar}
-% ============================================================
-
-\textbf{Any VASP keyword can be specified explicitly} --- nothing is
-hard-wired.  Three routes, in increasing precedence:
-(1)~an \texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in the
-instructions file (global or per-step);
-(2)~the agents' \texttt{--incar} command-line option;
-(3)~direct editing --- in the GUI every generated INCAR is editable per
-step (Workflow tab $\to$ \emph{Edit files}, with an automatic
-\texttt{.bak} backup), and of course the files on disk can be edited
-before running.  This section covers the first two plus
-\textbf{constant-pressure relaxation}.
-
-\subsection{Raw INCAR passthrough}
-\label{sec:incar-raw}
-
-Place literal INCAR lines --- in ordinary VASP syntax --- inside an
-\texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in your
-\texttt{instructions.txt}.  They are merged into the generated INCAR(s):
-
-\begin{lstlisting}
-INCAR:                  # global block -- applies to every step
-   LREAL  = Auto
-   ALGO   = Fast
-   NELMIN = 6
-END_INCAR
-\end{lstlisting}
-
-A tag that the agent already writes is \textbf{overwritten in place}
-(so \texttt{ALGO = Fast} above replaces the default \texttt{ALGO =
-Normal}); any tag the agent does not normally emit is appended under a
-clearly labelled \texttt{\# User INCAR overrides} section, so nothing is
-silently lost.
-
-To target a single step, name it on the header line.  Recognised steps
-are \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
-\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}:
-
-\begin{lstlisting}
-INCAR scf:              # applies only to 02_scf
-   EDIFF = 1E-8
-   SIGMA = 0.10
-END_INCAR
-\end{lstlisting}
-
-\begin{notebox}
-Precedence: a \emph{per-step} block beats the \emph{global} block, and
-both beat the agent's generated defaults.  This is the recommended way to
-set tags the parser has no dedicated keyword for (e.g.\ \texttt{LMAXMIX},
-\texttt{ADDGRID}, \texttt{LVTOT}, \texttt{IVDW}, \texttt{AMIX}).
-Full-line \texttt{\#} comments in the instructions file are ignored by
-the parser, so a task keyword inside a comment does not enable that task.
-\end{notebox}
-
-\subsection{Explicit KPOINTS blocks}
-\label{sec:kpoints-block}
-
-The same block syntax writes a complete KPOINTS file, \emph{unchanged}, for
-a step:
-
-\begin{lstlisting}
-KPOINTS scf:            # or KPOINTS_SCF:
-   my SCF mesh          # first line = KPOINTS comment
-   0
-   Gamma
-   9 9 5
-   0 0 0
-END_KPOINTS
-\end{lstlisting}
-
-Steps: \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
-\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}; an
-unnamed \texttt{KPOINTS:} block applies to every step except the band path.
-Explicit blocks (INCAR and KPOINTS alike) \textbf{override every other
-setting}: keywords, \texttt{KMESH}, the density tier and the automatic
-\texttt{KPAR}/\texttt{NCORE}.  Steps derived from the SCF mesh --- DOS and
-LOBSTER ($2\times$), DFPT and Wannier90 ($1\times$) --- follow an explicit
-SCF block.  A marker file \texttt{.explicit\_kpoints} is left beside such a
-KPOINTS so that the convergence phase-2 k-mesh patching never overwrites
-it.  \texttt{KPAR} and \texttt{NCORE} written in an INCAR block also steer the
-companion value (e.g.\ \texttt{KPAR = 2} on 16 ranks gives \texttt{NCORE = 2}).
-In the GUI both block kinds are entered under
-\emph{Setup $\to$ Advanced --- explicit INCAR / KPOINTS}.
-
-\subsection{Relaxation $\to$ SCF hand-off}
-\label{sec:handoff}
-
-The relaxation starts from scratch (\texttt{ISTART = 0}, \texttt{ICHARG = 2})
-and writes \texttt{WAVECAR} and \texttt{CHGCAR}.  \texttt{02\_scf/copy\_from\_relax.sh}
-copies the relaxed geometry and the CHGCAR; if the SCF k-mesh, spin and cutoff
-equal the relaxation's it also copies the WAVECAR and the SCF starts from both
-(\texttt{ISTART = 1}, \texttt{ICHARG = 1}), otherwise it starts from the CHGCAR
-alone (\texttt{ISTART = 0}, \texttt{ICHARG = 1}) because wavefunctions on
-different k-meshes are not interchangeable.  The decision is made at run time,
-so k-meshes edited or patched after generation are handled.  Putting
-\texttt{ISTART} or \texttt{ICHARG} in an \texttt{INCAR scf:} block disables the
-mechanism.
-
-\subsection{Command-line INCAR overrides (\texttt{--incar})}
-\label{sec:incar-cli}
-
-Both \texttt{vasp-agent.py} and \texttt{vasp-agent-slurm.py} accept a
-repeatable \texttt{--incar} option that injects explicit VASP tags at
-invocation time, without touching the instructions file:
+\end{center}
 
 \begin{lstlisting}[language=bash]
-./vasp-agent.py -i instructions.txt -s POSCAR \
-    --incar "ALGO=Fast; NELMIN=6" \      # every step
-    --incar "scf:NBANDS=64"              # 02_scf only
+awk -F'\t' 'NR>1 {split($5,a," "); n[a[1]]++} END {for (k in n) print k, n[k]}' diagnosis.tsv
+awk -F'\t' '$5 ~ /^REVIEW/ {print $1}' diagnosis.tsv
 \end{lstlisting}
 
-Multiple tags in one option are separated by \texttt{;} (not commas ---
-values such as \texttt{MAGMOM} may contain commas).  An optional step
-prefix (\texttt{relax}/\texttt{scf}/\texttt{bands}/\texttt{dos}/%
-\texttt{wannier}/\texttt{dfpt}/\texttt{phonons}/\texttt{lobster})
-targets a single step.  Command-line tags are applied \emph{after} the
-instructions-file blocks, so they win on conflicts.
-
-\begin{notebox}
-Exceptions: physics-critical guards are re-imposed regardless of
-overrides --- \texttt{ISYM=2} and \texttt{KPAR=NCORE=1} in
-\texttt{06\_dfpt}, and the symmetry-off \texttt{ISYM} in
-\texttt{08\_lobster}.
-\end{notebox}
-
-\subsection{Constant-pressure relaxation}
-\label{sec:pressure}
-
-A single \texttt{PRESSURE} line turns the relaxation into a
-constant-pressure optimisation: the agent forces \texttt{ISIF = 3} (cell
-shape + volume + ions) and \texttt{IBRION = 2}, and imposes the target
-pressure through \texttt{PSTRESS}.
-
-\begin{lstlisting}
-PRESSURE: 10 GPa        # also accepted: "5 kbar", "constant pressure 8"
-\end{lstlisting}
-
-VASP's \texttt{PSTRESS} tag is in \textbf{kBar} (1~GPa $=$ 10~kBar).  The
-agent converts automatically; if no unit is given, \textbf{GPa is
-assumed}.  The resulting \texttt{01\_relax/INCAR} reads, e.g.:
-
-\begin{lstlisting}
-# Constant-pressure relaxation @ 10 GPa  (PSTRESS = 100 kBar)
-IBRION = 2
-ISIF   = 3
-NSW    = 100
-EDIFFG = -0.01
-PSTRESS = 100   ! external pressure in kBar (10 GPa)
-\end{lstlisting}
-
-\begin{tipbox}
-\texttt{PSTRESS} adds the $PV$ term so the relaxed cell sits at the
-requested external pressure.  Use a tight \texttt{EDIFFG} and a
-well-converged \texttt{ENCUT}; the Pulay stress error grows at high
-pressure, so verify with a higher \texttt{ENCUT} before trusting the
-equilibrium volume.
-\end{tipbox}
-
-% ============================================================
-\section{K-Path for Band Structure}
-\label{sec:kpath}
-% ============================================================
-
-\subsection{Auto-detection (recommended)}
-
-Omit the path in \texttt{instructions.txt} or leave the field blank in
-the GUI:
-
-\begin{lstlisting}
-Tasks: band structure        # no "along ..." -> auto-detect from POSCAR
-\end{lstlisting}
-
-Since v1.6 the generator first determines the \emph{actual space group}
-of the POSCAR with spglib (via pymatgen's
-\texttt{KPathSetyawanCurtarolo}) and uses the standard
-Setyawan--Curtarolo high-symmetry path for that space group.  Every
-high-symmetry point is transformed through Cartesian reciprocal space
-into the reciprocal basis of \emph{this} POSCAR, so the path is correct
-for the actual cell used in the SCF regardless of orientation or
-setting.
-
-If spglib or pymatgen is not installed (or the symmetry analysis
-fails), the generator falls back to the geometric classifier below: it
-reads the POSCAR lattice vectors, computes cell lengths and angles, and
-selects a default path by Bravais type.  2-D structures always use the
-geometric route so the in-plane path is preserved.
-
-\begin{tabularx}{\linewidth}{@{}llX@{}}
-\thead
-Type & Detection criterion & Default path \\ \midrule
-cF (FCC) & $a{=}b{=}c$, angles $\approx 60^\circ$
-         & G-X-W-K-G-L-U-W \\
-cI (BCC) & $a{=}b{=}c$, angles $\approx 109.5^\circ$
-         & G-H-N-G-P-H \\
-cP (cubic) & $a{=}b{=}c$, $90^\circ$
-          & G-X-M-G-R-X \\
-hP (hexagonal) & $a{\approx}b$, $\gamma{=}120^\circ$
-              & G-M-K-G-A-L-H-A \\
-tP (tetragonal) & $a{\approx}b{\neq}c$, $90^\circ$
-               & G-X-M-G-Z-R-A-Z \\
-oP (orthorhombic) & $90^\circ$, $a{\neq}b{\neq}c$
-                 & G-X-S-Y-G-Z-U-R-T-Z \\
-rP (rhombohedral) & $a{=}b{=}c$, equal angles
-                 & G-T-F-G-L \\
-mP (monoclinic) & $\alpha{=}\gamma{=}90^\circ$, $\beta{\neq}90^\circ$
-               & G-Y-A-Z-G-B-D \\
-\bottomrule
-\end{tabularx}
-
-\begin{notebox}
-For \textbf{conventional} FCC or BCC cells (right angles, 4 or 2 atoms),
-auto-detection returns the cubic (cP) path.
-Use the \textbf{primitive} cell for an unfolded FCC/BCC band structure ---
-the primitive FCC cell has angles $\approx 60^\circ$ and is recognised
-automatically.
-\end{notebox}
-
-The detection route appears in the KPOINTS comment:
-\begin{lstlisting}
-Line-mode KPOINTS  [spglib ... -- auto-detected]   # spglib route
-Line-mode KPOINTS  [FCC -- auto-detected]          # geometric fallback
-\end{lstlisting}
-
-\subsection{Manual override}
-
-\begin{lstlisting}
-Tasks: band structure along G-X-W-K-G-L
-\end{lstlisting}
-
-\begin{tabularx}{\linewidth}{@{}lllX@{}}
-\thead
-Label & Coords & Use & \\ \midrule
-G & (0, 0, 0) & all & $\Gamma$ \\
-M & (0.5, 0.5, 0) & cubic, tet & (0.5, 0, 0) in hexagonal \\
-K & (1/3, 1/3, 0) & hexagonal & \\
-R & (0.5, 0.5, 0.5) & cubic & \\
-Z & (0, 0, 0.5) & general & \\
-A & (0, 0, 0.5) & hex, tet & \\
-L & (0.5, 0, 0.5) & hexagonal & \\
-H & (1/3, 1/3, 0.5) & hexagonal & \\
-S & (0.5, 0.5, 0) & orthorhombic & \\
-W & (0.5, 0.25, 0.75) & \textbf{FCC primitive} & \\
-P & (0.25, 0.25, 0.25) & \textbf{BCC primitive} & \\
-N & (0, 0, 0.5) & \textbf{BCC primitive} & \\
-\bottomrule
-\end{tabularx}
-
-% ============================================================
-\section{DOS Projections}
-% ============================================================
-
-All of the following forms are accepted:
-
-\begin{lstlisting}
-DOS (projected on Mo-d and S-p)
-DOS with projections on Ni:d and Ni:s
-DOS with projection on Fe-d and O-p
-\end{lstlisting}
-
-Orbital channels: \texttt{s}, \texttt{p}, \texttt{d}, \texttt{f}.
-Separator is either \texttt{-} or \texttt{:}.
-Sumo generates an orbital-resolved PDF in \texttt{analysis/}.
-
-% ============================================================
-\section{ELF Bond Profiles}
-% ============================================================
-
-If an SCF calculation writes an \texttt{ELFCAR} (electron localization
-function, requested with \texttt{LELF = .TRUE.} --- the high-throughput
-driver sets this automatically), the utility \texttt{elf\_bonds.py} plots ELF
-along each non-equivalent nearest-neighbour bond, sampled from one atom centre
-to the other:
-
-\begin{lstlisting}[language=bash]
-./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]
-\end{lstlisting}
-
-It parses the \texttt{ELFCAR} grid directly (only numpy + matplotlib), groups
-bonds by element pair and length (rounded to 0.01~\AA{}) to pick the
-non-equivalent ones, and interpolates ELF along each bond with periodic
-boundary conditions.  Output is \texttt{FORMULA\_elf\_bonds.png/pdf} (the prefix
-defaults to the reduced formula, e.g.\ \texttt{MoSe2\_elf\_bonds.pdf}; override
-with \texttt{--out}) showing ELF vs.\ distance along the bond, with the
-ELF~$=0.5$ homogeneous-electron-gas reference marked.  \texttt{analyze.sh}
-runs it automatically when \texttt{02\_scf/ELFCAR} is present, and the GUI
-Results tab shows the same plot whenever the SCF wrote an \texttt{ELFCAR}.
-
-\begin{tipbox}
-Reading the profile: ELF is high (near~1) where electrons are paired and
-localized.  A covalent bond therefore shows an ELF \emph{maximum} in the
-bonding region \emph{between} the atoms (e.g.\ Si--Si $\approx 0.95$ at
-mid-bond), not at the nuclei.  Because VASP builds the \texttt{ELFCAR} from the
-pseudo (valence) density, the value \emph{at} an atom centre is a PAW artifact
---- often low, even $\approx 0$ for heavy atoms --- so read the bonding region,
-not the endpoints.
-\end{tipbox}
-
-\begin{notebox}
-VASP does \emph{not} compute ELF for non-collinear / spin-orbit runs
-(\texttt{LSORBIT}/\texttt{LNONCOLLINEAR}); it prints
-\texttt{"WARNING: ELF not implemented for non collinear case"} and writes an
-all-zero \texttt{ELFCAR}.  \texttt{elf\_bonds.py} detects this and reports it
-rather than producing a blank plot --- re-run the SCF \emph{without} SOC to get
-ELF.
-\end{notebox}
-
-\subsection{Two-step ELF (\texttt{ELF: separate})}
-\label{sec:elf-separate}
-
-\texttt{LELF} only works with KPAR${}={}$1, which removes the k-point
-parallelism that makes an SCF on a small cell fast.  With
-\begin{lstlisting}
-ELF: separate        # or  ELF: two-step
-\end{lstlisting}
-the ELF is produced in two steps inside \texttt{02\_scf}, in the same job:
+\paragraph{\cmd{fix/<label>.sh}} --- a stand-alone bash script; it can be run on its own.
+In order it:
 \begin{enumerate}
-\item The SCF runs normally --- automatic KPAR/NCORE, no \texttt{LELF},
-  \texttt{LWAVE}/\texttt{LCHARG=.TRUE.}.
-\item \texttt{run\_elf.sh} (called by \texttt{run.sh} after VASP) copies the
-  converged \texttt{WAVECAR}, \texttt{CHGCAR}, \texttt{POSCAR},
-  \texttt{KPOINTS} and \texttt{POTCAR} into \texttt{02\_scf/elf/} and runs
-  VASP there with \texttt{02\_scf/elf/INCAR}: the SCF INCAR (same ENCUT,
-  smearing, MAGMOM, $+U$, user overrides) plus \texttt{ISTART=1},
-  \texttt{ICHARG=1}, \texttt{LELF=.TRUE.}, \texttt{LWAVE}/\texttt{LCHARG=.FALSE.},
-  KPAR${}={}$1 and NCORE from the rule for one k-group.  \texttt{NBANDS} is
-  set at run time to the value the SCF used (read from its \texttt{OUTCAR}),
-  so the WAVECAR is read as is.  Starting from converged wavefunctions, this
-  restart needs only a few electronic steps.
-\item \texttt{ELFCAR} is copied back to \texttt{02\_scf/ELFCAR}, where
-  \texttt{analyze.sh}, \texttt{elf\_bonds.py} and the GUI look for it; the
-  copied WAVECAR/CHGCAR in \texttt{elf/} are deleted.
+  \item records the diagnosis and the error lines in its header;
+  \item \textbf{stops} if the material has jobs in the queue, or if any of its OUTCARs
+        or \cmd{lobster.out} changed since the diagnosis (so it is safe to run late, or twice);
+  \item applies the INCAR changes and moves the old outputs aside;
+  \item submits the jobs (or runs them, for a local project);
+  \item leaves a marker \cmd{.submitted/<label>} in the output folder.
 \end{enumerate}
-If the SCF left no WAVECAR/CHGCAR, the ELF pass is skipped with a message.
-The DOS, bands and LOBSTER steps still read \texttt{02\_scf/CHGCAR}, which the
-ELF pass does not touch.  \texttt{ht-mp-scf.py} uses this mode by default;
-write \texttt{ELF: on} in \texttt{instructions.txt} for the old single run.
 
-% ============================================================
-\section{Convergence Tests}
-% ============================================================
+\paragraph{\cmd{submit_all_fixes.sh}} --- runs every repair script in turn; skips those
+with a \cmd{.submitted} marker; waits while you have \cmd{MAX_QUEUED} or more jobs
+in the queue (all your jobs count); lists the held-back \cmd{unknown} scripts at the end
+as commented-out lines.
 
-\begin{lstlisting}
-# Range (auto-steps)
-Convergence: Test k-points from 6x6x1 to 18x18x1    # 2D material
-             Test k-points from 6x6x6 to 12x12x12   # 3D material
-             ENCUT 400-600 eV
-
-# Explicit mesh list
-Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9
-
-# ENCUT: all of these are equivalent (step defaults to 50 eV)
-Test ENCUT 350-650      Test ENCUT 350 650     Test ENCUT 350 to 650
-Test ENCUT 350,650      Test ENCUT 350:50:650  # start:step:stop
-\end{lstlisting}
-
-The \texttt{start:step:stop} form is the only one that sets the step; the
-others sweep in 50~eV increments.  A convergence line that cannot be parsed
-now emits a \texttt{[warn]} on stderr rather than silently generating no
-tests at all.
-
-Convergence INCARs are trimmed to what the test actually reads --- the total
-energy in \texttt{OUTCAR}.  \texttt{LWAVE}, \texttt{LCHARG}, \texttt{LORBIT}
-and \texttt{LELF} are dropped, which avoids writing a full WAVECAR per point
-and, because \texttt{LELF} pins KPAR to 1, restores k-point parallelism for
-the sweep.
-
-Results in \texttt{00\_convergence/kpoints/} and
-\texttt{00\_convergence/encut/}.
-
-\begin{lstlisting}[language=bash]
-./run_convergence.sh          # workstation
-./submit_convergence.sh       # SLURM
-./analyze_convergence.sh      # plots: energy / pressure / forces
-\end{lstlisting}
-
-\subsection{Shifted test structure}
-
-The POSCAR used in \texttt{00\_convergence} has \textbf{atom 1 displaced
-by $(0.01,\,0.02,\,0.03)$\,\AA{} (Cartesian)} so that the force on it is
-non-zero and its convergence can be tracked --- at the equilibrium
-(high-symmetry) positions the forces would vanish identically and the
-force panel would be meaningless.  The displacement is converted through
-the lattice for Direct-mode POSCARs.  All production steps
-(\texttt{01\_relax}, \texttt{02\_scf}, \dots) use the \emph{original,
-unshifted} positions.
-
-\subsection{Automatic parameter selection}
-
-After the runs, \texttt{00\_convergence/choose\_params.py} (invoked by
-\texttt{run\_convergence.sh}, \texttt{analyze\_convergence.sh}, and the
-phase-2 scripts) selects the smallest ENCUT and k-mesh from which every
-subsequent change stays below
-\[
-  \max_i \bigl|\Delta F_i^{\text{atom 1}}\bigr| < 5~\text{meV/\AA}
-  \quad\text{and}\quad
-  \max_i \bigl|\Delta \sigma_{ii}\bigr| < 0.5~\text{kbar},
-\]
-and writes the result to \texttt{00\_convergence/converged\_params.txt}.
-Phase 2 (\texttt{run\_calculations.sh}, \texttt{submit\_calculations.sh},
-and the GUI form) offers these values as defaults; when run
-\emph{non-interactively} --- e.g.\ a convergence test automatically
-followed by the SCF in a chained/nohup run --- they are applied without
-prompting.  If the criteria are not met within the tested range, the
-largest tested value is used and a \texttt{NOT CONVERGED} warning is
-issued.  Thresholds can be overridden:
-\texttt{choose\_params.py --ftol 3 --ptol 0.2}.
-
-% ============================================================
-\section{Parallelization}
-% ============================================================
-
-\subsection{Auto-defaults}
-
-When KPAR/NCORE are not specified they are set \emph{per step} from two
-numbers only: the total MPI rank count $N$ and that step's irreducible
-k-point count $n_k$ (the spglib reduction of the step's own KPOINTS; the
-LOBSTER NSCF runs \texttt{ISYM=0}, so its full mesh counts).
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Quantity & Rule \\ \midrule
-KPAR & the largest divisor of $N$ that is ${}\le n_k$.  k-point groups scale
-  almost perfectly, so use as many as there are k-points; a divisor, so no rank
-  is idle. \\
-NCORE & the largest divisor of $r = N/\mathrm{KPAR}$ (ranks per k-group) that
-  is ${}\le \sqrt{r}$, VASP's own recommendation (NCORE${}=1$ for 1--3 ranks
-  per group). \\
-\bottomrule
-\end{tabularx}
-
-Examples with $N=40$: $n_k \ge 40 \Rightarrow$ KPAR${}=40$, NCORE${}=1$;
-$n_k=20 \Rightarrow 20/1$; $n_k=7 \Rightarrow 5/2$; $n_k=1 \Rightarrow 1/5$.
-If only one of the pair is given (instruction key, per-step key or an
-\texttt{INCAR} block), it is kept --- snapped down to a divisor of $N$ --- and
-the other is derived from it: a fixed KPAR gets NCORE from the rule above; a
-fixed NCORE gets the largest KPAR${}\le n_k$ that leaves a multiple of NCORE
-ranks per group.  Priority, highest first: ELF pin (KPAR${}=1$) $>$
-\texttt{INCAR} block $>$ per-step key (\texttt{SCF\_KPAR}, \ldots) $>$ global
-\texttt{KPAR}/\texttt{NCORE} $>$ the rule.
-
-Three steps opt out: \textbf{DFPT} is always KPAR${}={}$NCORE${}={}$1 (linear
-response supports neither); \textbf{phonons} and \textbf{Wannier90} default to
-KPAR${}={}$1 (independent supercell jobs / the Wannier interface), with NCORE
-from the rule.  With 40 ranks and the dense meshes of a small cell
-(${\le}\,20$ atoms, hundreds of irreducible k-points), KPAR${}=40$,
-NCORE${}=1$ is therefore the expected, correct result; it costs one copy of
-the wavefunctions per rank, which is small for such cells.
-
-\begin{notebox}
-\texttt{LELF=.TRUE.} requires KPAR${}={}$1.  With \texttt{ELF: on} (the
-default) the SCF itself runs LELF and is pinned to KPAR${}={}$1.  With
-\texttt{ELF: separate} the SCF keeps the automatic KPAR and a short
-KPAR${}={}$1 restart writes the ELFCAR afterwards
-(Section~\ref{sec:elf-separate}).  Convergence tests drop \texttt{LELF}
-automatically.
-\end{notebox}
-
-\subsection{Manual overrides}
-
-\begin{lstlisting}
-MPI: 128        KPAR: 4        NCORE: 8
-
-# Per-step (take priority over globals)
-SCF_KPAR: 4     BANDS_KPAR: 1     DOS_KPAR: 8
-SCF_NCORE: 8    BANDS_NCORE: 16   DOS_NCORE: 8
-RELAX_KPAR: 2   PHONONS_KPAR: 1   # DFPT is always KPAR=1, NCORE=1
-\end{lstlisting}
-
-% ============================================================
-\section{SLURM Cluster Settings}
-% ============================================================
-
-\subsection{profiles/slurm.json}
-
-\begin{lstlisting}
-{
-  "vasp_std": "vasp_std",  "vasp_ncl": "vasp_ncl",
-  "mpi_cmd":  "srun",
-  "modules":  ["intel/2021", "impi/2021", "vasp/6.3.2"],
-  "slurm": {
-    "partition":       "standard",
-    "nodes":           2,
-    "ntasks_per_node": 64,
-    "time":            "12:00:00",
-    "account":         "mygroup"
-  }
-}
-\end{lstlisting}
-
-\subsection{Per-project overrides (in instructions.txt)}
-
-\begin{lstlisting}
-NODES: 4     NTASKS_PER_NODE: 32     PARTITION: gpu     ACCOUNT: myallocation
-RELAX_WALLTIME: 12:00:00      # one step
-WALLTIME: 48:00:00            # every step (instead of the per-step defaults)
-\end{lstlisting}
-
-\subsection{Walltime per step and automatic continuation}
-\label{sec:slurm-time}
-
-Each step is its own SLURM job with its own time limit, so short steps get
-short limits (and better queue priority).  Defaults:
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Step & Walltime \\ \midrule
-\texttt{01\_relax} & 08:00:00 \\
-\texttt{02\_scf} & 04:00:00 \\
-\texttt{03\_bands}, \texttt{04\_dos} & 02:00:00 \\
-\texttt{08\_lobster} & 04:00:00 (symmetry-off NSCF over the full mesh, plus the
-  LOBSTER projection) \\
-others & the profile time \\
-\bottomrule
-\end{tabularx}
-
-Priority: \texttt{<STEP>\_WALLTIME} $>$ \texttt{WALLTIME} $>$ these defaults
-$>$ \texttt{profiles/slurm.json}.  In \texttt{ht-semimetals.py} directories
-the same defaults sit in \texttt{env.sh} (\texttt{TIME\_RELAX} \ldots;
-\texttt{retune.sh -{}-time-relax \ldots}); that is the only place to change
-them --- the per-material \texttt{instructions.txt} carry no walltime.
-
-\textbf{A step that reaches its limit is continued, not lost.}  Every step
-script asks SLURM for a warning 15~min before the limit
-(\texttt{-{}-signal=B:USR1@900}).  On the warning it writes a
-\texttt{STOPCAR} (\texttt{LSTOP} for a relaxation: stop after the current
-ionic step; \texttt{LABORT} otherwise), lets VASP finish cleanly and requeues
-the job with \texttt{scontrol requeue} --- same job id, so jobs chained after
-it with \texttt{afterok} keep waiting.  The requeued job then
-\begin{itemize}
-  \item \textbf{relaxation}: continues from the \texttt{CONTCAR} (or, if that
-    is empty, from the last \texttt{XDATCAR} frame, cell included);
-  \item \textbf{LOBSTER}: skips the NSCF if it had finished and reruns only
-    the LOBSTER binary;
-  \item other steps: rerun.
-\end{itemize}
-The interrupted \texttt{OUTCAR}/\texttt{XDATCAR} are kept as
-\texttt{*.timeout0}, \texttt{*.timeout1}, \ldots  If requeueing is not
-allowed on the cluster, the job resubmits a copy of itself with the same
-name and time limit and re-points dependent jobs to it.  At most
-\texttt{VF\_MAX\_RESTARTS} (default 5) continuations per step.
-
-
-% ============================================================
-\section{Wannier90}
-\label{sec:wannier}
-% ============================================================
-
-\begin{lstlisting}
-Tasks: Wannier90 wannierization
-
-WANNIER_NUM_WANN: 8
-WANNIER_PROJ: Ga:s;As:p
-WANNIER_EWIN: -5.0 to 15.0
-\end{lstlisting}
-
-The agent generates \texttt{05\_wannier/wannier90.win} with the NSCF
-k-mesh and projection block.  After the NSCF run, execute
-\texttt{wannier90.x} from the \texttt{05\_wannier/} directory.
-
-% ============================================================
-\section{Born Charges, Dielectric \& Piezoelectric Tensors (DFPT)}
-\label{sec:dfpt}
-% ============================================================
-
-The \texttt{DFPT} task creates \texttt{06\_dfpt}, which computes Born
-effective charges $Z^{*}$, the macroscopic dielectric tensor, and the
-piezoelectric stress tensor from the converged SCF charge density.
-
-Two routes are generated automatically depending on the method:
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Method & Route \\ \midrule
-PBE, PBEsol, LDA, AM05 (no SOC) &
-  Linear response: \texttt{IBRION=8}, \texttt{LEPSILON=.TRUE.} \\
-SOC, HSE06, or R2SCAN &
-  Finite field (PEAD): \texttt{IBRION=6}, \texttt{LCALCEPS=.TRUE.}
-  --- VASP's DFPT is not implemented for noncollinear magnetism,
-  hybrids, or meta-GGAs.  Requires an insulating system. \\
-\bottomrule
-\end{tabularx}
-
-\begin{notebox}
-Both routes support neither k-point nor band parallelisation:
-\textbf{KPAR and NCORE are forced to 1} in the generated INCAR
-(overriding any global or per-step setting).  The full MPI task count
-is still used for plane-wave parallelisation.
-Likewise \textbf{ISYM=2 is enforced} (symmetry imposed): perturbation
-theory relies on the symmetry-reduced perturbation set, so a
-symmetry-off \texttt{ISYM=0}/\texttt{$-$1} --- e.g.\ from a global
-\texttt{INCAR:} override block intended for the LOBSTER/NSCF steps ---
-is never inherited by \texttt{06\_dfpt}.
-\end{notebox}
-
-\texttt{copy\_from\_scf.sh} (invoked by \texttt{run.sh}) pulls
-\texttt{WAVECAR} and \texttt{CHGCAR} from \texttt{02\_scf} at run time.
-If \texttt{02\_scf} has been converted in place for LOBSTER
-(\texttt{ISYM=0}/\texttt{$-$1} in its INCAR, as done by the
-high-throughput \texttt{run\_scf\_for\_lobster.sh}), the
-\texttt{WAVECAR} copy is skipped --- it holds the full, unsymmetrised
-k-mesh, which the ISYM=2 run cannot restart from --- and VASP
-regenerates the orbitals from the \texttt{CHGCAR}, which the LOBSTER
-conversion (a fixed-charge NSCF with \texttt{LCHARG=.FALSE.}) leaves
-untouched.  If the symmetry-off INCAR is \emph{not} a fixed-charge
-NSCF, a warning is printed that the \texttt{CHGCAR} itself may stem
-from a symmetry-off SCF and a symmetric SCF should be re-run first.
-
-\texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
-writes:
+\subsection{Limitations}
 
 \begin{itemize}
-  \item \texttt{BORN} --- phonopy NAC format: electronic
-        $\varepsilon_{\infty}$ + $Z^{*}$ per atom.
-  \item \texttt{born\_charges.txt} --- human-readable summary shown in
-        the GUI Results tab: electronic (ion-clamped)
-        $\varepsilon_{\infty}$, ionic contribution, total static
-        $\varepsilon_{0}=\varepsilon_{\infty}+\varepsilon_{\mathrm{ion}}$;
-        $Z^{*}$ tensors labelled by element; an acoustic-sum-rule check
-        ($\sum_{\mathrm{ions}} Z^{*}$ should vanish --- a large residual
-        indicates an under-converged k-mesh or EDIFF); and the
-        piezoelectric stress tensors $e$ (C/m$^2$, clamped-ion, ionic,
-        and relaxed-ion total; meaningful only for non-centrosymmetric
-        crystals).
+  \item Jobs are recognised by their job names (\cmd{<material>_<step>}, or the name in
+        the step's \cmd{run.sh}).  Jobs submitted under other names are not seen, and a failure
+        cause is then taken from the log files only.
+  \item Only jobs since \opt{since} are known to the tool.  Without a job record a time-out is
+        still recognised from the log, but the walltime is doubled from the configured value.
+  \item A second out-of-memory failure with KPAR already $\leq$ \opt{kpar-max} is resubmitted
+        with the same KPAR; diagnose again with a smaller \opt{kpar-max}.
+  \item A material that fails again with the same cause after one repair (e.g.\
+        \cmd{scf_nelm}) needs a look by hand.
+  \item \cmd{quota} and \cmd{mpi_init} are resubmitted unchanged: free disk space first;
+        node failures are usually transient.
+  \item \cmd{05_wannier} and \cmd{07_phonons} are not checked; a convergence-test range that
+        was too small is reported but not widened.
+  \item Two runs holding the same material use the same job names (\cmd{<material>_<step>}), so a job of one
+        makes the material show as \cmd{queued} in both.
+  \item Repair scripts use GNU \cmd{sed} and \cmd{stat}: they are meant for Linux clusters.
 \end{itemize}
 
-\texttt{DFPT\_EDIFF} in \texttt{instructions.txt} tightens the
-electronic convergence (default \texttt{1E-8}).
-
-\subsection{Example}
-
-\begin{lstlisting}
-Project: GaAs
-Methods: PBE functional
-Tasks: relaxation, SCF, DFPT Born charges and dielectric
-DFPT_EDIFF: 1E-8
-MPI: 16
-\end{lstlisting}
-
-In the GUI, tick \textbf{Born Charges \& Dielectric Constant (DFPT)} on
-the Setup tab (the DFPT EDIFF field is optional); after running
-\texttt{06\_dfpt} from the Workflow tab, the full summary appears in
-the \textbf{Born charges} panel of the Results tab.  With SOC, HSE06
-or R2SCAN selected under Methods, the finite-field INCAR is generated
-automatically --- no extra input is needed.  For LO-TO splitting in
-phonon spectra, combine with the phonon task as in the GaAs worked
-example (Section~\ref{sec:example-gaas-nac}).
-
 % ============================================================
-\section{Phonons (phonopy)}
-% ============================================================
-
-\begin{lstlisting}
-Tasks: phonons lattice dynamics
-
-PHONONS_DIM: 2 2 2
-PHONONS_MESH: 20 20 20
-PHONONS_DISP: 0.01
-PHONONS_BAND: G M K G A
-PHONONS_NAC: FALSE      # disable non-analytic correction
-\end{lstlisting}
-
-\begin{notebox}
-For the non-analytic correction (important for polar materials), include
-\texttt{DFPT} in your task list so Born effective charges are computed.
-\end{notebox}
-
-% ============================================================
-\section{LOBSTER Bonding Analysis (COHP / COBI / COOP)}
-\label{sec:lobster}
-% ============================================================
-
-Adding \texttt{LOBSTER COHP/COBI analysis} (keywords: \texttt{lobster},
-\texttt{cohp}, \texttt{cobi}, \texttt{coop}, \texttt{bonding}) to the
-task list creates \texttt{08\_lobster}: a symmetry-off NSCF that reads
-\texttt{02\_scf/CHGCAR}, followed by a run of the \texttt{lobster}
-binary.
-
-\begin{itemize}
-  \item \textbf{ISYM=0 is required} --- a symmetrised k-mesh gives
-        unusable COHP/ICOHP values (wrong sign, errors above 100\%).
-        The generated INCAR sets it automatically.
-        With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
-        coupling breaks time-reversal symmetry, which ISYM=0 would still
-        assume.
-  \item \texttt{NBANDS} is auto-set to at least the LOBSTER
-        basis-function count; \texttt{LMAXMIX} is chosen from the
-        elements (6 for $f$, 4 for $d$, 2 for $sp$).
-  \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
-        \texttt{site.env} (default \texttt{lobster-5.1.0-OSX}); it can
-        be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
-\end{itemize}
-
-\begin{lstlisting}
-Project: NaCl
-Methods: PBE functional
-Tasks: SCF, LOBSTER COHP/COBI analysis
-MPI: 16
-\end{lstlisting}
-
-Run with \texttt{./vasp-agent.py} (builds and runs \texttt{02\_scf} +
-\texttt{08\_lobster}); the GUI shows COHP/COBI/COOP plots on the
-Results tab.  To aggregate averaged COHP/COBI over many projects into
-\texttt{lobster\_acohp\_acobi.csv}, run
-\texttt{python3 lobster\_postprocess.py}.
-
-\subsection{LOBSTER projected DOS vs.\ the VASP DOS}
-
-The LOBSTER card also carries a projected-DOS plot
-(\texttt{analysis/*\_lobster\_dos.\{png,pdf\}}, generated by every interface
-but displayed only in the GUI), drawn in the same cumulative-stacked layout as
-the \texttt{04\_dos} projected DOS.  It answers a question the two DOS files
-raise on their own.
-
-VASP's \texttt{LORBIT=11} PDOS projects onto spherical harmonics \emph{inside
-the PAW augmentation spheres}, which do not fill space, so the interstitial
-charge is unassigned and $\sum \mathrm{PDOS} < $ total DOS --- severely so for
-free-electron-like metals (only 25\% of the electrons for fcc Al; 72\% for
-MoSe\textsubscript{2}, whose Mo-$d$ and Se-$p$ states are compact).  LOBSTER
-instead re-expands the PAW states in a local atomic-orbital basis and performs
-a Mulliken population analysis, so its decomposition is complete by
-construction: the stacked areas sum \emph{exactly} to LOBSTER's own total.
-
-The plot therefore shows three things: the stacked LOBSTER channels, LOBSTER's
-total (dashed grey, identically the top of the stack), and the projection-free
-VASP total from \texttt{04\_dos} (solid black).  The gap between the last two
-is the charge spilling, reported in \texttt{lobsterout} and typically 1--4\%.
-For the \emph{total} DOS the VASP curve is the reference --- it is a direct
-eigenvalue count under the tetrahedron method, with no projection at all --
-whereas for \emph{orbital-resolved} weights the LOBSTER decomposition is the
-more complete one, and is the same basis that produces the COHP/COBI curves.
-Note that the two curves also carry different broadening (\texttt{04\_dos} uses
-\texttt{ISMEAR=-5}; the LOBSTER NSCF is forced to Gaussian smearing, and
-LOBSTER applies its own \texttt{gaussianSmearingWidth} on a coarser energy
-grid), so some of the visible difference is resolution rather than physics.
-Both smearing settings are stated in the plot legend.
-
-% ============================================================
-\section{Worked Examples}
-% ============================================================
-
-\subsection{MoS\textsubscript{2} monolayer with SOC}
-
-\begin{lstlisting}
-Project: MoS2 monolayer
-
-Methods: PBEsol functional
-         SOC with magnetization in z-direction
-
-Tasks: structure relaxation
-       SCF calculation
-       band structure
-       DOS (projected on Mo-d and S-p)
-
-Convergence: Test k-points 8x8 to 20x20
-             ENCUT 400-600 eV
-
-MPI: 64
-\end{lstlisting}
-
-The generator detects hexagonal (hP) and uses G-M-K-G-A-L-H-A.
-
-\subsection{Nickel: magnetism + GGA+U}
-
-\begin{lstlisting}
-Project: Nickel GGA+U
-
-Methods: PBEsol functional
-         collinear magnetization
-         GGA+U with U=4.0 on Ni-d orbitals
-
-Tasks: structure relaxation
-       SCF calculation
-       band structure
-       DOS (projected on Ni-d and Ni-s)
-
-MAGMOM: 2.0
-MPI: 128
-NODES: 2
-NTASKS_PER_NODE: 64
-WALLTIME: 08:00:00
-\end{lstlisting}
-
-With a primitive FCC POSCAR (angles $\approx 60^\circ$) the generator
-detects cF and uses G-X-W-K-G-L-U-W.  Band and DOS plots show both spin
-channels.
-
-\subsection{GaAs: phonons with NAC}
-\label{sec:example-gaas-nac}
-
-\begin{lstlisting}
-Project: GaAs phonons
-
-Methods: PBEsol functional
-
-Tasks: SCF calculation
-       DFPT Born charges and dielectric
-       phonons lattice dynamics
-
-PHONONS_DIM: 4 4 4
-PHONONS_MESH: 20 20 20
-PHONONS_BAND: G X W L G K
-
-MPI: 64     WALLTIME: 24:00:00
-\end{lstlisting}
-
-\subsection{High-pressure relaxation with custom INCAR tags}
-\label{sec:ex-pressure}
-
-A constant-pressure cell relaxation at 10~GPa, combined with raw INCAR
-passthrough to tighten convergence and add tags the parser has no
-dedicated keyword for:
-
-\begin{lstlisting}
-Project: Silicon 10GPa
-
-Methods: PBEsol functional
-
-Tasks: structure relaxation
-       SCF calculation
-       band structure
-
-PRESSURE: 10 GPa          # constant-P relax -> ISIF=3, IBRION=2, PSTRESS=100
-
-# Tags applied to every step
-INCAR:
-   LREAL  = .FALSE.
-   ADDGRID = .TRUE.
-   LMAXMIX = 4
-END_INCAR
-
-# Tighter electronic convergence for the relaxation only
-INCAR relax:
-   EDIFF  = 1E-8
-   EDIFFG = -0.005
-END_INCAR
-
-ENCUT: 600
-MPI: 64
-\end{lstlisting}
-
-The \texttt{01\_relax/INCAR} is generated with \texttt{ISIF=3},
-\texttt{PSTRESS=100}, the global tags appended, and \texttt{EDIFF}/%
-\texttt{EDIFFG} overridden to the per-step values; \texttt{02\_scf} and
-\texttt{03\_bands} receive only the global block.
-
-\subsection{Bi\textsubscript{2}Se\textsubscript{3}: topological insulator}
-
-\begin{lstlisting}
-Project: Bi2Se3 topological
-
-Methods: PBEsol functional
-         SOC with magnetization in z-direction
-
-Tasks: structure relaxation
-       SCF calculation
-       band structure
-       DOS (projected on Bi-p and Se-p)
-       Wannier90 wannierization
-
-Convergence: Test k-points from 8x8x4 to 16x16x8
-             ENCUT 400-600 eV
-
-WANNIER_NUM_WANN: 18
-WANNIER_PROJ: Bi:p;Se:p
-WANNIER_EWIN: -2.0 to 2.0
-MPI: 128
-\end{lstlisting}
-
-% ============================================================
-\section{Common OUTCAR Checks}
-% ============================================================
-
-\begin{lstlisting}[language=bash]
-grep "reached required accuracy"   OUTCAR          # converged?
-grep "energy  without"             OUTCAR | tail -1 # total energy
-grep "E-fermi"                     OUTCAR | tail -1 # Fermi level
-grep "magnetization (x)"           OUTCAR | tail -5 # moment
-grep "TOTAL-FORCE"                 OUTCAR | tail -20
-grep -A3 "BORN EFFECTIVE CHARGES"  OUTCAR | head -20
-\end{lstlisting}
-
-% ============================================================
-\section{Troubleshooting}
-% ============================================================
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Symptom & Solution \\ \midrule
-POTCAR not found &
-  Check \texttt{VASP\_POTCAR\_DIR} in \texttt{site.env} or GUI System
-  Setup.  Use the POTCAR chooser for unusual variants
-  (\texttt{Ga\_d}, \texttt{Fe\_sv}). \\[3pt]
-\texttt{vasp\_std} not found &
-  Set the full binary path in \texttt{site.env} or GUI System Setup. \\[3pt]
-WARNING: may not have converged &
-  Increase NSW (ionic) or NELM (electronic) in INCAR and re-run. \\[3pt]
-Wrong bands ($W = \Gamma$) &
-  Conventional cubic cell detected; use the \textit{primitive} cell
-  for FCC/BCC so auto-detection picks cF/cI. \\[3pt]
-Projected DOS missing &
-  Check instructions.txt: \texttt{projected on} and \texttt{projections on}
-  are both accepted.  Verify element names match POSCAR. \\[3pt]
-KPAR error &
-  KPAR $\times$ NCORE must divide total MPI tasks.  Use auto-defaults or
-  set explicitly valid values. \\[3pt]
-GUI unreachable &
-  Check SSH tunnel: \texttt{ssh -L 5001:localhost:5001 user@cluster}. \\[3pt]
-Project missing from dropdown &
-  Folder must contain \texttt{POSCAR} + \texttt{settings.json} in the
-  directory where \texttt{vasp-gui.py} was started. \\[3pt]
-Band plot empty or not shown &
-  Usually \texttt{sumo-bandplot} crashed on this band structure; the GUI now
-  falls back to a built-in plotter automatically.  An empty plot also means a
-  wrong $E_F$: the Fermi level is read from \texttt{04\_dos/OUTCAR} (then
-  \texttt{02\_scf/OUTCAR}), since \texttt{03\_bands} eigenvalues share the
-  NSCF/DOS energy reference. \\
-\bottomrule
-\end{tabularx}
-
-% ============================================================
-\section{Version History}
+\section{Version history}
+\label{app:history}
 % ============================================================
 
 \begin{description}
@@ -2228,6 +3095,20 @@ Band plot empty or not shown &
     relaxation with IBRION = 1.  Maintenance tools in \texttt{ht\_tools/}
     (\texttt{fix\_failed.sh}, \texttt{test\_relax.sh}, \texttt{collect\_lobster.sh},
     \texttt{reset\_stale.sh}, \texttt{cleanup\_large.sh}).
+  \item[\textcolor{mainblue}{v2.4} (2026-10-12)]
+    \textit{Checking and repairing runs.}
+    New \texttt{vasp\_diagnose.py}: checks the runs of a \texttt{*\_list.txt} (any material
+    or folder names; \texttt{00\_convergence} to \texttt{08\_lobster}; high-throughput,
+    SLURM and local layouts), names the cause of each failure, writes a repair and
+    resubmission script per material and \texttt{submit\_all\_fixes.sh}.
+    Bands, DOS and the LOBSTER NSCF use \texttt{ALGO = Fast} (pure Davidson diverged at
+    fixed density for Ba$_2$YReO$_6$/Sr$_2$YReO$_6$).
+    \texttt{ht\_tools/}: \texttt{test\_step.sh} (test SCF/bands/LOBSTER settings on one
+    material), \texttt{show\_problems.sh}, \texttt{skip\_fixes.sh},
+    \texttt{show\_material\_status.sh}, \texttt{show\_job\_history.sh},
+    \texttt{show\_job\_log.sh}.  Manual reorganised by task (getting started, single
+    calculations, high-throughput screens, checking and repairing runs; how things work in
+    the appendices), with the \texttt{vasp\_diagnose.py} manual merged in.
 \end{description}
 
 \vfill
