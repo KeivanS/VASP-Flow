@@ -1,5 +1,5 @@
 #!/bin/bash
-# Audit a highthroughput run (ht-semimetals layout) before its results go into the
+# Audit a highthroughput run (ht_runs.py layout) before its results go into the
 # database: was every material of material_list.txt run, did every step converge,
 # were the results extracted (collect_lobster.sh archives) and do the backups hold them?
 #
@@ -116,4 +116,4 @@ for s in missing relax_unconv scf_missing scf_unconv lobster_missing lobster_emp
 done
 ids=$(awk -F'\t' 'NR>1 && $2=="ok" && $6==0 {printf " %s", $1}' "$OUT"); [ -n "$ids" ] && echo "not extracted:$ids"
 echo
-echo "Next: failed chains -> fix_failed.sh; relax/LOBSTER stale -> reset_stale.sh; not extracted -> collect_lobster.sh"
+echo "Next: not ok -> bash ~/VASP-Flow/ht_tools/next_round.sh; not extracted -> collect_lobster.sh"

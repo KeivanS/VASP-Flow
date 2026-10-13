@@ -1,5 +1,17 @@
 # VASP-Flow release notes
 
+## v2.6 — 2026-10-13 · Repairs in rounds, with certainty
+
+- **`ht_tools/next_round.sh`** (new): one repair round of a high-throughput run, from its folder. It diagnoses every material into `diagnosis_round<N>/`, shows the failures and what each repair changes, and submits the repairs after a y/N question (`-y`, `-n`). Repeat until it says "Nothing to submit."
+- **`report.txt`** per round: for each failed material the problem, the cause in words, the evidence (log line, SLURM record), a **certainty of the cause** (from the kind of evidence) and **of the fix** (a rule value per cause, corrected by how earlier repairs of that cause went in these runs), the changes, and the backup. Also `failed_list.txt` and `review_list.txt`; `diagnosis.tsv` gains `round`, `cause_certainty`, `fix_certainty`.
+- **Round backups**: repairs stay in place; the failed run goes to `materials/<id>/round_<i>_<date>/<step>/` (INCAR, KPOINTS, POSCAR copied; OUTCAR, OSZICAR, EIGENVAL, CONTCAR, XDATCAR, lobster.out, ICO*LIST and the job logs moved; WAVECAR, CHGCAR, vasprun.xml and other large files deleted) with `WHY.txt`; every repair is logged in `materials/<id>/repair_history.tsv`. `job.sbatch` is never edited (walltime/nodes go on the sbatch command line).
+- A material is **held for review** when the cause is unknown, its fix is already in the INCAR, the previous repair of the step had the same cause, or after 5 repairs (`--max-rounds`).
+- **`ht_tools/set_params.sh`** (new): your own INCAR tags, `KMESH`, `TIME`, `NODES` per material and step (`materials/<id>/user_params.txt`); the next round redoes the step with them, after its own fixes, and keeps them.
+- New causes: **`hang`** (an SCF/fixed-density run converged, then stalled until the time limit, seen on two-node runs: rerun on one node) and **`stopcar`** (stopped early by a STOPCAR an earlier killed job left behind; the step looks finished but is not converged). Job scripts now delete a leftover STOPCAR at the start of a fresh run. A LOBSTER step counts as done only with a non-empty `ICOHPLIST.lobster`.
+- `ht-semimetals.py` renamed **`ht_runs.py`** (nothing in it is specific to semimetals).
+- Removed superseded tools: `fix_failed.sh`, `reset_stale.sh`, `resume_in_scratch.sh`, `redo_lobster.sh`, `patch_lean_outputs.sh`, `patch_relax_ibrion.sh`.
+- Manual Part IV rewritten around the repair cycle.
+
 ## v2.5 — 2026-10-12 · LOBSTER k-mesh within memory
 
 - k-point density: `fine` = 6000 kpra (was 5000), `coarse` = 1000; `ht-semimetals.py` uses `--kpra 8000` by default (the old default, `--kspacing 0.10`, gave very dense meshes, e.g. 24×24×24 = 110592 kpra for an 8-atom cell; it is now only used when given).

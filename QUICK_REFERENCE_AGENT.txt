@@ -521,13 +521,18 @@
 │                02_scf/elf writes ELFCAR (copied to 02_scf/)                   │
 └───────────────────────────────────────────────────────────────────────────────┘
 
-┌─ CHECKING & REPAIRING RUNS (vasp_diagnose.py, ht_tools/) ─────────────────────┐
-│ Diagnose (read-only), look, resubmit — on the cluster, in ~/VASP-Flow:        │
-│   python3 vasp_diagnose.py my_list.txt --since 2026-10-01 --out diag_round1   │
-│   bash ht_tools/show_problems.sh diag_round1     failed ones + what fixes do  │
-│   bash ht_tools/skip_fixes.sh diag_round1 NAME   leave one out (--undo)       │
-│   nohup bash diag_round1/submit_all_fixes.sh > fixes1.log 2>&1 &              │
-│   ... when the queue is empty: diagnose again into diag_round2                │
+┌─ CHECKING & REPAIRING RUNS (next_round.sh, set_params.sh) ────────────────────┐
+│ Repair round by round — in the HT folder, when the queue is empty:            │
+│   bash ~/VASP-Flow/ht_tools/next_round.sh     diagnose, ask y/N, submit       │
+│   ... repeat after the jobs finished, until "Nothing to submit."              │
+│   less diagnosis_round<N>/report.txt   cause, evidence, certainty, changes    │
+│   Failed run backed up in materials/<id>/round_<i>_<date>/ (+ WHY.txt);       │
+│   held for review after the same cause twice or 5 repairs.                    │
+│                                                                               │
+│ Your own settings (applied by the next round, they win over the fixes):       │
+│   bash ~/VASP-Flow/ht_tools/set_params.sh ID STEP "TAG=VAL; KMESH=8 8 8"      │
+│        special keys TIME=HH:MM:SS NODES=n; TAG= removes; --show, --clear      │
+│   bash ~/VASP-Flow/ht_tools/skip_fixes.sh diagnosis_round2 ID  leave out      │
 │                                                                               │
 │ One material / one job:                                                       │
 │   bash ht_tools/show_material_status.sh ID [step]  ran time, INCAR tags,      │
@@ -539,7 +544,7 @@
 │   bash ~/VASP-Flow/ht_tools/test_step.sh ID bands fast "ALGO=Fast"            │
 │   bash ~/VASP-Flow/ht_tools/test_step.sh --report tests/ID_bands_*            │
 │                                                                               │
-│ Bands/DOS/LOBSTER use ALGO = Fast (Davidson can diverge at fixed density).    │
+│ Other projects: python3 vasp_diagnose.py my_list.txt  (same outputs).         │
 │ Manual: manual.pdf, Part IV "Checking and repairing runs".                    │
 └───────────────────────────────────────────────────────────────────────────────┘
 

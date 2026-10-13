@@ -1,5 +1,5 @@
 #!/bin/bash
-# Free disk space in a VASP-Flow highthroughput run (ht-semimetals layout) by deleting
+# Free disk space in a VASP-Flow highthroughput run (ht_runs.py layout) by deleting
 # large VASP files that no remaining step of the chain will read:
 #
 #   01_relax/{WAVECAR,CHGCAR,CHG}    once 02_scf finished   (SCF copies them at its start)

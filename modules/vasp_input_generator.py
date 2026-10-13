@@ -182,7 +182,8 @@ open('POSCAR', 'w').write('\n'.join(head + ['Direct'] + lines[last + 1:last + 1 
 PYX
 }
 vf_resume_prepare() {     # called at the start of every (re)run
-    [ -f .vf_resume ] || return 0
+    # a STOPCAR not followed by a requeue (the job was killed first) would stop this run
+    [ -f .vf_resume ] || { rm -f STOPCAR; return 0; }
     local phase; phase=$(cat .vf_resume)
     rm -f .vf_resume STOPCAR
     echo "=== resuming after time limit (phase: $phase, restart $(cat .vf_restarts 2>/dev/null)) ==="

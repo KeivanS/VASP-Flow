@@ -123,7 +123,7 @@
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
 }
 \author{Keivan Esfarjani}
-\date{v2.5 $\cdot$ October 2026 \quad\textcolor{mainblue}{$|$}\quad
+\date{v2.6 $\cdot$ October 2026 \quad\textcolor{mainblue}{$|$}\quad
       \url{https://github.com/KeivanS/VASP-Flow}}
 
 % ============================================================
@@ -159,7 +159,7 @@ calculations with VASP.  Two interfaces are provided:
 
 Both interfaces share the same \texttt{modules/} back-end.
 
-On a cluster, \cmd{vasp_diagnose.py} and the scripts in \cmd{ht_tools/} check finished runs, say why a step failed, write the repairs and resubmit them (Part~\ref{part:check}).
+On a cluster, \cmd{ht_tools/next_round.sh} (with \cmd{vasp_diagnose.py}) checks finished runs, says why a step failed and how sure it is, repairs the inputs and resubmits them, round by round (Part~\ref{part:check}).
 
 \subsection{Find what you need}
 
@@ -175,8 +175,10 @@ change the k-point mesh & Section~\ref{sec:kmesh} \\
 set any INCAR or KPOINTS tag myself & Section~\ref{sec:incar} \\
 get band structures, DOS, ELF, phonons, Born charges, Wannier functions or LOBSTER bonds & Sections~\ref{sec:spectra}--\ref{sec:extras} \\
 set cores, nodes, KPAR/NCORE and walltimes & Section~\ref{sec:resources} \\
-run hundreds of Materials Project IDs on a cluster & Section~\ref{sec:ht-howto} \\
-find out why runs failed and resubmit them & Section~\ref{sec:diagnose} \\
+run a list of Materials Project IDs on a cluster & Section~\ref{sec:ht-howto} \\
+find out why runs failed and repair them, round by round & Section~\ref{sec:next-round} \\
+read the report and its certainty numbers & Section~\ref{sec:certainty} \\
+set my own parameters for some materials & Section~\ref{sec:set-params} \\
 check one material or one job quickly & Section~\ref{sec:lookup} \\
 try a different INCAR setting on one material before resubmitting & Section~\ref{sec:testfix} \\
 fix something that went wrong & Section~\ref{sec:trouble} \\
@@ -1232,7 +1234,7 @@ others & the profile time \\
 \end{tabularx}
 
 Priority: \texttt{<STEP>\_WALLTIME} $>$ \texttt{WALLTIME} $>$ these defaults
-$>$ \texttt{profiles/slurm.json}.  In \texttt{ht-semimetals.py} directories
+$>$ \texttt{profiles/slurm.json}.  In \texttt{ht\_runs.py} directories
 the same defaults sit in \texttt{env.sh} (\texttt{TIME\_RELAX} \ldots;
 \texttt{retune.sh -{}-time-relax \ldots}); that is the only place to change
 them --- the per-material \texttt{instructions.txt} carry no walltime.
@@ -1530,7 +1532,7 @@ input generator as the rest of VASP-Flow.
 
 \begin{tabularx}{\linewidth}{@{}lXX@{}}
 \thead
- & \texttt{ht-mp-scf.py} & \texttt{ht-semimetals.py} \\ \midrule
+ & \texttt{ht-mp-scf.py} & \texttt{ht\_runs.py} \\ \midrule
 Steps per material & \texttt{01\_relax} (ISIF = 3) $\to$ \texttt{02\_scf}
   + ELF $\to$ \texttt{08\_lobster} (optional) &
   \texttt{01\_relax} (ISIF = 3) $\to$ \texttt{02\_scf} $\to$
@@ -1547,7 +1549,8 @@ Extras & element/$Z$ table & throttled, resumable \texttt{submit\_all.sh};
   \texttt{status.sh}, \texttt{retune.sh}, \texttt{analyze\_all.sh},
   \texttt{collect\_results.sh}; POTCAR manifest \\
 Use for & structures to relax and characterise (ELF, bonding) &
-  screening a large set for bands and bonding \\
+  any list of materials (metals, semimetals, insulators) for bands and bonding; repaired
+  round by round with \texttt{next\_round.sh} \\
 \bottomrule
 \end{tabularx}
 
@@ -1569,18 +1572,19 @@ spglib numpy matplotlib}.
 
 \textbf{2. Put the list in a file}, e.g.\ \texttt{\textasciitilde/VASP-Flow/lists/mylist.txt}.
 
-\textbf{3a. Semimetal screen} (\texttt{ht-semimetals.py}):
+\textbf{3a. Relax, SCF, bands and LOBSTER} (\texttt{ht\_runs.py}):
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow
-python3 ./ht-semimetals.py --list lists/mylist.txt \
-    --out highthroughput_mylist --api-key "$MP_API_KEY" \
-    --kpra 8000 --single-node
-cd highthroughput_mylist
+python3 ./ht_runs.py --list lists/mylist.txt \
+    --out HT_mylist --api-key "$MP_API_KEY" --single-node
+cd HT_mylist
 vi env.sh                    # VASP module, LOBSTER_BIN, ANALYSIS_PYTHON
 ./retune.sh --time-lobster 06:00:00   # optional: change a step walltime
 ./submit_all.sh              # POTCARs + submit; re-run = resume
 ./status.sh                  # progress per step
-# when finished:
+# when the queue is empty: repair the failed runs, round by round (Part IV)
+bash ~/VASP-Flow/ht_tools/next_round.sh
+# when nothing is left to repair:
 ./postprocess_all.sh         # -> screen_lobster_all.csv
 ./collect_results.sh         # -> screen_results.tar.gz
 \end{lstlisting}
@@ -1605,7 +1609,7 @@ Choose \texttt{-{}-encut} as about $1.3\times$ the largest ENMAX in the set
 all later jobs.
 
 \textbf{POSCARs already downloaded?}  Neither driver downloads a structure
-it already has.  \texttt{ht-semimetals.py} reuses
+it already has.  \texttt{ht\_runs.py} reuses
 \texttt{<out>/\_ht\_inputs/<id>/POSCAR}, \texttt{ht-mp-scf.py} the
 \texttt{\_ht\_inputs/} of the current directory.  To take them from another
 folder --- e.g.\ an older highthroughput directory --- add
@@ -1614,8 +1618,8 @@ folder --- e.g.\ an older highthroughput directory --- add
 \texttt{\_ht\_inputs/<id>/POSCAR} or \texttt{<id>.vasp}).  No MP key or
 internet is needed then; only missing structures are downloaded.
 \begin{lstlisting}[language=bash]
-python3 ./ht-semimetals.py --list lists/mylist.txt --out highthroughput_new \
-    --poscar-dir highthroughput_mylist --kpra 8000 --single-node
+python3 ./ht_runs.py --list lists/mylist.txt --out HT_new \
+    --poscar-dir HT_mylist --single-node
 \end{lstlisting}
 
 \textbf{4. Test first.}  Run two or three materials before a long list, then
@@ -1623,7 +1627,7 @@ read the timings and look at the plots (the per-step walltimes of
 Section~\ref{sec:slurm-time} are defaults; steps that hit them continue
 automatically):
 \begin{lstlisting}[language=bash]
-grep "Elapsed time" materials/*/0*/OUTCAR     # ht-semimetals
+grep "Elapsed time" materials/*/0*/OUTCAR     # ht_runs
 grep "Elapsed time" */0*/OUTCAR               # ht-mp-scf
 \end{lstlisting}
 
@@ -1639,7 +1643,7 @@ All options of the two drivers are listed in Appendix~\ref{app:ht}.  When the jo
 \label{sec:ht-scripts}
 % ============================================================
 
-A directory made by \cmd{ht-semimetals.py} contains these scripts; run them from that directory.
+A directory made by \cmd{ht_runs.py} contains these scripts; run them from that directory.
 
 \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
 \thead
@@ -1670,256 +1674,262 @@ Script (in the directory) & Purpose \\ \midrule
 % ============================================================
 
 % ============================================================
-\section{Finding and repairing failed runs (\texttt{vasp\_diagnose.py})}
+\section{Repairing failed runs, round by round}
 \label{sec:diagnose}
 % ============================================================
 
-After a batch of VASP-Flow calculations --- one project or a few thousand
-materials --- some runs will not have finished: a job ran out of memory or time,
-an SCF did not converge, a band structure diverged, LOBSTER stopped, a
-convergence test broke off.  \cmd{vasp_diagnose.py} finds these runs, tells you
-why each one failed and writes, for each of them, a shell script that repairs
-the inputs and resubmits exactly what has to be redone.  One more script
-submits all of these repairs.
+After a batch of calculations --- one project or a few thousand materials ---
+some runs will not have finished: a job ran out of memory or time, an SCF did
+not converge, a band structure diverged, LOBSTER stopped.  VASP-Flow repairs
+them in \textbf{rounds}.  Each round checks every material, says what went wrong,
+why, and how sure it is, repairs the inputs of the failed ones \emph{in place} and
+resubmits exactly what has to be redone.  You wait for those jobs and start the
+next round.  One or two rounds are usually enough.  A material that fails again
+with the same cause, or has been repaired five times, is held back for you.
 
-It checks the steps \cmd{00_convergence}, \cmd{01_relax}, \cmd{02_scf},
-\cmd{03_bands}, \cmd{04_dos}, \cmd{06_dfpt} and \cmd{08_lobster}, for runs made
-with \cmd{vasp-agent.py}, \cmd{vasp-agent-slurm.py} or the high-throughput
-drivers.
+\subsection{The repair cycle in one command}
+\label{sec:next-round}
+
+Run it from the high-throughput folder (the one with \cmd{materials/} and
+\cmd{material_list.txt}) once the queue is empty:
+
+\begin{lstlisting}[language=bash]
+cd /scratch/$USER/VASP-Flow/HT_ins_1
+bash ~/VASP-Flow/ht_tools/next_round.sh
+\end{lstlisting}
+
+\begin{enumerate}
+  \item It warns if jobs of this run are still in the queue (their materials are
+        skipped this round) and asks whether to go on.
+  \item It diagnoses every material of \cmd{material_list.txt} into a new folder
+        \cmd{diagnosis_round1/} (then \cmd{diagnosis_round2/}, \dots).
+  \item It prints one line per failed material --- the problem, the steps that will be
+        redone, how sure the diagnosis is --- and what each repair changes.
+  \item It asks \cmd{Submit the 3 repair(s) now? [y/N]}.  With \cmd{y} the repairs are
+        submitted in the background (log: \cmd{diagnosis_round1/submit_all_fixes.log}).
+\end{enumerate}
+
+When those jobs have finished, run \cmd{next_round.sh} again.  Stop when it prints
+\cmd{Nothing to submit.}  Then audit and collect the results
+(Section~\ref{sec:ht-tools}).  \cmd{next_round.sh -y} submits without asking,
+\cmd{-n} only diagnoses; other arguments go to \cmd{vasp_diagnose.py} (e.g.\
+\opt{max-rounds 4}).
 
 \begin{tipbox}
-Running \cmd{vasp_diagnose.py} never changes or submits anything.  It only
-writes a report and scripts.  Your runs are touched only when you run those
-scripts.
+The diagnosis itself never changes or submits anything.  Your runs are touched
+only by the repair scripts, and only after you answer \cmd{y}.
 \end{tipbox}
 
-\subsection{Quick start}
-On the cluster, in your VASP-Flow folder, give it the list file you made the
-runs from:
+\subsection{What a round tells you}
+
+The summary counts the materials by problem:
+
+\begin{lstlisting}
+Folders checked: 250   (layouts: ht 250)
+  ok              245
+  spilling_high     2
+  stopcar           2
+  relax_unconv      1
+Fix scripts: 3 to submit, 0 held for review
+\end{lstlisting}
+
+The table below it has one line per failed material: per-step status, the problem
+and the steps that will be redone, the certainty of the cause and of the fix, and
+the material's repair round:
+
+\begin{lstlisting}
+HT_ins_1__mp-542623   relax:ok scf:stopcar bands:ok lobster:ok   stopcar -> scf>bands>lobster   cause 0.85  fix 0.90  round 1
+HT_ins_1__mp-1080459  relax:relax_unconv scf:ok ...             relax_unconv -> relax>scf>...   cause 0.95  fix 0.80  round 1
+\end{lstlisting}
+
+The details are in \cmd{diagnosis_round<N>/report.txt}, one block per material
+(held materials first):
+
+\begin{lstlisting}
+HT_ins_1__mp-542623   repair round 1 of at most 5
+  scf      problem : stopcar   (certainty 0.85)
+           cause   : VASP was stopped early by a STOPCAR left behind by an earlier run
+           seen    : OUTCAR: "hard stop encountered" long before the time limit;
+                     sacct: job 21298725 COMPLETED after 00:05:12 of 01:00:00
+  scf      fix certainty 0.90  (rule 0.90; no earlier repairs of this cause yet)
+  changes : scf: the STOPCAR left by an earlier run is removed; scf and the steps after it are redone
+  redo    : scf -> bands -> lobster
+  backup  : <folder>/round_1_<date>/ (INCAR KPOINTS POSCAR OUTCAR OSZICAR EIGENVAL ICO*LIST logs)
+  script  : .../diagnosis_round1/fix/HT_ins_1__mp-542623.sh   -> submitted by submit_all_fixes.sh
+\end{lstlisting}
+
+\cmd{problem} is the name of the cause (the full list is in
+Section~\ref{sec:classes}), \cmd{cause} says it in words, \cmd{seen} is the evidence,
+and \cmd{log} lines, when present, are the error lines from the job logs.
+
+\subsubsection{How sure is the diagnosis?}
+\label{sec:certainty}
+
+Each block carries two numbers between 0 and 1.
+
+\begin{itemize}
+  \item \textbf{Cause certainty} depends on what the diagnosis is based on: SLURM's own
+        record (\cmd{TIMEOUT}, \cmd{OUT_OF_MEMORY}) or the outputs themselves (OUTCAR says
+        NELM was used up, the relaxation did not converge) 0.95; a known error message in the
+        logs 0.7--0.95 (e.g.\ \cmd{insufficient virtual memory} 0.9, an MPI start-up error
+        0.7); indirect evidence 0.6; no known message 0.2.
+  \item \textbf{Fix certainty} starts from a rule value per cause --- how often that repair
+        usually cures it (e.g.\ doubling the walltime 0.85, halving the LOBSTER mesh after an
+        out-of-memory failure 0.85, \cmd{ALGO = All} after NELM 0.7) --- and is then corrected
+        by what happened to the earlier repairs of the same cause in the runs checked
+        (from each material's \cmd{repair_history.tsv}):
+        \[ c = \frac{4\,p + w}{4 + n}, \]
+        $p$ the rule value, $n$ the earlier repairs of this cause, $w$ of them worked.
+        After a few rounds the number reflects your own runs.
+\end{itemize}
+
+These are rule-based estimates, not the output of a statistical model.  Read the
+blocks with low numbers (below about 0.5) first.
+
+\subsection{Where the failed run goes: round backups}
+\label{sec:round-backup}
+
+Repairs are made in place, in \cmd{materials/<id>/}, so the finished steps of a
+material (e.g.\ its relaxation and SCF when only LOBSTER failed) are reused and every
+material always has one folder.  Before a repair changes anything, the failed run of
+each step that will be redone goes into a backup folder of the material:
+
+\begin{lstlisting}
+materials/mp-542623/round_1_20261013_0930/
+    WHY.txt                  the report block of this repair
+    02_scf/  03_bands/  08_lobster/
+        INCAR KPOINTS POSCAR (copied: the inputs the failed run used)
+        OUTCAR OSZICAR EIGENVAL CONTCAR XDATCAR lobster.out ICO*LIST.lobster
+        <id>-<id>_<step>-<job>.out/.err        (moved)
+materials/mp-542623/repair_history.tsv  one line per repaired step: round, date, step, cause, changes
+\end{lstlisting}
+
+$i$ in \cmd{round_<i>} counts the repairs of that material (1, 2, \dots).  The large files
+that a rerun makes again --- WAVECAR, CHGCAR, CHG, vasprun.xml, DOSCAR, PROCAR and the
+\cmd{*CAR.lobster} curves --- are deleted, not backed up.
+
+\paragraph{Job scripts stay the same.}  \cmd{job.sbatch} is never edited.  A repair
+changes the step's INCAR (every line of a changed tag is replaced by
+\cmd{TAG = value} at the end) or KPOINTS, and passes the walltime, node count or memory
+on the \cmd{sbatch} command line, which overrides the \texttt{\#SBATCH} lines of
+\cmd{job.sbatch} for that submission only.
+
+\paragraph{Undo a repair.}  Cancel the material's jobs, copy the files of
+\cmd{round_<i>_<date>/<step>/} back into \cmd{<step>/} and remove the
+\cmd{TAG = value} lines added at the end of the INCAR.  \cmd{01_relax/POSCAR.orig}
+is the structure before the first restart.
+
+\subsection{Setting parameters yourself}
+\label{sec:set-params}
+
+When the report suggests a better setting than the automatic repair --- or you just
+want another one --- give it to \cmd{set_params.sh} and run the next round:
+
+\begin{lstlisting}[language=bash]
+bash ~/VASP-Flow/ht_tools/set_params.sh mp-20352 lobster "KPAR=4; KMESH=10 10 14; TIME=06:00:00"
+bash ~/VASP-Flow/ht_tools/set_params.sh mp-542623,mp-972937 scf "NODES=1"
+bash ~/VASP-Flow/ht_tools/set_params.sh mp-7889 scf "ALGO=All; NELM=200; SYMPREC="
+bash ~/VASP-Flow/ht_tools/next_round.sh
+\end{lstlisting}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}X@{}}
+\thead
+Setting & Effect \\ \midrule
+\cmd{TAG=VALUE} & any INCAR tag of that step; \cmd{TAG=} (no value) removes it \\
+\cmd{KMESH=n1 n2 n3} & the step's Gamma-centred k-mesh \\
+\cmd{TIME=HH:MM:SS} & the step's walltime \\
+\cmd{NODES=n} & nodes for the step (40 cores each); KPAR is made a divisor of the cores.
+  One node goes to the \cmd{standard} partition when the run uses \cmd{parallel} \\
+\bottomrule
+\end{tabularx}
+
+\noindent The step is \cmd{relax}, \cmd{scf}, \cmd{bands}, \cmd{dos}, \cmd{lobster}, or
+\cmd{all} (every step's INCAR; this redoes the whole chain).  Several materials are
+separated by commas.  The settings are stored in \cmd{materials/<id>/user_params.txt}.
+In the next round:
+
+\begin{itemize}
+  \item a step whose settings changed after its last run is redone (problem
+        \cmd{user_params}), with the steps after it;
+  \item your settings are applied after the automatic repair, so they win;
+  \item they stay in force in later rounds (a repaired step keeps your KPAR, mesh, \dots).
+\end{itemize}
+
+\cmd{set_params.sh ID --show} lists them, \cmd{set_params.sh ID --clear [STEP]} removes
+them.  Nothing is submitted by \cmd{set_params.sh} itself.
+
+\subsection{Materials held for review}
+
+A material's repair script is written but \emph{not} submitted when
+
+\begin{itemize}
+  \item the cause is \cmd{unknown};
+  \item the usual repair of its cause is already in the INCAR (shown as
+        \cmd{(fix already in INCAR)}), so it did not help;
+  \item the previous repair of the same step had the same cause (a relaxation that
+        continues from its CONTCAR is an exception: that is progress);
+  \item it has been repaired \opt{max-rounds} times already (default 5).
+\end{itemize}
+
+The reason is at the end of its block in \cmd{report.txt} (\cmd{HELD - ...}), and the
+material is listed in \cmd{review_list.txt}.  Then:
+
+\begin{itemize}
+  \item change what you think is wrong with \cmd{set_params.sh} and run the next round;
+  \item or accept the result as it is and leave the material out
+        (\cmd{bash ~/VASP-Flow/ht_tools/skip_fixes.sh diagnosis_round2 mp-6430});
+  \item or submit the script as written: in \cmd{diagnosis_round<N>/submit_all_fixes.sh}
+        held scripts are commented-out lines at the end --- remove the \texttt{\#} and run it
+        (\opt{retry-unknown} submits all unknown causes).
+\end{itemize}
+
+\subsection{Other runs: projects made with the agents}
+
+\cmd{next_round.sh} is for high-throughput folders.  For anything else --- projects
+of \cmd{vasp-agent.py} or \cmd{vasp-agent-slurm.py}, several high-throughput runs at
+once --- call \cmd{vasp_diagnose.py} with a list of material names or folders; it
+writes the same files:
 
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow
-python3 vasp_diagnose.py my_list.txt --out diag_round1   # 1. diagnose (read-only)
-bash ht_tools/show_problems.sh diag_round1               # 2. what failed, what will change
-nohup bash diag_round1/submit_all_fixes.sh > fixes1.log 2>&1 &   # 3. resubmit
+python3 vasp_diagnose.py my_list.txt                     # -> diagnosis_round<N>/
+bash ht_tools/show_problems.sh diagnosis_round1          # what failed, what will change
+nohup bash diagnosis_round1/submit_all_fixes.sh > diagnosis_round1/submit_all_fixes.log 2>&1 &
 \end{lstlisting}
 
-That is all.  \cmd{my_list.txt} stands for your own list, e.g.\
-\cmd{semimetals_list.txt}: the file of material names that the runs were created
-from, one per line.  A name is whatever the material's folder is called ---
-a Materials Project ID (\cmd{mp-149}), a formula (\cmd{GaAs}), \cmd{GaAs_PBE}, \dots  The script finds each material's folder
-by itself.  When the resubmitted jobs have finished, run step~1 again to check
-that everything is now fine.
+A name is whatever a material's folder is called --- \cmd{mp-149}, \cmd{GaAs},
+\cmd{GaAs_PBE}; it is looked up next to the list file (Appendix~\ref{sec:list}).
 
-\begin{notebox}
-Run it when your jobs have left the queue.  Materials that still have jobs
-queued or running are skipped (shown as \cmd{queued}).
-\end{notebox}
+\paragraph{Only some runs, or a single project.}  Make a short list with just those
+names, or give a folder: \cmd{echo GaAs_test > one.txt; python3 vasp_diagnose.py one.txt}.
 
-\subsection{A worked example}
-Without \opt{out}, the output folder is named \cmd{vasp_diagnose_<date>_<time>}, as in this example.
+\paragraph{Runs on another disk.}  Add \opt{root} with the folder that holds them, e.g.\
+\opt{root} \cmd{/scratch/$USER/VASP-Flow}.  A run folder holding a
+\cmd{MOVED_TO_SCRATCH.txt} note is followed automatically.
 
-Say you created 300 materials with a high-throughput driver from
-\cmd{~/VASP-Flow/semimetals_list.txt}, into the run folder
-\cmd{~/VASP-Flow/HT_semimetals/}, and the queue is now empty.
+\paragraph{The same name in two runs.}  All copies are checked and
+\cmd{!! GaAs found in 2 runs} is printed.  To check one of them, list its path instead.
 
-\subsubsection{The list}
+\paragraph{Projects with convergence tests.}  Broken ENCUT/k-point tests are repaired
+and resubmitted; the production steps are \emph{not} started for you, since you choose
+their ENCUT and k-mesh from the tests.  Such a project shows \cmd{phase2_pending} once the
+tests are complete.
 
-The list is the file you already have, for example
+\paragraph{Local projects (no SLURM).}  Their repair script runs VASP directly; run it
+where VASP may run (not on a login node): \cmd{bash diagnosis_round1/fix/projects__GaAs_test.sh}.
 
-\begin{lstlisting}
-# ~/VASP-Flow/semimetals_list.txt
-mp-149
-mp-2534
-mp-20351
-Bi2Se3
-GaAs_PBE
-...
-\end{lstlisting}
+\paragraph{Fewer jobs in the queue; stop submitting.}  Put \cmd{MAX_QUEUED=50} in front
+of the \cmd{nohup bash .../submit_all_fixes.sh} command; \cmd{pkill -f submit_all_fixes.sh}
+stops it (jobs already submitted keep running).
 
-Each name is looked up in the folder that holds the list file, so
-\cmd{mp-149} is found as \cmd{~/VASP-Flow/HT_semimetals/materials/mp-149}, and
-\cmd{Bi2Se3} as \cmd{~/VASP-Flow/HT_semimetals/materials/Bi2Se3} or as a project folder
-\cmd{~/VASP-Flow/Bi2Se3}.  Names must match the folder names exactly
-(\cmd{GaAs} does not match \cmd{GaAs_PBE}).  You can also list folder paths, or
-mix names and paths (section~\ref{sec:list}).
+\paragraph{Problems in the log.}  \texttt{awk '/\textasciicircum !!!|\textasciicircum -{}- /' submit\_all\_fixes.log}
+lists failed submissions (\cmd{!!!}) and materials skipped because they had jobs in the
+queue or their outputs changed since the diagnosis (\texttt{-{}-}); for the latter, run the
+round again.
 
-\subsubsection{Step 1: diagnose}
-
-\begin{lstlisting}[language=bash]
-cd ~/VASP-Flow
-python3 vasp_diagnose.py semimetals_list.txt
-\end{lstlisting}
-
-It prints a summary --- how many materials are fine and how many failed for which reason:
-
-\begin{lstlisting}
-Folders checked: 300   (layouts: ht 300)
-  ok              262
-  oom              14
-  scf_nelm          6
-  timeout           5
-  spilling_high     5
-  lobster_fail      4
-  nscf_diverged     2
-  missing           1
-  unknown           1
-Fix scripts: 31 to submit, 1 to review (unknown cause)
-  review: .../vasp_diagnose_20261012_1530/fix/HT_semimetals__mp-20351.sh
-Report : .../vasp_diagnose_20261012_1530/diagnosis.tsv
-Submit : nohup bash .../submit_all_fixes.sh > .../submit_all_fixes.log 2>&1 &
-\end{lstlisting}
-
-Here 262 materials are fine.  31 failed for a known reason and have a fix script
-ready.  One failed for a reason the tool does not recognise; its script is kept
-back for you to look at.  5 finished but have a high LOBSTER charge spilling (reported
-only), and one name of the list has no folder at all (\cmd{missing}).
-Section~\ref{sec:classes} explains each name.
-
-Everything is written into a new folder \cmd{vasp_diagnose_<date>_<time>/}:
-
-\begin{lstlisting}
-vasp_diagnose_20261012_1530/
-  diagnosis.tsv          the report: one line per material
-  fix/<name>.sh          one repair script per failed material
-  submit_all_fixes.sh    runs all the repair scripts
-\end{lstlisting}
-
-\subsubsection{Step 2: look at the result}
-
-\cmd{diagnosis.tsv} has one line per material: the status of every step and what will be done:
-
-\begin{lstlisting}
-label                 ...  steps                                         action
-HT_semimetals__mp-149      relax:ok scf:ok bands:ok lobster:ok           ok
-HT_semimetals__mp-2534     relax:ok scf:oom bands:not_run lobster:not_run oom -> scf>bands>lobster
-HT_semimetals__mp-8062     relax:ok scf:scf_nelm bands:ok lobster:ok     scf_nelm -> scf>bands>lobster
-HT_semimetals__mp-20351    relax:unknown scf:ok ...                      REVIEW unknown -> relax>scf>bands>lobster
-\end{lstlisting}
-
-Read it with \cmd{bash ht_tools/show_problems.sh vasp_diagnose_20261012_1530}, which lists only the problem lines and what each fix changes (Section~\ref{sec:lookup}), or with \cmd{less -S} or a spreadsheet.
-Then open one or two repair scripts to see what they will do, e.g.
-
-\begin{lstlisting}[language=bash]
-less vasp_diagnose_20261012_1530/fix/HT_semimetals__mp-2534.sh
-\end{lstlisting}
-
-The top of each script says what was found, including the error lines from the logs:
-
-\begin{lstlisting}
-# vasp_diagnose fix for HT_semimetals__mp-2534
-# folder : /home/me/VASP-Flow/HT_semimetals/materials/mp-2534   (layout: ht)
-# diagnosed 2026-10-12 15:30:  relax: ok  scf: oom  bands: not_run  lobster: not_run
-#   scf | forrtl: severe (41): insufficient virtual memory
-# resubmits: scf -> bands -> lobster
-\end{lstlisting}
-
-and further down you see the changes and the submission:
-
-\begin{lstlisting}
-set_tag 02_scf/INCAR KPAR 8                 # KPAR was 40
-stash 02_scf                                # old outputs -> stale_<date>/02_scf/
-...
-J_scf=$(sbatch --parsable --job-name=mp-2534_scf --time=00:30:00 --mem=0 job.sbatch scf)
-J_bands=$(sbatch ... --dependency=afterok:$J_scf job.sbatch bands)
-J_lobster=$(sbatch ... --dependency=afterany:$J_bands job.sbatch lobster)
-\end{lstlisting}
-
-You may edit a script before submitting it (another walltime, another KPAR, \dots).
-
-\subsubsection{Step 3: submit}
-
-\begin{lstlisting}[language=bash]
-nohup bash vasp_diagnose_20261012_1530/submit_all_fixes.sh > fixes.log 2>&1 &
-tail -f fixes.log
-\end{lstlisting}
-
-\cmd{fixes.log} shows one block per material:
-
-\begin{lstlisting}
-== HT_semimetals__mp-2534
-  scf: KPAR 40 -> 8 (40 ranks)
-  submitted scf = 4512301 (00:30:00)
-  submitted bands = 4512302 (00:30:00)
-  submitted lobster = 4512303 (03:00:00)
-\end{lstlisting}
-
-\cmd{nohup} lets it keep running after you log out.  It never puts more than 200 of your
-jobs in the queue at once (it waits until there is room).  If it is interrupted, start it again: materials it
-already submitted are skipped.
-
-\subsubsection{Step 4: check again}
-
-When the queue is empty again, diagnose once more, into a new folder:
-
-\begin{lstlisting}[language=bash]
-python3 vasp_diagnose.py semimetals_list.txt --out diagnose_round2
-\end{lstlisting}
-
-The repaired materials now show \cmd{ok}.  The ones that failed again get a new
-diagnosis and a new script.  Repeat until only \cmd{ok} (and cases you accept,
-such as \cmd{spilling_high}) are left.
-
-\subsubsection{Materials held back for review}
-
-Two kinds of scripts are held back: \cmd{unknown} causes, and failures whose usual repair is already
-in the INCAR (shown as \cmd{(fix already in INCAR)} --- running the same repair again would fail
-the same way).  For these, read the error lines at the top of the script.
-Then either repair the run by hand, or let the script run as it is: open
-\cmd{submit_all_fixes.sh}, where these scripts appear at the end as commented-out
-lines, and remove the \texttt{\#}.  To submit all unknown cases without editing, diagnose again with
-\opt{retry-unknown}.
-
-\subsection{Common situations}
-\paragraph{Only some runs, or a single project.}  Make a short list with just
-those material names, or give a folder:
-
-\begin{lstlisting}[language=bash]
-echo GaAs_test > one.txt;  python3 vasp_diagnose.py one.txt
-echo HT_semimetals > run.txt; python3 vasp_diagnose.py run.txt   # all materials of that run
-\end{lstlisting}
-
-\paragraph{Runs moved to another disk (e.g.\ scratch).}  If a run folder holds a
-\cmd{MOVED_TO_SCRATCH.txt} note (written by \cmd{ht_tools/resume_in_scratch.sh}),
-its new place is used automatically.  Otherwise tell the script where to look:
-
-\begin{lstlisting}[language=bash]
-python3 vasp_diagnose.py semimetals_list.txt --root /scratch/$USER/VASP-Flow
-\end{lstlisting}
-
-\paragraph{The same name in two runs.}  If a name is found in more than one run
-folder, all copies are checked and a line \cmd{!! GaAs found in 2 runs} is printed.
-To check only one of them, put its path in the list instead of the name.
-
-\paragraph{Projects with convergence tests.}  For a project made in two phases
-(convergence tests first, then \cmd{submit_calculations.sh} or
-\cmd{run_calculations.sh}), broken ENCUT/k-point tests are repaired and
-resubmitted; the production steps are \emph{not} started for you, since you choose
-their ENCUT and k-mesh from the tests.  Such a project shows
-\cmd{phase2_pending} once the tests are complete.
-
-\paragraph{Local projects (no SLURM).}  Their repair script runs VASP directly, one step after
-the other.  Run that script on a machine where VASP may run (not on a login node):
-\cmd{bash vasp_diagnose_*/fix/projects__GaAs_test.sh}.
-
-\paragraph{Leave a material out.}  \cmd{bash ht_tools/skip_fixes.sh DIAG_DIR NAME ...} comments its line in \cmd{submit_all_fixes.sh} out (\opt{undo} puts it back), e.g.\ for a duplicate that another run replaces.
-
-\paragraph{Fewer jobs in the queue.}
-\cmd{MAX_QUEUED=50 nohup bash .../submit_all_fixes.sh > fixes.log 2>&1 &}
-
-\paragraph{Stop submitting.}  \cmd{pkill -f submit_all_fixes.sh}.  Jobs already
-submitted keep running; cancel them with \cmd{scancel} if needed.
-
-\paragraph{Undo a repair.}  Nothing is deleted.  Cancel the material's jobs,
-move the files from \cmd{<folder>/stale_<date>/<step>/} back into \cmd{<step>/}
-and remove the \cmd{TAG = value} lines added at the end of the INCAR.
-\cmd{01_relax/POSCAR.orig} is the structure before the first restart.
-
-\paragraph{Problems in the log.}  \texttt{awk '/\textasciicircum !!!|\textasciicircum -{}- /' fixes.log} lists failed
-submissions (\cmd{!!!}) and materials skipped because they had jobs in the queue or
-their outputs had changed since the diagnosis (\texttt{-{}-}); for the latter, diagnose again.
-
-How the tool decides what failed and what to redo --- options, the list file, the failure classes and their repairs, the outputs and the limitations --- is in Appendix~\ref{app:diagnose}.
+How the diagnosis decides what failed and what to redo --- options, the list file, the
+causes and their repairs, the output files and the limitations --- is in
+Appendix~\ref{app:diagnose}.
 
 % ============================================================
 \section{Looking up one material or job quickly}
@@ -1928,7 +1938,8 @@ How the tool decides what failed and what to redo --- options, the list file, th
 
 Five short scripts in \cmd{ht_tools/} answer the questions that come up while
 checking runs, so that you do not have to remember long \cmd{grep}/\cmd{awk}
-commands.  Run them from \cmd{~/VASP-Flow}.  A material can be given by its
+commands.  Run them from anywhere (as \cmd{bash ~/VASP-Flow/ht_tools/...}; the
+round folders are relative to where you are).  A material can be given by its
 name (\cmd{mp-20352}, \cmd{GaAs}) --- it is looked up in
 \cmd{/scratch/$USER/VASP-Flow/*/materials/} (and \cmd{~/VASP-Flow/*/materials/},
 skipping runs that were moved to scratch) --- or as a folder path.  A name found
@@ -1939,9 +1950,9 @@ to use it.
 \thead
 Question & Command \\ \midrule
 Which materials failed, and what will each fix change? &
-  \cmd{bash ht_tools/show_problems.sh diag_round3} (\opt{all}: also the \cmd{spilling_high} ones) \\
+  \cmd{bash ht_tools/show_problems.sh diagnosis_round3} (\opt{all}: also the \cmd{spilling_high} ones) \\
 Leave some materials out of the resubmission &
-  \cmd{bash ht_tools/skip_fixes.sh diag_round3 NAME ...} (\opt{undo} puts them back) \\
+  \cmd{bash ht_tools/skip_fixes.sh diagnosis_round3 NAME ...} (\opt{undo} puts them back) \\
 How far did each step of a material get? &
   \cmd{bash ht_tools/show_material_status.sh mp-20352 [relax scf bands dos lobster]} \\
 What did SLURM do with its jobs? &
@@ -1958,18 +1969,19 @@ What do the job logs say at the end? &
 
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow
-python3 vasp_diagnose.py ht_list.txt --since 2026-10-01 --out diag_round4
-bash ht_tools/show_problems.sh diag_round4               # what failed, what the fixes do
-bash ht_tools/show_material_status.sh mp-20352 lobster   # a closer look at one material
-bash ht_tools/show_job_log.sh mp-20352 lobster           # ... and at its last log
-bash ht_tools/skip_fixes.sh diag_round4 HT_1-500__mp-6430   # do not resubmit this one
-nohup bash diag_round4/submit_all_fixes.sh > fixes4.log 2>&1 &
+cd /scratch/$USER/VASP-Flow/HT_ins_1
+bash ~/VASP-Flow/ht_tools/next_round.sh -n                         # diagnose only
+bash ~/VASP-Flow/ht_tools/show_material_status.sh mp-20352 lobster # a closer look at one material
+bash ~/VASP-Flow/ht_tools/show_job_log.sh mp-20352 lobster         # ... and at its last log
+bash ~/VASP-Flow/ht_tools/skip_fixes.sh diagnosis_round4 mp-6430   # do not resubmit this one
+nohup bash diagnosis_round4/submit_all_fixes.sh > diagnosis_round4/submit_all_fixes.log 2>&1 &
 \end{lstlisting}
 
 \subsection{\texttt{show\_problems.sh}: what failed and what the fixes will do}
 
 Prints three blocks: every material of \cmd{diagnosis.tsv} that is not
-\cmd{ok} (label, per-step status, planned action); which fix scripts
+\cmd{ok} (label, per-step status, planned action, cause and fix certainty, repair round);
+which fix scripts
 \cmd{submit_all_fixes.sh} will \cmd{RUN} and which are \cmd{skipped}; and, per fix
 script, the changes it makes (e.g.\ \cmd{lobster: nscf_diverged -> ALGO = Fast},
 \cmd{scf: walltime 01:00:00}).  Check this before every submission.
@@ -1977,8 +1989,8 @@ script, the changes it makes (e.g.\ \cmd{lobster: nscf_diverged -> ALGO = Fast},
 \subsection{\texttt{skip\_fixes.sh}: leave materials out}
 
 \begin{lstlisting}[language=bash]
-bash ht_tools/skip_fixes.sh diag_round4 HT_1-500__mp-6430 HT_1-500__mp-7889
-bash ht_tools/skip_fixes.sh diag_round4 --undo HT_1-500__mp-6430
+bash ht_tools/skip_fixes.sh diagnosis_round4 HT_1-500__mp-6430 HT_1-500__mp-7889
+bash ht_tools/skip_fixes.sh diagnosis_round4 --undo HT_1-500__mp-6430
 \end{lstlisting}
 Each name is matched as part of the fix script's name, so \cmd{mp-6430} skips the
 material in every run.  It prints the new \cmd{RUN}/\cmd{skipped} list.  Typical
@@ -2084,33 +2096,24 @@ ${\sim}10^5$~eV means the run diverged.  \cmd{test_relax.sh} \opt{report} gives 
 volume, pressure and max force per ionic step.
 
 \begin{tipbox}
-Once a setting works, put it into production: let \cmd{vasp_diagnose.py} write the
-fix (it knows the common ones), or edit the step's INCAR in \cmd{materials/ID/}
-yourself and resubmit that step, e.g.\
-\cmd{cd materials/ID && sbatch --job-name=ID_bands --time=01:00:00 job.sbatch bands}.
+Once a setting works, put it into production with
+\cmd{set_params.sh ID STEP "TAG=VALUE"} and the next round (Section~\ref{sec:set-params}).
 Delete \cmd{tests/} when done.
 \end{tipbox}
 
 % ============================================================
-\section{Maintenance tools for high-throughput directories}
+\section{Auditing, collecting and cleaning up a high-throughput run}
 \label{sec:ht-tools}
 % ============================================================
 
-Besides the diagnosis (Section~\ref{sec:diagnose}), the look-up tools
-(Section~\ref{sec:lookup}) and the test scripts (Section~\ref{sec:testfix}),
-\cmd{ht_tools/} holds scripts that act on a whole high-throughput directory.
-Run them from that directory:
+When \cmd{next_round.sh} has nothing left to submit, check the run once more and
+pack the results.  Run these from the high-throughput folder:
 \begin{lstlisting}[language=bash]
-cd /scratch/$USER/VASP-Flow/HT_1-500
-bash ../ht_tools/audit_run.sh             # read-only
-bash ../ht_tools/cleanup_large.sh         # dry run
-bash ../ht_tools/cleanup_large.sh --apply # do it
+cd /scratch/$USER/VASP-Flow/HT_ins_1
+bash ~/VASP-Flow/ht_tools/audit_run.sh             # read-only
+bash ~/VASP-Flow/ht_tools/collect_lobster.sh       # -> ~/lobster_collect_<date>.tar.gz
+bash ~/VASP-Flow/ht_tools/cleanup_large.sh         # dry run; --apply deletes
 \end{lstlisting}
-All of them are dry runs unless \opt{apply} is given, skip materials with
-queued jobs, and never delete outputs (except \cmd{cleanup_large.sh}, whose job is
-to delete large files no step needs any more): they are moved into a
-\cmd{stale_<date>} folder of the material.  Full descriptions are in
-\cmd{ht_tools/README.md}.
 
 \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}X@{}}
 \thead
@@ -2121,24 +2124,14 @@ Script & Purpose \\ \midrule
   in a collected archive and in each backup given.  Writes \cmd{audit_<date>.tsv}. \\
 \cmd{collect_lobster.sh} & Tarball of the data the descriptor database needs
   (raw LOBSTER files, structures, EIGENVALs, trimmed OUTCARs, \cmd{_status.tsv});
-  incremental.  \cmd{SCF_EIG_ONLY=1} packs only the SCF EIGENVALs of all
-  finished materials. \\
-\cmd{resume_in_scratch.sh} & Moves a run out of the home quota to
-  \cmd{/scratch/$USER/VASP-Flow/<run>} (leaves \cmd{MOVED_TO_SCRATCH.txt} behind, which
-  \cmd{vasp_diagnose.py} follows) and resubmits every unfinished material from its first
-  unfinished step.  Run under \cmd{nohup}. \\
+  incremental: a material is packed again only when it changed (e.g.\ after a repair).
+  \cmd{SCF_EIG_ONLY=1} packs only the SCF EIGENVALs of all finished materials. \\
 \cmd{cleanup_large.sh} & Delete WAVECAR/CHGCAR no remaining step needs
-  (\cmd{02_scf/CHGCAR} is kept unless \opt{deep}). \\
-\cmd{reset_stale.sh} & Redo steps whose inputs changed (relax unconverged
-  or finished after the SCF, truncated LOBSTER files, blank EIGENVAL). \\
-\cmd{fix_failed.sh [ids]} & The older, high-throughput-only predecessor of
-  \cmd{vasp_diagnose.py}: finds broken chains (a step FAILED / TIMEOUT /
-  OUT\_OF\_MEMORY, the rest \cmd{DependencyNeverSatisfied}), repairs and resubmits
-  them.  Prefer \cmd{vasp_diagnose.py}. \\
-\cmd{patch_relax_ibrion.sh}, \cmd{patch_lean_outputs.sh} & One-off
-  patches of a directory generated before those fixes. \\
+  (\cmd{02_scf/CHGCAR} is kept unless \opt{deep}); dry run unless \opt{apply}. \\
 \bottomrule
 \end{tabularx}
+
+Full descriptions are in \cmd{ht_tools/README.md}.
 
 % ============================================================
 \section{Troubleshooting: symptom and remedy}
@@ -2188,7 +2181,7 @@ Band plot empty or not shown &
 Symptom & What to do \\ \midrule
 Jobs stay in the queue as \cmd{DependencyNeverSatisfied} &
   A step before them did not end OK, so they can never start.  \cmd{scancel} them,
-  then run \cmd{vasp_diagnose.py} (Section~\ref{sec:diagnose}); it finds the failed
+  then run \cmd{next_round.sh} (Section~\ref{sec:diagnose}); it finds the failed
   step and writes the repair. \\[3pt]
 Bands/DOS/LOBSTER energies run away to $10^{6}$--$10^{10}$~eV &
   Pure Davidson diverging at fixed density (seen for Ba$_2$YReO$_6$, Sr$_2$YReO$_6$).
@@ -2201,13 +2194,18 @@ Bands/DOS/LOBSTER energies run away to $10^{6}$--$10^{10}$~eV &
   are capped from the start, Appendix~\ref{app:lobster-mem}).  More memory per rank (one
   node, fewer ranks) did not help.  For other steps lower KPAR. \\[3pt]
 SCF reached EDIFF (the \cmd{1 F=} line is in OSZICAR) but the job still hit its time limit &
-  VASP stalled after convergence, so more walltime will not help.  Look at where it
-  stopped (\cmd{show_material_status.sh ID scf} prints the OUTCAR tail and the time of
-  its last write) and at the job log before resubmitting. \\[3pt]
+  VASP stalled after convergence (seen on two-node runs, in the MPI network layer), so more
+  walltime will not help.  The diagnosis calls it \cmd{hang} and reruns the step on one
+  node; \cmd{show_material_status.sh ID scf} shows where it stopped. \\[3pt]
+A step ``finished'' in a few minutes, but its SCF is not converged (\cmd{hard stop encountered} in OUTCAR) &
+  A \cmd{STOPCAR} from an earlier, killed job was still in the folder.  The diagnosis calls it
+  \cmd{stopcar}, removes it and redoes the step and the ones that used its output.  Job
+  scripts made since v2.6 remove a leftover STOPCAR themselves; for older ones, do not
+  resubmit a step by hand without deleting its STOPCAR. \\[3pt]
 The relax ends \cmd{relax_unconv} in every round, with small forces &
   Check the last max force and pressure (\cmd{show_material_status.sh ID relax}).  If
   they are close to EDIFFG and a few kB, accept the structure and leave the material
-  out (\cmd{skip_fixes.sh}). \\[3pt]
+  out (\cmd{skip_fixes.sh}), or loosen \cmd{EDIFFG} with \cmd{set_params.sh ID relax "EDIFFG=-0.02"}. \\[3pt]
 A material shows \cmd{queued} in two runs, although only one has jobs &
   Both runs use the same job name (\cmd{<material>_<step>}); diagnose again when the
   queue is empty. \\[3pt]
@@ -2640,8 +2638,8 @@ spglib/pymatgen version mismatch: \texttt{pip install -U spglib}.  The driver
 falls back to \texttt{Structure.get\_primitive\_structure()} automatically.
 \end{notebox}
 
-\subsection{\texttt{ht-semimetals.py} in detail}
-\label{sec:ht-semimetals}
+\subsection{\texttt{ht\_runs.py} in detail}
+\label{sec:ht-runs}
 
 It builds a self-contained \texttt{highthroughput\_*} directory: one
 \texttt{materials/<id>/job.sbatch} per material; \texttt{submit\_all.sh}
@@ -2726,12 +2724,13 @@ python3 vasp_diagnose.py LIST [options]
 \toprule
 \thead Option & Default & Meaning \\
 \midrule
-\opt{out DIR}       & \cmd{vasp_diagnose_<date>_<time>} & folder for the report and the scripts \\
+\opt{out DIR}       & \cmd{diagnosis_round<N>} & folder for the report and the scripts; $N$ = 1 + the last round in the current folder \\
 \opt{root DIR}      & --- & another folder to look up material names in (can be repeated) \\
 \opt{since DATE}    & 14 days ago & how far back SLURM's job records (\cmd{sacct}) are read, YYYY-MM-DD;
                                     must reach back to the jobs being diagnosed \\
 \opt{kpar-max N}    & 8 & largest KPAR written by the out-of-memory repair \\
 \opt{spill-max X}   & 5 & LOBSTER charge spilling (\%) above which a material is flagged \\
+\opt{max-rounds N}  & 5 & repairs of one material before it is held for review \\
 \opt{retry-unknown} & off & also submit the materials whose failure was not recognised \\
 \opt{max-queued N}  & 200 & default queue limit of \cmd{submit_all_fixes.sh}
                             (override later with \cmd{MAX_QUEUED=}) \\
@@ -2789,7 +2788,7 @@ How the jobs are resubmitted depends on how the run was made:
 \end{center}
 
 Each material gets a \emph{label}, \cmd{<run folder>__<material>}
-(e.g.\ \cmd{HT_semimetals__mp-149}, \cmd{projects__GaAs_test}); it names the
+(e.g.\ \cmd{HT_ins_1__mp-149}, \cmd{projects__GaAs_test}); it names the
 repair script and the report line.
 
 \subsection{When is a step OK?}
@@ -2809,7 +2808,7 @@ repair script and the report line.
 \cmd{03_bands}  & finished, converged, and no energy above $10^6$~eV in OSZICAR \\
 \cmd{04_dos}    & as bands, and a non-empty DOSCAR \\
 \cmd{06_dfpt}   & finished with Born charges or the dielectric tensor in OUTCAR \\
-\cmd{08_lobster}& \cmd{lobster.out} has \cmd{finished in}; a charge spilling above
+\cmd{08_lobster}& \cmd{lobster.out} has \cmd{finished in} and \cmd{ICOHPLIST.lobster} is not empty; a charge spilling above
                   \opt{spill-max} is reported but counts as OK \\
 \bottomrule
 \end{tabularx}
@@ -2820,9 +2819,12 @@ repair script and the report line.
 For a step that is not OK, the cause is read from the step's newest SLURM logs,
 \cmd{vasp.out}, the end of OUTCAR and the SLURM job record (state, run time,
 time limit).  The job record wins: a job SLURM ended for its time limit is a
-\cmd{timeout}, whatever else is in the logs.  So is a VASP run stopped by the STOPCAR
-that the VASP-Flow scripts write shortly before the time limit (\cmd{hard stop encountered},
-\cmd{soft stop encountered}).  Messages after which VASP carries on, such as
+\cmd{timeout}, whatever else is in the logs --- or a \cmd{hang}, if the step is an SCF or
+fixed-density run whose electronic loop had already converged (its \cmd{1 F=} line is in
+OSZICAR) but which never reached the final timing block.  A VASP run stopped by the STOPCAR
+that the VASP-Flow scripts write 15 minutes before the time limit (\cmd{hard stop encountered},
+\cmd{soft stop encountered}) is a \cmd{timeout} as well; stopped that way long before its time
+limit (or with a STOPCAR still in the folder and no requeue pending), it is a \cmd{stopcar}.  Messages after which VASP carries on, such as
 \cmd{Sub-Space-Matrix is not hermitian} or \cmd{The number of bands has changed}, are
 shown in the script header but never taken as the cause.
 
@@ -2840,6 +2842,10 @@ oom & out of memory (\cmd{insufficient virtual memory}, \cmd{Cannot allocate mem
   KPAR lowered to at most \opt{kpar-max} (a divisor of the MPI ranks); all node memory requested;
   for the LOBSTER NSCF also its k-mesh halved per axis \\
 timeout & the job hit its time limit & walltime doubled; a relax continues from its last structure \\
+hang & an SCF/fixed-density run converged, then stalled until the time limit & rerun on one node, with the
+  other redone static steps; on one node already: walltime doubled \\
+stopcar & VASP stopped early by a STOPCAR an earlier, killed job left behind &
+  STOPCAR removed; the step and the steps that used its output redone \\
 scf\_nelm & SCF stopped at NELM without converging & \cmd{ALGO = All}, \cmd{NELM} $\geq 150$ \\
 nscf\_diverged & bands/DOS/LOBSTER energies exploded & 30\% more bands than the SCF (not for LOBSTER);
   eigensolver \cmd{Normal} (Davidson, VASP's default) $\to$ \cmd{Fast} $\to$ \cmd{VeryFast} (RMM-DIIS), then held;
@@ -2856,8 +2862,12 @@ lobster\_fail & VASP part of the LOBSTER step finished, the LOBSTER program did 
 quota & disk full / quota exceeded & resubmitted unchanged --- \textbf{free space first} \\
 mpi\_init & MPI failed to start (bad node) & resubmitted unchanged \\
 not\_run & never ran (e.g.\ an earlier step failed) & submitted \\
+user\_params & you changed the step's settings with \cmd{set_params.sh} after its last run &
+  redone with them (Section~\ref{sec:set-params}) \\
 unknown & none of the above & script written but held back for review \\
 \emph{(any)} \dots\ \cmd{(fix already in INCAR)} & the repair for this cause is already in the INCAR, so it did not help &
+  script written but held back for review \\
+\emph{(any)}, twice & the previous repair of the step had the same cause, or \opt{max-rounds} repairs done &
   script written but held back for review \\
 \midrule
 spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & none (report only) \\
@@ -2895,9 +2905,15 @@ What a repair script changes in a material folder:
 \begin{itemize}
   \item \textbf{INCAR}: every line of a changed tag is removed and \cmd{TAG = value} is
         added at the end.  No other tags are touched.
-  \item \textbf{Old outputs} of every redone step (OUTCAR, OSZICAR, CHGCAR, WAVECAR,
-        \cmd{*.lobster}, \dots, or the whole broken convergence point) are moved to
-        \cmd{<folder>/stale_<date>/}.  Inputs stay in place; nothing is deleted.
+  \item \textbf{The failed run} of every redone step goes to
+        \cmd{<folder>/round_<i>_<date>/<step>/} first (Section~\ref{sec:round-backup}): inputs
+        copied, small outputs and job logs moved, WAVECAR/CHGCAR/vasprun.xml and the other large
+        files deleted; a broken convergence point is moved there as a whole.  Older repairs (before
+        v2.6) used \cmd{stale_<date>/}; both count as repair rounds.
+  \item \textbf{Your settings} from \cmd{user_params.txt} are applied after the automatic changes.
+  \item \textbf{Nodes}: a step that hung on several nodes, and the other static steps redone with it,
+        get \cmd{--nodes=1}; a step whose last run used fewer nodes than \cmd{job.sbatch} asks for keeps
+        that number.  KPAR is lowered to a divisor of the new number of ranks.
   \item \textbf{Relax restarts} from the newest complete CONTCAR (else the last XDATCAR frame);
         the original POSCAR is kept once as \cmd{POSCAR.orig}.
   \item \textbf{SCF start}: if the relax's CHGCAR is cut off, the SCF starts from scratch.
@@ -2937,6 +2953,9 @@ DFPT 8\,h, LOBSTER 4\,h, tests 8\,h), doubled after a time-out.
 \cmd{steps}  & \cmd{step:status} for each step (\cmd{conv:encut}, \cmd{conv:kpoints}, \cmd{relax}, \dots) and notes \\
 \cmd{action} & \cmd{ok}, a report-only name, or \cmd{<cause> -> <steps redone>}; \cmd{REVIEW} in front when held back \\
 \cmd{script} & its repair script, if any \\
+\cmd{round} & the material's repair round ($i$ of \cmd{round_<i>}) \\
+\cmd{cause_certainty}, \cmd{fix_certainty} & as in \cmd{report.txt} (Section~\ref{sec:certainty});
+  the fix value is the lowest over the material's broken steps \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -2946,14 +2965,19 @@ awk -F'\t' 'NR>1 {split($5,a," "); n[a[1]]++} END {for (k in n) print k, n[k]}' 
 awk -F'\t' '$5 ~ /^REVIEW/ {print $1}' diagnosis.tsv
 \end{lstlisting}
 
+\paragraph{\cmd{report.txt}} --- one block per failed material (Section~\ref{sec:diagnose}), held
+ones first; \cmd{failed_list.txt} lists the folders that got a repair script, \cmd{review_list.txt}
+the held ones with the reason.
+
 \paragraph{\cmd{fix/<label>.sh}} --- a stand-alone bash script; it can be run on its own.
 In order it:
 \begin{enumerate}
   \item records the diagnosis and the error lines in its header;
   \item \textbf{stops} if the material has jobs in the queue, or if any of its OUTCARs
         or \cmd{lobster.out} changed since the diagnosis (so it is safe to run late, or twice);
-  \item applies the INCAR changes and moves the old outputs aside;
-  \item submits the jobs (or runs them, for a local project);
+  \item writes the round backup and its \cmd{WHY.txt}, then applies the changes;
+  \item submits the jobs (or runs them, for a local project) and adds a line per repaired step to
+        \cmd{repair_history.tsv};
   \item leaves a marker \cmd{.submitted/<label>} in the output folder.
 \end{enumerate}
 
@@ -2970,11 +2994,10 @@ as commented-out lines.
         cause is then taken from the log files only.
   \item Only jobs since \opt{since} are known to the tool.  Without a job record a time-out is
         still recognised from the log, but the walltime is doubled from the configured value.
-  \item A second out-of-memory failure with KPAR already $\leq$ \opt{kpar-max} is resubmitted
-        with the same KPAR (the LOBSTER mesh is halved again); diagnose again with a smaller
-        \opt{kpar-max}.
-  \item A material that fails again with the same cause after one repair (e.g.\
-        \cmd{scf_nelm}) needs a look by hand.
+  \item A second out-of-memory failure of the same step is held for review (same cause twice);
+        lower KPAR or the mesh with \cmd{set_params.sh}, or diagnose with a smaller \opt{kpar-max}.
+  \item The certainty numbers are rule-based estimates (Section~\ref{sec:certainty}), corrected only
+        by the repair history of the runs checked.
   \item \cmd{quota} and \cmd{mpi_init} are resubmitted unchanged: free disk space first;
         node failures are usually transient.
   \item \cmd{05_wannier} and \cmd{07_phonons} are not checked; a convergence-test range that
@@ -3169,6 +3192,21 @@ as commented-out lines.
     \texttt{LOBSTER\_MAX\_KPW} ($6\times10^6$); \texttt{vasp\_diagnose.py} halves the
     LOBSTER mesh after an out-of-memory failure.  \texttt{test\_step.sh}: one-node tests
     go to the \texttt{standard} partition.
+  \item[\textcolor{mainblue}{v2.6} (2026-10-13)]
+    Repairs in rounds: \texttt{ht\_tools/next\_round.sh} diagnoses a high-throughput run into
+    \texttt{diagnosis\_round<N>/}, shows the failures and submits the repairs after a y/N
+    question.  \texttt{report.txt} explains each failure (cause in words, evidence) with a
+    certainty for the cause and for the fix (rule value corrected by the run's repair history);
+    \texttt{failed\_list.txt}, \texttt{review\_list.txt}.  The failed run is backed up in
+    \texttt{<material>/round\_<i>\_<date>/} (inputs, small outputs, logs, \texttt{WHY.txt};
+    large files deleted) and recorded in \texttt{repair\_history.tsv}; held for review after the
+    same cause twice or 5 repairs.  \texttt{ht\_tools/set\_params.sh}: your own INCAR tags,
+    k-mesh, walltime and node count per material and step, applied by the next round.  New
+    causes \texttt{hang} (converged, then stalled on several nodes: rerun on one node) and
+    \texttt{stopcar} (stopped early by a leftover STOPCAR); job scripts remove a leftover STOPCAR
+    at the start.  \texttt{ht-semimetals.py} renamed \texttt{ht\_runs.py}.  Removed the
+    superseded \texttt{fix\_failed.sh}, \texttt{reset\_stale.sh},
+    \texttt{resume\_in\_scratch.sh}, \texttt{redo\_lobster.sh}, \texttt{patch\_*.sh}.
 \end{description}
 
 \vfill

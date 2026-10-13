@@ -1,6 +1,6 @@
 #!/bin/bash
 # Collect the data needed for the descriptor database from a VASP-Flow
-# highthroughput run (ht-semimetals.py layout) into one small tarball.
+# highthroughput run (ht_runs.py layout) into one small tarball.
 #
 # Per material it packs only data -- no plot scripts, no images:
 #   POSCAR                      input structure (MP primitive cell)
@@ -22,7 +22,7 @@
 #
 # Incremental: only materials whose LOBSTER step is finished AND that changed since
 # they were last collected are packed (marker <material>/.vf_collected, touched after
-# a successful pack; reset_stale.sh removes it).  ALL=1 packs every finished material.
+# a successful pack; a repaired material has newer outputs, so it is packed again).  ALL=1 packs every finished material.
 #
 # Usage (run from the HT root, e.g. cd ~/VASP-Flow/HT_1-500):
 #   bash ../ht_tools/collect_lobster.sh [ROOT] [MAX_FILE_SIZE]
