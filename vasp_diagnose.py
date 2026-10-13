@@ -512,8 +512,10 @@ def classify(m, step, rec, provisional, point=None):
         return cls, errs, cert, '; '.join(x for x in (ev, job) if x)
 
     def time_limit(cert, ev):
-        # a static step that had converged but never finished: it hung, more time will not help
-        if static and ionic_done(m, step) and not finished(m, step):
+        # a static step that had converged but never finished: it hung, more time will not help.
+        # 'F=' alone is not enough: the walltime guard's LABORT also ends the electronic loop
+        # with an F= line, and then the step was simply too slow
+        if static and ionic_done(m, step) and converged(m, step) and not finished(m, step):
             return out('hang', 0.8, ev + '; the electronic loop had converged (F= line in OSZICAR) '
                        'but VASP never reached the final timing block')
         return out('timeout', cert, ev)
