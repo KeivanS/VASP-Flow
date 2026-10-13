@@ -11,7 +11,8 @@
 #      OUTCAR/lobsterout/ICO*LIST moved, WAVECAR and the *CAR.lobster curves deleted) with WHY.txt;
 #      repair_history.tsv gets a line "lobster spilling_high";
 #   2. 08_lobster/INCAR: NBANDS = --factor (2) x the largest pbeVaspFit2015 basis of the cell
-#      (never fewer than before); KPAR made a divisor of the cores;
+#      (never fewer than before); KPAR made a divisor of the cores; 08_lobster/KPOINTS: the mesh
+#      reduced to the v2.5 limits (<= 10000 points, k-points x plane waves <= 6e6) if larger;
 #   3. one job (08_lobster/basis_scan.sbatch): the symmetry-off NSCF, then LOBSTER once per
 #      basis (min/standard/max per element); the lowest charge spilling is kept
 #      (08_lobster/basis_scan.tsv, basis_scan_best.txt); WAVECAR deleted, plots redrawn.
@@ -30,6 +31,49 @@ while [ $# -gt 0 ]; do
     esac
 done
 NT=${R_NTASKS:-40}
+cap_mesh() {   # MATERIAL_DIR WRITE(0|1): LOBSTER mesh within the v2.5 limits (<= 10000 points, k x PW <= 6e6)
+    python3 - "$1" "${R_MAX_KPTS:-10000}" "${R_MAX_KPW:-6e6}" "$2" <<'PY'
+import sys, os, math
+m, maxk, budget, write = sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), sys.argv[4] == '1'
+kp = open(os.path.join(m, '02_scf/KPOINTS')).read().split('\n')
+mesh = [int(x) for x in kp[3].split()[:3]]
+pos = os.path.join(m, '02_scf/POSCAR')
+L = open(pos).read().split('\n')
+sc = float(L[1].split()[0])
+A = [[float(x) for x in L[i].split()[:3]] for i in (2, 3, 4)]
+det = (A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0])
+       + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]))
+vol = -sc if sc < 0 else abs(det) * sc ** 3
+la, lb = (math.sqrt(sum(x * x for x in v)) for v in A[:2])
+cosg = sum(a * b for a, b in zip(A[0], A[1])) / (la * lb)
+hexa = abs(la - lb) < 1e-3 * la and abs(abs(cosg) - 0.5) < 1e-3
+encut = 500.0
+for l in open(os.path.join(m, '08_lobster/INCAR')):
+    if l.split('=')[0].strip().upper() == 'ENCUT':
+        encut = float(l.split('=')[1].split()[0])
+npw = vol * (encut / 3.80998) ** 1.5 / (6 * math.pi ** 2)
+def nk(g):
+    n = g[0] * g[1] * g[2]; t = 2 ** sum(1 for x in g if x % 2 == 0)
+    return (n - t) // 2 + t
+def fits(g):
+    return (not maxk or g[0] * g[1] * g[2] <= maxk) and (not budget or nk(g) * npw <= budget)
+def snap(n, i):
+    if n <= 1: return 1
+    if hexa and i < 2 and n >= 6: return max(6, int(round(n / 6.0)) * 6)
+    return max(2, int(round(n / 2.0)) * 2)
+new, f = list(mesh), 1.0
+while not fits(new) and f > 0.05 and max(new) > 2:
+    f *= 0.95
+    new = [snap(int(round(n * f)) if n > 1 else 1, i) for i, n in enumerate(mesh)]
+tag = '' if new == mesh else ' reduced from %dx%dx%d' % tuple(mesh)
+if write and new != mesh:
+    open(os.path.join(m, '08_lobster/KPOINTS'), 'w').write(
+        "Automatic Gamma mesh (LOBSTER, SCF mesh%s: %d k x ~%d PW; ISYM=0)\n0\nGamma\n  %d  %d  %d\n  0  0  0\n"
+        % (tag, nk(new), npw, new[0], new[1], new[2]))
+print('   LOBSTER mesh %dx%dx%d -> %dx%dx%d  (%d k-points x ~%d plane waves = %.2g)'
+      % tuple(mesh + new + [nk(new), npw, nk(new) * npw]))
+PY
+}
 spill() { grep -i "abs. charge spilling" "$1" 2>/dev/null | awk '{gsub("%","",$NF); print $NF}' | sort -g | tail -1; }
 if [ ${#ids[@]} -eq 0 ]; then
     for f in "$HERE"/materials/*/08_lobster/lobsterout; do
@@ -55,7 +99,7 @@ for id in "${ids[@]}"; do
     new=$(cd "$L" && python3 lobster_basis.py nbands . --factor "$factor") || { echo "   could not count basis functions - skipped"; continue; }
     [ -n "$old" ] && [ "$old" -gt "$new" ] && new=$old
     echo "   NBANDS ${old:-default} -> $new"
-    [ $submit = 1 ] || continue
+    [ $submit = 1 ] || { cap_mesh "$m" 0; continue; }
 
     cd "$m" || continue
     i=$(( $(command ls -d round_[0-9]*_* stale_* 2>/dev/null | wc -l) + 1 ))
@@ -72,6 +116,7 @@ for id in "${ids[@]}"; do
     for f in "$id-${id}_lobster"-*.out "$id-${id}_lobster"-*.err; do [ -e "$f" ] && mv -f "$f" "$RB/"; done
     printf 'fix_spilling.sh %s: abs. charge spilling %s %% > %s %%\nNBANDS %s -> %s, then LOBSTER basis scan (min/standard/max per element).\n' \
         "$(date '+%F %T')" "${s:-?}" "$above" "${old:-default}" "$new" > "round_${i}_$stamp/WHY.txt"
+    cap_mesh "$m" 1 || echo "   could not check the k-mesh"
     sed -i.bak -E "/^[[:space:]]*NBANDS[[:space:]]*=/d" 08_lobster/INCAR && rm -f 08_lobster/INCAR.bak
     printf 'NBANDS = %s   ! fix_spilling.sh: %s x largest LOBSTER basis\n' "$new" "$factor" >> 08_lobster/INCAR
     kp=$(awk -F= 'toupper($1) ~ /^[ \t]*KPAR[ \t]*$/ {print $2+0}' 08_lobster/INCAR | tail -1)
