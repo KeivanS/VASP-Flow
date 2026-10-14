@@ -21,7 +21,7 @@ Usage:
     lobster_dos_plot.py <lobster_dir> <out_stem> <project_label>
                         [--dos-dir 04_dos] [--emin -10] [--emax 5]
 
-    <out_stem>  full path WITHOUT extension, e.g. analysis/MoSe2_lobster_dos
+    <out_stem>  full path WITHOUT extension, e.g. plots/MoSe2_lobster_dos
     Output:     <out_stem>.png  and  <out_stem>.pdf
 """
 import argparse

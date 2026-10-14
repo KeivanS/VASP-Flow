@@ -11,7 +11,7 @@ Usage:
     cohp_plot.py <lobster_dir> <out_stem> <project_label>
                  [--which cohp|cobi|coop] [--emin -10] [--emax 5]
 
-    <out_stem>  full path WITHOUT extension, e.g. analysis/MoSe2_cohp
+    <out_stem>  full path WITHOUT extension, e.g. plots/MoSe2_cohp
     Output:     <out_stem>.png  and  <out_stem>.pdf
 """
 import os
@@ -168,7 +168,7 @@ def main():
     ap.add_argument('lobster_dir',
                     help='directory containing *CAR.lobster files')
     ap.add_argument('out_stem',
-                    help='output path without extension, e.g. analysis/MoSe2_cohp')
+                    help='output path without extension, e.g. plots/MoSe2_cohp')
     ap.add_argument('project_label',
                     help='project name shown in the plot title')
     ap.add_argument('--which', choices=('cohp', 'cobi', 'coop'), default='cohp',

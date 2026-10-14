@@ -29,12 +29,20 @@ A browser-based interface for setting up and running VASP density-functional-the
 git clone https://github.com/KeivanS/VASP-Flow.git
 cd VASP-Flow
 
-# 2. Install Python dependencies
-pip install flask sumo
+# 2. A Python >= 3.8 environment with what your route needs
+python3 -m venv ~/vaspenv && source ~/vaspenv/bin/activate
+pip install numpy matplotlib            # all
+pip install flask sumo                  # GUI
+pip install pymatgen mp-api spglib      # high-throughput drivers
+# optional: conda install -c conda-forge phonopy wannier90
 
-# 3. Optional: phonon and Wannier support
-conda install -c conda-forge phonopy wannier90
+# 3. Paths: make setup && nano default_paths (computer) / nano profiles/slurm.json (cluster)
+
+# 4. Is everything ready?
+make check
 ```
+
+The manual (`manual.pdf`, Part I) has the route chooser and the details.
 
 ---
 
@@ -263,7 +271,7 @@ GaAs_PBEsol/
 ├── 04_dos/       INCAR  KPOINTS         POTCAR  run.sh
 ├── 05_wannier/   06_dfpt/   07_phonons/          (if those tasks are enabled)
 ├── 08_lobster/   INCAR  KPOINTS  lobsterin  POTCAR  run.sh   (LOBSTER task)
-├── analysis/     plots collected by analyze.sh and the Results tab
+├── plots/        plots made by makeplots.sh and the Results tab
 ├── POTCAR        (shared PAW file, symlinked into each step)
 ├── instructions.txt
 └── project.json  (saved GUI state for “Edit & Regenerate”)

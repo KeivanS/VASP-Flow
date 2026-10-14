@@ -49,7 +49,7 @@ CONFIG = {
     'slurm_account':          '',
     'slurm_mpi_cmd':          'srun',
     # physics defaults
-    'kpath':                  'G-M-K-G',
+    'kpath':                  '',          # '' = the spglib path of each POSCAR
     'nkpts_bands':            60,
     'nsw':                    100,
     'ediffg':                 '-0.01',
@@ -77,6 +77,8 @@ if not _first_run:
     try:
         _saved = json.loads(Path(_settings_path).read_text())
         CONFIG.update({k: v for k, v in _saved.items() if k in CONFIG})
+        if CONFIG['kpath'] == 'G-M-K-G':     # the old fixed default: now per POSCAR
+            CONFIG['kpath'] = ''
     except Exception:
         pass
 
@@ -249,6 +251,34 @@ def _launch_visualizer(visualizer: str, filepath: str):
         subprocess.Popen([vx, filepath], env=env)
 
 
+def _plots_dir(pd_):
+    """<project>/plots, or analysis/ in runs made before it was renamed."""
+    old = os.path.join(pd_, 'analysis')
+    new = os.path.join(pd_, 'plots')
+    return old if os.path.isdir(old) and not os.path.isdir(new) else new
+
+
+@app.route('/api/kpath', methods=['POST'])
+def api_kpath():
+    """spglib (Setyawan-Curtarolo) band path of the POSCAR text, for the K-path field."""
+    import tempfile
+    from vasp_input_generator import VASPInputGenerator
+    txt = (request.json or {}).get('poscar', '').strip()
+    if not txt:
+        return jsonify(error='No POSCAR content provided.'), 400
+    with tempfile.TemporaryDirectory() as tmp:
+        f = os.path.join(tmp, 'POSCAR')
+        Path(f).write_text(txt + '\n')
+        try:
+            res = VASPInputGenerator(f, {}).spglib_kpath_string()
+        except Exception as exc:
+            return jsonify(error=f'k-path detection failed: {exc}'), 500
+    if not res:
+        return jsonify(error='spglib/pymatgen could not find a k-path for this POSCAR'), 500
+    path, name, hexa = res
+    return jsonify(kpath=path, lattice=name, hexagonal=bool(hexa))
+
+
 @app.route('/api/visualize_poscar', methods=['POST'])
 def api_visualize_poscar():
     """Convert the POSCAR text → XYZ, then open it in the configured visualizer."""
@@ -318,7 +348,7 @@ def api_generate():
 
     # ── build instruction text ──────────────────────────────────────────
     functional = d.get('functional','R2SCAN')
-    spin_mode  = d.get('spin_mode','none')      # none | collinear | soc_z | soc_x | soc_y
+    spin_mode  = d.get('spin_mode','none')      # none | collinear | soc | soc_z | soc_x | soc_y
     try:
         mag_moment = float(d.get('mag_moment', 2.0))
     except (TypeError, ValueError):
@@ -329,6 +359,7 @@ def api_generate():
 
     methods = [functional + ' functional']
     if spin_mode == 'collinear':       methods.append('collinear magnetization')
+    elif spin_mode == 'soc':           methods.append('SOC, non-magnetic')
     elif spin_mode.startswith('soc'):  methods.append(f'SOC with magnetization in {spin_mode[-1]}-direction')
     if d.get('hexagonal'):  methods.append('hexagonal')
     if d.get('is_2d'):      methods.append('2D monolayer')
@@ -398,7 +429,7 @@ def api_generate():
     if conv_lines: lines += ['Convergence: ' + '\n             '.join(conv_lines), '']
     lines += [f'ISIF: {isif}', f'NSW: {nsw}', f'EDIFFG: {ediffg}', f'NKPTS: {nkpts}']
     if mpi > 1: lines.append(f'MPI: {mpi}')
-    if spin_mode != 'none':
+    if spin_mode not in ('none', 'soc'):
         # An advanced spec (Fe=4.0, O=0.6 | 2*4.0 2*-4.0) wins over the uniform
         # number; SOC runs take the same value and orient it along x/y/z.
         lines.append(f'MAGMOM: {magmom_spec or mag_moment}')
@@ -575,10 +606,12 @@ def api_run():
         'convergence':  'run_convergence.sh',
         'all':          'run_all.sh',
         'calculations': 'run_calculations.sh',
-        'analyze':      'analyze.sh',
+        'makeplots':    'makeplots.sh',
     }
     script = (os.path.join(pd, special[step]) if step in special
               else os.path.join(pd, step, 'run.sh'))
+    if step == 'makeplots' and not os.path.exists(script):
+        script = os.path.join(pd, 'analyze.sh')          # projects made before the rename
     if not os.path.exists(script):
         return jsonify(error=f'Script not found: {script}'), 404
     return jsonify(job_key=_launch(script, slug, step))
@@ -704,7 +737,7 @@ def api_check_overwrite():
 
     elif mode == 'run':
         step = d.get('step', '')
-        special_scripts = {'convergence', 'all', 'calculations', 'analyze'}
+        special_scripts = {'convergence', 'all', 'calculations', 'makeplots'}
         if step in special_scripts:
             # For 'all'/'convergence'/'calculations': list steps with OUTCARs
             steps_with_outcar = []
@@ -1305,7 +1338,7 @@ def _band_plot_opts(slug):
                 if m:
                     ymin, ymax = m.group(1), m.group(2)
             kpath = d.get('kpath', '').strip()
-            if kpath:
+            if kpath and '|' not in kpath:      # breaks: labels come from KPOINTS
                 labels = ','.join(kpath.replace(' ', '').split('-'))
         except Exception:
             pass
@@ -1313,7 +1346,7 @@ def _band_plot_opts(slug):
 
 
 def _elf_bond_plot(pd_, ana):
-    """Run elf_bonds.py on 02_scf/ELFCAR into analysis/. Returns the output PNG
+    """Run elf_bonds.py on 02_scf/ELFCAR into plots/. Returns the output PNG
     path (glob *_elf_bonds.png) or None — None also covers a missing or all-zero
     ELFCAR (VASP writes zeros for SOC / non-collinear runs)."""
     import glob
@@ -1412,7 +1445,7 @@ def api_plot(slug, ptype):
     """Serve plot image. Normalise ptype, run sumo if needed, return png.
     ?emin=&emax= zoom the energy axis (LOBSTER, DOS, bands)."""
     pd_  = _pd(slug)
-    ana  = os.path.join(pd_, 'analysis')
+    ana  = _plots_dir(pd_)
     os.makedirs(ana, exist_ok=True)
     base = _slug_base(slug)
     zmin, zmax = _ewin_args()
@@ -1594,7 +1627,7 @@ def api_plot(slug, ptype):
 
 def _slug_base(slug):
     """File-name stem for plots: the folder name (so an opened results folder
-    'mp-8' reuses analyze.sh's mp-8_band.png etc.)."""
+    'mp-8' reuses makeplots.sh's mp-8_band.png etc.)."""
     return os.path.basename(os.path.normpath(_pd(slug))) or slug
 
 @app.route('/api/projects')
@@ -1639,7 +1672,7 @@ def api_open_results():
     *path* may be one calculation folder (has 02_scf/ ...), a highthroughput
     directory (its materials/ or results/ sub-folder is scanned), or any
     folder whose sub-folders are calculation folders (e.g. the unpacked
-    screen_results.tar.gz).  Plots missing from analysis/ are drawn on
+    screen_results.tar.gz).  Plots missing from plots/ (analysis/ in older runs) are drawn on
     demand by /api/plot from the raw outputs.
     POST {path, clear?} -> {slugs:[...]}.  {clear:true} forgets all.
     """
@@ -1683,7 +1716,7 @@ def api_open_results():
 @app.route('/api/clear_plots/<slug>')
 def api_clear_plots(slug):
     """Delete cached sumo plot PNGs so they are regenerated on next request."""
-    ana = os.path.join(_pd(slug), 'analysis')
+    ana = _plots_dir(_pd(slug))
     if os.path.isdir(ana):
         for f in os.listdir(ana):
             if f.endswith('.png') or f.endswith('.pdf'):
@@ -1694,7 +1727,7 @@ def api_clear_plots(slug):
 def api_plot_pdf(slug, ptype):
     """Serve a plot PDF for download. ?emin=&emax= zoom the energy axis."""
     pd_  = _pd(slug)
-    ana  = os.path.join(pd_, 'analysis')
+    ana  = _plots_dir(pd_)
     base = _slug_base(slug)
     zmin, zmax = _ewin_args()
     zoomed = zmin is not None or zmax is not None
@@ -2125,7 +2158,7 @@ def api_run_sumo(slug, stype):
     if stype not in ('bands', 'dos'):
         return jsonify(error='type must be bands or dos'), 400
     pd_  = _pd(slug)
-    ana  = os.path.join(pd_, 'analysis')
+    ana  = _plots_dir(pd_)
     os.makedirs(ana, exist_ok=True)
     base = _slug_base(slug)
 
@@ -2191,11 +2224,11 @@ def api_run_sumo(slug, stype):
                     f'--ymin {ymin} --ymax {ymax} {labels_flag} '
                     f'--format pdf\n')
             f.write(f'mv *_band.* "{ana}/" 2>/dev/null || true\n')
-            f.write('echo "Band plot (PNG + PDF) saved to analysis/"\n')
+            f.write('echo "Band plot (PNG + PDF) saved to plots/"\n')
         else:
             # DOS plots (total + projected) are generated above as cumulative
             # stacked plots in Python; nothing to run here.
-            f.write('echo "DOS plots (total + projected, cumulative) saved to analysis/."\n')
+            f.write('echo "DOS plots (total + projected, cumulative) saved to plots/."\n')
     os.chmod(tmp, 0o755)
     return jsonify(job_key=_launch(tmp, slug, f'sumo_{stype}'))
 
@@ -2219,7 +2252,7 @@ def api_summary(slug):
 
 # Files shown in the modal. Editable inputs vs read-only outputs/logs.
 INPUT_FILES    = ['INCAR', 'KPOINTS', 'POSCAR']
-# INCAR/KPOINTS = the ISYM=0 NSCF for LOBSTER (KPOINTS defaults to 2x the SCF mesh)
+# INCAR/KPOINTS = the ISYM=0 NSCF for LOBSTER (KPOINTS defaults to the SCF mesh)
 LOBSTER_INPUTS = ['INCAR', 'KPOINTS', 'lobsterin']
 LOBSTER_OUTPUTS = ['lobster_summary.csv', 'ICOHPLIST.lobster', 'ICOBILIST.lobster',
                    'ICOOPLIST.lobster', 'lobsterout', 'lobster.out']
@@ -2475,7 +2508,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
          style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:420px;"
          onkeydown="if(event.key==='Enter')openResults()">
   <button class="btn btn-primary btn-sm" onclick="openResults()"
-          title="Read the results of an executed job; plots not made by analyze.sh are generated here">📂 Open</button>
+          title="Read the results of an executed job; plots not made by makeplots.sh are generated here">📂 Open</button>
   <button class="btn btn-ghost btn-sm" onclick="openResults(true)"
           title="Remove all opened results folders from the project list (files are not touched)">Forget opened</button>
 </div>
@@ -2566,7 +2599,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:8px;">Calculation Defaults</div>
     <div class="g2" style="margin-bottom:14px;">
       <div class="f"><label>K-path for bands</label>
-        <input id="cfg_kpath" placeholder="e.g. G-M-K-G"></div>
+        <input id="cfg_kpath" placeholder="blank = spglib path of each POSCAR"></div>
       <div class="f"><label>K-points along path</label>
         <input id="cfg_nkpts_bands" type="number" min="10" placeholder="60"></div>
       <div class="f"><label>NSW (ionic steps)</label>
@@ -2681,6 +2714,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <select id="spin_mode" onchange="toggleMagMoment()">
         <option value="none">None (non-magnetic)</option>
         <option value="collinear">Collinear spin (ISPIN=2)</option>
+        <option value="soc">SOC, non-magnetic  (vasp_ncl)</option>
         <option value="soc_z">SOC, magnetization ∥ z  (vasp_ncl)</option>
         <option value="soc_x">SOC, magnetization ∥ x  (vasp_ncl)</option>
         <option value="soc_y">SOC, magnetization ∥ y  (vasp_ncl)</option>
@@ -2697,7 +2731,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     </div>
   </div>
   <div class="checks" style="margin-bottom:12px;">
-    <label class="ck"><input type="checkbox" id="hexagonal" checked> Hexagonal BZ</label>
+    <label class="ck"><input type="checkbox" id="hexagonal"> Hexagonal BZ</label>
     <label class="ck"><input type="checkbox" id="is_2d"> 2D / slab (k<sub>z</sub>=1)</label>
     <label class="ck"><input type="checkbox" id="use_u" onchange="toggleU(this)"> GGA+U (explicit)</label>
     <label class="ck" title="Tabulated U_eff (hubbard_u_defaults.csv, Dudarev). Auto: only for chalcogenides/halides (O, S, Se, Te, F, Cl, Br, I in the POSCAR), otherwise U = 0. On: every tabulated d/f element. Off: never. With R2SCAN the table value is scaled by 0.6; none with HSE06. Explicit GGA+U rows always override and are used as given.">
@@ -2764,7 +2798,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div style="font-size:11px;color:var(--sub);margin-top:4px;">
       Subdivisions are even, proportional to the reciprocal cell lengths (Nx·a ≈ Ny·b ≈ Nz·c), and chosen so
       N<sub>x</sub>N<sub>y</sub>N<sub>z</sub>·N<sub>atoms</sub> lands on the kpra target (Coarse 1000, Fine 6000).
-      The relaxation uses its own density (default Coarse); DOS and LOBSTER use 2× the SCF mesh; DFPT and Wannier use the SCF mesh.
+      The relaxation uses its own density (default Coarse); DOS uses 2× the SCF mesh; LOBSTER, DFPT and Wannier use the SCF mesh (LOBSTER's is reduced if it would exceed the memory limits).
       The KPOINTS header of every step reports the mesh and the kpra actually reached.
     </div>
   </div>
@@ -2819,14 +2853,16 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     <div class="task-body" id="tbody-bands">
       <div class="g3">
         <div class="f"><label>K-path</label>
-          <input id="kpath" value="" placeholder="auto-detect (or e.g. G-M-K-G)"></div>
+          <input id="kpath" value="" placeholder="filled from the POSCAR (spglib)" oninput="this.dataset.user='1'"></div>
         <div class="f"><label>K-points per segment</label>
           <input id="nkpts_bands" type="number" value="60" min="10"></div>
         <div class="f"><label>Energy window (eV, relative to EF)</label>
           <input id="ewin" value="-4 to 4" placeholder="-4 to 4"></div>
       </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Use standard labels: Γ→G, Σ→S, Λ→L, Δ→D. Segment separator: −
+        Filled with the spglib (Setyawan-Curtarolo) path of the POSCAR as soon as it is pasted or loaded;
+        edit it to use your own. Standard labels: Γ→G, Σ→S, Λ→L, Δ→D; − joins points, | starts a new segment.
+        <span id="kpath-status" style="display:block;margin-top:2px;"></span>
       </div>
     </div>
   </div>
@@ -2861,7 +2897,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
           <input id="lobster_isym" placeholder="0"></div>
       </div>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. The NSCF k-mesh defaults to 2&times; the SCF mesh in every direction, keeping the SCF ratios (SCF 3&times;4&times;5 &rarr; 6&times;8&times;10); edit <code>08_lobster/KPOINTS</code> on the Workflow page to override. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
+        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. The NSCF uses the SCF k-mesh (reduced in the same ratios if the symmetry-off mesh would exceed the memory limits, LOBSTER_MAX_KPTS / LOBSTER_MAX_KPW); edit <code>08_lobster/KPOINTS</code> on the Workflow page to override. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
       </div>
     </div>
   </div>
@@ -3006,7 +3042,7 @@ const STEP_FILES = [
 // 08_lobster shows only the lobster-relevant files (INCAR = the ISYM=0 NSCF).
 const LOBSTER_STEP_FILES = [
   { name: 'INCAR',                icon: '✏'  },
-  { name: 'KPOINTS',              icon: '✏'  },   // 2x the SCF mesh by default
+  { name: 'KPOINTS',              icon: '✏'  },   // the SCF mesh by default
   { name: 'lobsterin',            icon: '✏'  },
   { name: 'lobster_summary.csv',  icon: '📊' },   // ICOHP/ICOBI/ICOOP + B/AB + fAB
   { name: 'ICOHPLIST.lobster',    icon: '📈' },
@@ -3116,7 +3152,7 @@ async function saveSystemConfig(){
     slurm_time:             v('cfg_slurm_time') || '12:00:00',
     slurm_mpi_cmd:          v('cfg_slurm_mpi_cmd') || 'srun',
     // physics defaults
-    kpath:        v('cfg_kpath') || 'G-M-K-G',
+    kpath:        v('cfg_kpath'),
     nkpts_bands:  vi('cfg_nkpts_bands') || 60,
     nsw:          vi('cfg_nsw') || 100,
     ediffg:       v('cfg_ediffg') || '-0.01',
@@ -3203,7 +3239,7 @@ async function populateResumeList(){
 
 async function openResults(clear){
   // Register a folder of finished calculations for viewing; plots missing
-  // from analysis/ are generated on demand by /api/plot.
+  // from plots/ are generated on demand by /api/plot.
   const msg=document.getElementById('resume-msg');
   const path=clear?'':(document.getElementById('open-res-path').value||'').trim();
   if(!clear&&!path){if(msg) msg.textContent='Type a folder path first.'; return;}
@@ -3313,6 +3349,9 @@ async function loadProjectSettings(){
 
     // Bands params
     s('kpath',       settings.kpath);
+    // a saved path other than the old fixed default is the user's: keep it
+    document.getElementById('kpath').dataset.user =
+      (settings.kpath && settings.kpath !== 'G-M-K-G') ? '1' : '';
     s('nkpts_bands', settings.nkpts_bands);
     s('ewin',        settings.ewin || '-4 to 4');
 
@@ -3409,6 +3448,29 @@ function onPoscar(){
   if(span) span.textContent=els.length?'Elements: '+els.join(', '):'';
   refreshProjRows();
   fetchPotcarVariants();
+  clearTimeout(_kpathTimer);
+  _kpathTimer = setTimeout(fetchKpath, 600);
+}
+// K-path field and Hexagonal box from the POSCAR (spglib), unless typed by the user
+let _kpathTimer = null;
+async function fetchKpath(){
+  const poscar = v('poscar').trim();
+  const kp = document.getElementById('kpath');
+  const st = document.getElementById('kpath-status');
+  if(!poscar || !kp) return;
+  try{
+    const res = await fetch('/api/kpath',{method:'POST', headers:{'Content-Type':'application/json'},
+                                          body:JSON.stringify({poscar})});
+    const j = await res.json();
+    if(!res.ok) throw new Error(j.error||'no k-path');
+    if(kp.dataset.user!=='1') kp.value = j.kpath;
+    const hx = document.getElementById('hexagonal');
+    if(hx) hx.checked = !!j.hexagonal;
+    if(st) st.textContent = 'spglib path for the '+j.lattice+' lattice'+(kp.dataset.user==='1'?' (your path kept): '+j.kpath:'');
+  }catch(e){
+    if(kp.dataset.user!=='1' && !kp.value) kp.value = v('cfg_kpath');
+    if(st) st.textContent = 'no spglib path ('+e.message+'): blank = the agent\'s own choice';
+  }
 }
 function loadFile(inp){
   const r=new FileReader();
@@ -3483,7 +3545,7 @@ function choosePotcar(elem,variant){
 // ── GGA+U rows ─────────────────────────────────────────────────────────────
 function toggleMagMoment(){
   const mode = document.getElementById('spin_mode').value;
-  const show = (mode === 'collinear' || mode.startsWith('soc'));
+  const show = (mode === 'collinear' || mode.startsWith('soc_'));
   document.getElementById('mag_moment_row').style.display = show ? '' : 'none';
   document.getElementById('magmom_row').style.display    = show ? '' : 'none';
 }
@@ -4267,7 +4329,7 @@ async function buildResults(){
   h+=`<div style="margin-top:8px;display:flex;gap:8px;">
     <button class="btn btn-ghost btn-sm" onclick="buildResults()">↺ Refresh plots</button>
     <button class="btn btn-ghost btn-sm" onclick="rerunSumo()">▶ Re-run sumo plots</button>
-    <button class="btn btn-ghost btn-sm" onclick="runAnalyze()">▶ Run analyze.sh (re-generate plots)</button>
+    <button class="btn btn-ghost btn-sm" onclick="runAnalyze()">▶ Run makeplots.sh (re-generate plots)</button>
   </div>
   <div id="log-analyze" class="term hidden" style="margin-top:8px;"></div>`;
 
@@ -4372,7 +4434,7 @@ async function runAnalyze(){
   if(!PROJECT) return;
   const logEl=document.getElementById('log-analyze');
   if(logEl){logEl.classList.remove('hidden'); logEl.textContent='';}
-  const r=await post('/api/run',{project:PROJECT,step:'analyze'});
+  const r=await post('/api/run',{project:PROJECT,step:'makeplots'});
   if(!r.ok){const e=await r.json().catch(()=>({}));if(logEl) logEl.textContent='ERROR: '+(e.error||r.status); return;}
   const d=await r.json();
   stream(d.job_key,'analyze');

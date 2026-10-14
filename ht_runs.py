@@ -420,13 +420,13 @@ def cap_lobster_mesh(proj_dir, budget=None, max_kpts=None):
     return new if reduced else True
 
 
-def localise_analyze_sh(proj_dir, tools_rel):
-    """Repoint analyze.sh at the highthroughput directory's own copy of the repo helper modules.
+def localise_makeplots_sh(proj_dir, tools_rel):
+    """Repoint makeplots.sh at the highthroughput directory's own copy of the repo helper modules.
 
     The agent writes the generation-time absolute path to
     modules/lobster_postprocess.py, which does not exist on the cluster.
     """
-    path = os.path.join(proj_dir, 'analyze.sh')
+    path = os.path.join(proj_dir, 'makeplots.sh')
     if not os.path.isfile(path):
         return
     with open(path) as f:
@@ -576,16 +576,16 @@ do_final() {        # clean up, plots, .done
         rm -f 03_bands/CHGCAR 08_lobster/CHGCAR 02_scf/WAVECAR 02_scf/CHG 03_bands/WAVECAR 03_bands/CHG 08_lobster/CHG
         rm -f 01_relax/WAVECAR 01_relax/CHGCAR 01_relax/CHG
     fi
-    if [ "${RUN_ANALYSIS:-1}" = "1" ] && [ -f analyze.sh ]; then
+    if [ "${RUN_ANALYSIS:-1}" = "1" ] && [ -f makeplots.sh ]; then
         [ -n "${ANALYSIS_PYTHON:-}" ] && export PATH="$(dirname "$ANALYSIS_PYTHON"):$PATH"
         if python3 -c "import numpy, matplotlib" 2>/dev/null; then
-            echo "--- analysis       : $(date)"
-            mkdir -p analysis
-            MPLBACKEND=Agg bash analyze.sh > analysis/analyze.log 2>&1 \
-                || echo "WARNING: analyze.sh reported errors - see analysis/analyze.log"
+            echo "--- plots          : $(date)"
+            mkdir -p plots
+            MPLBACKEND=Agg bash makeplots.sh > plots/makeplots.log 2>&1 \
+                || echo "WARNING: makeplots.sh reported errors - see plots/makeplots.log"
         else
-            echo "WARNING: python3 without numpy/matplotlib - analysis skipped."
-            echo "         Set ANALYSIS_PYTHON in env.sh, then run ./analyze_all.sh."
+            echo "WARNING: python3 without numpy/matplotlib - plots skipped."
+            echo "         Set ANALYSIS_PYTHON in env.sh, then run ./makeplots_all.sh."
         fi
     fi
     # .done (submit_all.sh skips the material) only when every step succeeded
@@ -679,8 +679,8 @@ if [ "${VASPFLOW_NO_CHECK:-0}" != "1" ]; then
     }
 fi
 
-# --- analysis ------------------------------------------------------------------
-# Each job runs analyze.sh (plots + LOBSTER CSV) after its last step.  It needs
+# --- plots ---------------------------------------------------------------------
+# Each job runs makeplots.sh (plots + LOBSTER CSV) after its last step.  It needs
 # a python3 with numpy + matplotlib; module purge above usually leaves only the
 # system python, so point ANALYSIS_PYTHON at a python that has them, e.g.
 #   export ANALYSIS_PYTHON="$HOME/vaspenv/bin/python3"
@@ -923,7 +923,7 @@ PYEND
 COLLECT_SH = r'''#!/bin/bash
 # Aggregate the finished screen into one small tarball to bring back home.
 # The per-material folder layout is kept (results/<id>/02_scf, 03_bands,
-# 08_lobster, analysis), so the VASP-Flow GUI can open results/ directly
+# 08_lobster, plots), so the VASP-Flow GUI can open results/ directly
 # (Setup -> "Open results folder") and draw any plot that is missing.
 # No CHGCAR/WAVECAR/vasprun.xml/PROCAR.  OUTCARs are trimmed to the lines the
 # GUI reads (energies, E-fermi, convergence); FULL_OUTCAR=1 copies them whole.
@@ -944,7 +944,7 @@ while read -r id; do
     [ -z "$id" ] && continue
     d="$HERE/materials/$id"
     [ -d "$d" ] || continue
-    o="$OUT/$id"; mkdir -p "$o/analysis"
+    o="$OUT/$id"; mkdir -p "$o/plots"
     cp "$d/POSCAR" "$o/" 2>/dev/null
     cp "$d/instructions.txt" "$o/" 2>/dev/null
     for s in 01_relax 02_scf 03_bands 08_lobster; do
@@ -962,8 +962,8 @@ while read -r id; do
              lobster_summary.csv; do
         [ -f "$d/08_lobster/$f" ] && cp "$d/08_lobster/$f" "$o/08_lobster/" 2>/dev/null
     done
-    for f in "$d"/analysis/*.png "$d"/analysis/*.pdf "$d"/analysis/*.csv "$d"/analysis/*.log; do
-        [ -f "$f" ] && cp "$f" "$o/analysis/" 2>/dev/null
+    for f in "$d"/plots/*.png "$d"/plots/*.pdf "$d"/plots/*.csv "$d"/plots/*.log; do
+        [ -f "$f" ] && cp "$f" "$o/plots/" 2>/dev/null
     done
 done < "$HERE/material_list.txt"
 
@@ -1054,11 +1054,11 @@ sbatch.  POTCARs are deliberately absent; step 3 rebuilds them there.
     cd /scratch/$USER/@HTDIR@
     vi env.sh          # modules, VASP_STD, LOBSTER_BIN, VASP_POTCAR_DIR, ANALYSIS_PYTHON
 
-Each job ends by running its `analyze.sh` (band / COHP / COBI / COOP /
-LOBSTER-DOS plots and `lobster_summary.csv` in `analysis/`, log in
-`analysis/analyze.log`).  That needs a python3 with numpy + matplotlib: set
+Each job ends by running its `makeplots.sh` (band / COHP / COBI / COOP /
+LOBSTER-DOS plots and `lobster_summary.csv` in `plots/`, log in
+`plots/makeplots.log`).  That needs a python3 with numpy + matplotlib: set
 `ANALYSIS_PYTHON` (e.g. `$HOME/vaspenv/bin/python3`) if the system python
-lacks them.  `./analyze_all.sh` redoes the analysis for finished materials.
+lacks them.  `./makeplots_all.sh` redoes the plots of finished materials.
 
 `LOBSTER_BIN` must be the **Linux** LOBSTER build — the macOS binary named in
 the local config will not run on the cluster.
@@ -1115,7 +1115,7 @@ resubmitted.
 ## 6. Monitor and collect
 
     ./status.sh                  # per-step completion counts; writes incomplete.txt
-    ./analyze_all.sh             # redo per-material plots (each job already runs analyze.sh)
+    ./makeplots_all.sh             # redo per-material plots (each job already runs makeplots.sh)
     ./postprocess_all.sh         # per-material lobster_summary.csv + screen_lobster_all.csv
     ./collect_results.sh         # -> screen_results.tar.gz (small, bring this home)
 
@@ -1157,11 +1157,11 @@ STEP "TAG=VALUE; ..."`, then `next_round.sh` again.  See manual.tex, Part IV.
 '''
 
 
-ANALYZE_ALL_SH = r'''#!/bin/bash
-# Re-run every finished material's analyze.sh (plots + LOBSTER CSV) -- e.g.
+MAKEPLOTS_ALL_SH = r'''#!/bin/bash
+# Re-run every finished material's makeplots.sh (plots + LOBSTER CSV) -- e.g.
 # on the login node if the jobs skipped it.  Safe to re-run.
-#   ./analyze_all.sh            all materials with a finished 02_scf
-#   ./analyze_all.sh mp-8       one material
+#   ./makeplots_all.sh            all materials with a finished 02_scf
+#   ./makeplots_all.sh mp-8       one material
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VASPFLOW_NO_CHECK=1 source "$HERE/env.sh" >/dev/null 2>&1
@@ -1172,15 +1172,15 @@ ids="${1:-$(cat "$HERE/material_list.txt")}"
 n=0
 for id in $ids; do
     d="$HERE/materials/$id"
-    [ -f "$d/02_scf/OUTCAR" ] && [ -f "$d/analyze.sh" ] || continue
-    mkdir -p "$d/analysis"
-    if MPLBACKEND=Agg bash "$d/analyze.sh" > "$d/analysis/analyze.log" 2>&1; then
+    [ -f "$d/02_scf/OUTCAR" ] && [ -f "$d/makeplots.sh" ] || continue
+    mkdir -p "$d/plots"
+    if MPLBACKEND=Agg bash "$d/makeplots.sh" > "$d/plots/makeplots.log" 2>&1; then
         n=$((n + 1))
     else
-        echo "  analysis errors: $id (see materials/$id/analysis/analyze.log)"
+        echo "  plot errors: $id (see materials/$id/plots/makeplots.log)"
     fi
 done
-echo "Analysed $n material(s)."
+echo "Plotted $n material(s)."
 '''
 
 
@@ -1257,7 +1257,7 @@ def build_highthroughput_files(htdir, ids, first_id, args, manifest):
         'collect_results.sh': COLLECT_SH,
         'retune.sh':          RETUNE_SH,
         'postprocess_all.sh': POSTPROCESS_SH,
-        'analyze_all.sh':     ANALYZE_ALL_SH,
+        'makeplots_all.sh':     MAKEPLOTS_ALL_SH,
         'README_HPC.md': (README_HPC
                           .replace('@T_RELAX@', STEP_WALLTIME['relax'])
                           .replace('@T_SCF@', STEP_WALLTIME['scf'])
@@ -1516,7 +1516,7 @@ def main():
             return 'fail', f"[{n}/{len(ids)}] {mp_id}: WRONG STEPS {got}", None
 
         cap_lobster_mesh(proj, args.lobster_max_kpw, args.lobster_max_kpts)
-        localise_analyze_sh(proj, '../../tools')
+        localise_makeplots_sh(proj, '../../tools')
         for step in expected:
             make_run_sh_portable(os.path.join(proj, step))
         man = {'potcars': [[v] + list(potcar_props(potcar_dir, v))

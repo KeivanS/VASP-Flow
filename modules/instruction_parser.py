@@ -309,15 +309,17 @@ class InstructionParser:
         """
         mag_info = {'enabled': False, 'direction': None}
 
-        if re.search(r'magnet', content, re.IGNORECASE) or magmom:
+        # 'non-magnetic' / 'no magnetization' must not switch magnetism on
+        text = re.sub(r'\bnon[-\s]?magnet\w*|\bno\s+magnet\w*', ' ', content, flags=re.IGNORECASE)
+        if re.search(r'magnet', text, re.IGNORECASE) or magmom:
             mag_info['enabled'] = True
 
             # Check for direction
-            if re.search(r'z-direction|magnetization\s+in\s+z', content, re.IGNORECASE):
+            if re.search(r'z-direction|magnetization\s+in\s+z', text, re.IGNORECASE):
                 mag_info['direction'] = 'z'
-            elif re.search(r'x-direction|magnetization\s+in\s+x', content, re.IGNORECASE):
+            elif re.search(r'x-direction|magnetization\s+in\s+x', text, re.IGNORECASE):
                 mag_info['direction'] = 'x'
-            elif re.search(r'y-direction|magnetization\s+in\s+y', content, re.IGNORECASE):
+            elif re.search(r'y-direction|magnetization\s+in\s+y', text, re.IGNORECASE):
                 mag_info['direction'] = 'y'
         
         return mag_info
@@ -489,10 +491,15 @@ class InstructionParser:
     def _extract_kpath(self, content: str):
         """Extract k-point path for band structure.
         Returns list of labels, or None if not specified (triggers auto-detection)."""
-        kpath_match = re.search(r'along\s+([\w\-Γ]+)', content, re.IGNORECASE)
+        # G-X-W-K-G-L|U-X: '-' joins points, '|' (or ',') starts a new segment
+        kpath_match = re.search(r'along\s+([\w\-Γ|,]+)', content, re.IGNORECASE)
         if kpath_match:
-            path_str = kpath_match.group(1).replace('Γ', 'G')
-            labels = path_str.split('-')
+            path_str = kpath_match.group(1).replace('Γ', 'G').replace(',', '|').strip('|-')
+            labels = []
+            for i, seg in enumerate(path_str.split('|')):
+                if i:
+                    labels.append('|')
+                labels += [l for l in seg.split('-') if l]
             if labels:
                 return labels
         return None  # auto-detect from structure

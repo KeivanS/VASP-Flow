@@ -261,7 +261,7 @@ def main():
     args = ap.parse_args()
     suffix = ".symmetric" if args.symmetric else ""
 
-    # ── single-directory mode (per-project analyze.sh) ──────────────────────
+    # ── single-directory mode (per-project makeplots.sh) ──────────────────────
     if args.dir:
         lob_dir = os.path.abspath(args.dir)
         # material id = the project folder name (parent of 08_lobster)

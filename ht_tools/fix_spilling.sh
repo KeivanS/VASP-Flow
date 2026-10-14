@@ -152,8 +152,10 @@ export OMP_NUM_THREADS=$NT
 python3 lobster_basis.py scan . --lobster "\$LOBSTER_BIN" --clean || exit 1
 rm -f CHGCAR CHG
 cd "$m"
-if [ -f analyze.sh ]; then
-    [ -n "\${ANALYSIS_PYTHON:-}" ] && export PATH="\$(dirname "\$ANALYSIS_PYTHON"):\$PATH"
+[ -n "\${ANALYSIS_PYTHON:-}" ] && export PATH="\$(dirname "\$ANALYSIS_PYTHON"):\$PATH"
+if [ -f makeplots.sh ]; then
+    mkdir -p plots && MPLBACKEND=Agg bash makeplots.sh > plots/makeplots.log 2>&1
+elif [ -f analyze.sh ]; then        # runs made before the rename
     mkdir -p analysis && MPLBACKEND=Agg bash analyze.sh > analysis/analyze.log 2>&1
 fi
 echo "--- done: \$(date)"

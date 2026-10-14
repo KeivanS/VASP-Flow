@@ -11,7 +11,7 @@
 #   08_lobster/COHPCAR.lobster  COBICAR.lobster  COOPCAR.lobster   (needed for the
 #                               antibonding integrals ACOHP/ACOBI/ACOOP; skip with NO_CARS=1)
 #   08_lobster/lobsterin lobsterout lobster.out CHARGE.lobster MadelungEnergies.lobster
-#   08_lobster/lobster_summary.csv  analysis/analyze.log
+#   08_lobster/lobster_summary.csv  plots/makeplots.log (analysis/analyze.log in older runs)
 #   03_bands/EIGENVAL           band gap / band edges (skip with NO_EIGENVAL=1)
 #   02_scf/EIGENVAL             uniform-mesh eigenvalues -> our own DOS moments (NO_EIGENVAL=1 skips too)
 #   <step>/OUTCAR.trim          key OUTCAR lines only (E-fermi, NELECT, ISPIN, energies, ...)
@@ -97,7 +97,8 @@ for d in mp-*/; do
     take "$m/POSCAR"
     take "$m/01_relax/CONTCAR"
     take "$m/02_scf/INCAR"
-    take "$m/analysis/analyze.log"
+    take "$m/plots/makeplots.log"
+    take "$m/analysis/analyze.log"           # runs made before the rename
     for f in $LOB_FILES; do take "$m/08_lobster/$f"; done
     [ "${NO_EIGENVAL:-0}" = 1 ] || { take "$m/03_bands/EIGENVAL"; take "$m/02_scf/EIGENVAL"; }
     for st in 01_relax 02_scf 03_bands 08_lobster; do

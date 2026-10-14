@@ -21,10 +21,13 @@ modules/
 
 **Data flow:** Setup form → POST /api/generate → vasp-agent.py → InstructionParser → VASPInputGenerator → ProjectName/{00_convergence, 01_relax, 02_scf, 03_bands, 04_dos, 05_wannier, 06_dfpt, 07_phonons, 08_lobster}
 
+**Plots:** every project gets `makeplots.sh` → `plots/` (bands, DOS, ELF, COHP/COBI/COOP, LOBSTER DOS, `lobster_summary.csv`, relax/SCF energy lines), `makeplots_convergence.sh`, and in `ht_runs.py` runs `makeplots_all.sh` + `plots/makeplots.log`. Before v2.6 these were `analyze.sh`/`analysis/`: the GUI (`_plots_dir()`, `makeplots` step falls back to `analyze.sh`), `ht_tools/collect_lobster.sh` and `fix_spilling.sh` still read old runs. The env.sh keys `RUN_ANALYSIS`/`ANALYSIS_PYTHON` keep their names.
+
 ## Running the Project
 
 ```bash
 make setup    # First time: create default_paths from default_paths.example
+make check    # Is this computer ready? check_setup.py [gui] [local] [slurm] [ht] (Python >= 3.6 syntax so it can report an old Python)
 make run      # Start Flask server on http://localhost:5001
 make snaps    # Alternate GUI on port 5050 (sc-snaps-gui.py)
 ```
@@ -65,6 +68,7 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 | `/api/phonon_plot/<slug>/<ptype>` | GET | Phonon band/DOS plots |
 | `/api/files/<slug>/<step>` | GET | List editable files in step |
 | `/api/file/<slug>/<step>/<filename>` | GET/POST | Read/edit file contents |
+| `/api/kpath` | POST | spglib k-path of POSCAR text → `{kpath: 'G-X-…|U-X', lattice, hexagonal}`; the Setup tab fills its K-path field and Hexagonal box with it on every POSCAR change (a typed path is kept) |
 | `/api/open_results` | POST | Register an existing results folder (one job, a highthroughput dir, or an unpacked `results/`) for viewing; stored in `CONFIG['opened_results']` (slug → path), resolved by `_pd()` |
 
 ## Workflow Steps
@@ -83,7 +87,7 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 
 ## instruction_parser.py
 
-Regex-based extraction from natural language instruction files. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, explicit k-mesh override (KMESH), LOBSTER/COHP/COBI bonding analysis (auto-adds an `scf` dependency), MPI settings (KPAR, NCORE, np).
+Regex-based extraction from natural language instruction files. K-path `along G-X-W-K-G-L|U-X` (`|` or `,` = segment break, kept as a `'|'` item in `kpath`); hand-typed labels take spglib's coordinates for the cell when it knows them all, else the generic table. Supported parameters: functional (PBE/PBEsol/R2SCAN/HSE06/VV10/LDA), SOC + magnetization direction, GGA+U per element/orbital, task list, convergence test ranges, k-point path, Wannier90 projections and energy windows, DFPT flags, phonopy settings (supercell dim, mesh, displacement, NAC), DOS projections, explicit k-mesh override (KMESH), LOBSTER/COHP/COBI bonding analysis (auto-adds an `scf` dependency), MPI settings (KPAR, NCORE, np).
 
 **LOBSTER step (`08_lobster`):** triggered by a `lobster`/`COHP`/`COBI`/`COOP`/`bonding analysis` task. `generate_lobster_input()` emits a symmetry-off NSCF (`ISYM=0`, `ICHARG=11` reading `02_scf/CHGCAR`, `NBANDS` ≥ number of LOBSTER basis functions via `_lobster_nbands()`, `LMAXMIX` from `_lmaxmix()`, `LWAVE=.TRUE.`); `run.sh` then builds `lobsterin` from the DOSCAR energy window and runs the lobster binary (`$LOBSTER_BIN`, default `lobster-5.1.0-OSX`). Charge spilling: LOBSTER projects onto its own STO basis (RWIGS irrelevant); `modules/lobster_basis.py` + `lobster_basis_table.json` (pymatgen BASIS_PBE_54_{min,standard,max}, plain python3) give NBANDS ≥ largest basis × `LOBSTER_NBANDS_FACTOR`, `LOBSTER_BASIS` auto|min|standard|max|scan|off (lobsterin `basisfunctions` lines), and `scan` = rerun LOBSTER per basis combination on the same WAVECAR, keep lowest spilling (`basis_scan.tsv`); run.sh and HT job.sbatch scan automatically above `LOBSTER_SCAN_ABOVE` (5 %); `ht_tools/fix_spilling.sh` redoes older runs (2× NBANDS + scan). Aggregate per-bond ICOHP/ICOBI/ICOOP + antibonding integrals into a CSV with `lobster_postprocess.py` (reads `08_lobster/`, falling back to `02_scf/`).
 
@@ -91,7 +95,7 @@ Regex-based extraction from natural language instruction files. Supported parame
 
 **Constant pressure:** `PRESSURE = 10 GPa` (or `kbar`) triggers a constant-pressure relaxation — forces `ISIF=3`, `IBRION=2`, and emits `PSTRESS` (converted to kBar; GPa assumed if no unit). Parsed into the `pressure` dict.
 
-**MAGMOM:** `MAGMOM:` takes a uniform number (negative allowed), per-element values (`Fe=4.0, O=0.6`, unlisted elements 0) or a per-atom list (`2*4.0 2*-4.0`); any `MAGMOM` line turns spin polarisation on. Parsed into `magmom` ({kind, value/values}); resolved to one number per atom by `VASPInputGenerator._magmom_values()` (raises ValueError on a length/element mismatch). With SOC the values are rotated onto the requested x/y/z direction (3N `MAGMOM` components); `ISPIN` is not written.
+**MAGMOM:** `MAGMOM:` takes a uniform number (negative allowed), per-element values (`Fe=4.0, O=0.6`, unlisted elements 0) or a per-atom list (`2*4.0 2*-4.0`); any `MAGMOM` line turns spin polarisation on. `non-magnetic`/`no magnetization` never switches it on; SOC without magnetism (`Methods: SOC`, GUI spin mode `soc`) writes `MAGMOM = 3N*0` (VASP's own default is 1 μB along (1,1,1)). Parsed into `magmom` ({kind, value/values}); resolved to one number per atom by `VASPInputGenerator._magmom_values()` (raises ValueError on a length/element mismatch). With SOC the values are rotated onto the requested x/y/z direction (3N `MAGMOM` components); `ISPIN` is not written.
 
 **k-mesh density:** `KMESH_DENSITY`/`KPOINTS_DENSITY`/`KPRA` = `coarse` (1000) | `fine` (6000) | integer kpra; `RELAX_KMESH_DENSITY` (default coarse). `_kpoints_from_kpra()` is one formula: s = (kpra/N_atoms/(|b1*||b2*||b3*|))^(1/3), N_i = nearest even of s·|b_i*| (min 2); hexagonal lattices (geometric test `_is_hex_lattice()`, not the GUI flag) round in-plane N to multiples of 6; 2-D slabs use the in-plane formula and Nz=1. `kpoints_text(step)` is the single source of truth for every step's KPOINTS (relax own density; DOS = 2× SCF; LOBSTER/DFPT/Wannier = SCF; phonons coarse) and is what the GUI's phase-2 regeneration calls. LOBSTER (ISYM=0, NKPTS = (N−t)/2+t) is shrunk by `cap_lobster_mesh()` (same ratios, even) while N1N2N3 > `LOBSTER_MAX_KPTS` (10000) or NKPTS × NPW (NPW = V k_c³/6π²) > `LOBSTER_MAX_KPW` (6e6) — instruction keys of the same names, `ht_runs.py --lobster-max-kpts/--lobster-max-kpw`, 0 = off; 24×24×24 and 16×16×22 (5632 points, large NPW) died at set-up with 'insufficient virtual memory'. `ht_runs.py` defaults to `--kpra 8000` (`--kspacing` only on request) and applies the same cap; `vasp_diagnose.py` halves the LOBSTER mesh on oom.
 
@@ -116,6 +120,10 @@ Regex-based extraction from natural language instruction files. Supported parame
 **Smart file copying:** `_write_copy_if_newer()` generates bash code that copies source→dest only if source is newer, preserving user edits.
 
 **Functional:** R2SCAN is the default (parser: `Functional:` line, else `Methods:` line, else anywhere, whole words; none → R2SCAN); GUI select defaults to R2SCAN; HT drivers pass `--functional PBE` (database consistency). R2SCAN INCARs: `METAGGA = R2SCAN`, `LASPH`, `LMIXTAU = .TRUE.` (τ in CHGCAR for the ICHARG=11 steps); LDA = `GGA = CA` + LDA POTCARs. **ENCUT:** 500 eV for every functional unless `ENCUT:` is given.
+
+## Manual figures
+
+`figures/gui_setup_*.png`, `gui_results_summary.png` and `gui_results_lobster.png` (Example 1 of manual.tex) are made by `figures/make_gui_figures.py RESULTS_FOLDER [--cards summary,lobster]` (Playwright + Chromium; starts the GUI on port 5077 in a temp dir); the Results ones come from the HT Si run mp-149 (lobster_collect_20261012_2309, OUTCAR.trim copied to OUTCAR; the empty LOBSTER-DOS box cropped off). `gui_results_bands_dos.jpg` and `gui_results_elf.jpg` are the user's screenshots of a full Si run (Si-test/). The folder trees and flowcharts are TikZ inside manual.tex.
 
 ## Testing
 

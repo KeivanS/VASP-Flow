@@ -1704,7 +1704,7 @@ echo "DFPT done. See born_charges.txt and BORN (phonopy NAC format)."
                 'A': '0 0 0.5',   'H': '0.333 0.333 0.5',
                 'R': '0.5 0.5 0.5', 'W': '0.5 0.25 0.75',
             }
-            pts = [sym_pts.get(k.upper(), '0 0 0') for k in (kpath or ['G', 'X', 'M', 'G'])]
+            pts = [sym_pts.get(k.upper(), '0 0 0') for k in (kpath or ['G', 'X', 'M', 'G']) if k != '|']
             band = '  '.join(pts)
         lines = [
             "# band.conf — phonon band structure",
@@ -2244,6 +2244,10 @@ echo "      Data:  band.yaml  FORCE_SETS"
         """
         mag = self.instructions.get('magnetization', {})
         if not mag.get('enabled'):
+            if self.instructions.get('soc', False):     # non-magnetic SOC: VASP's own
+                n = self._read_atom_count()             # default is 1 muB along (1,1,1)
+                return (["# Non-magnetic SOC run: no initial moments"]
+                        + self._magmom_tag([0.0] * (3 * n)) + [""])
             return []
         values, is_vec = self._magmom_values()
         if not self.instructions.get('soc', False):
@@ -2924,6 +2928,15 @@ echo "      Data:  band.yaml  FORCE_SETS"
         except Exception:
             return None
 
+    def spglib_kpath_string(self):
+        """-> ('G-X-W-K-G-L-U-W-L-K|U-X', 'FCC', hexagonal) for the POSCAR, or None.
+        The GUI fills its K-path field with this as soon as a POSCAR is pasted."""
+        sk = self._spglib_kpath()
+        if sk is None:
+            return None
+        segments, _, name = sk
+        return '|'.join('-'.join(seg) for seg in segments), name, self._is_hex_lattice()
+
     def _generate_kpoints_linemode(self, kpath=None, npoints: int = 40) -> str:
         """Generate KPOINTS file for band structure.
 
@@ -2951,6 +2964,23 @@ echo "      Data:  band.yaml  FORCE_SETS"
                         out.append("\n")
                 return ''.join(out)
             # else fall through to the geometric classifier below
+
+        # ── user-specified labels: the spglib coordinates of this cell when it
+        #    has every label (the GUI fills the field with the spglib path) ──
+        if kpath is not None and not is_2d:
+            sk = self._spglib_kpath()
+            if sk is not None and all(l in sk[1] for l in kpath if l != '|'):
+                kcoords = sk[1]
+                out = [f"Line-mode KPOINTS  [spglib {sk[2]} points, path as given]\n",
+                       f"{npoints}\n", "Line-mode\n", "rec\n"]
+                for a, b in zip(kpath, kpath[1:]):
+                    if '|' in (a, b):
+                        continue
+                    for lbl in (a, b):
+                        c = kcoords[lbl]
+                        out.append(f"  {c[0]:8.4f} {c[1]:8.4f} {c[2]:8.4f}  ! {lbl}\n")
+                    out.append("\n")
+                return ''.join(out)
 
         if kpath is None:
             # ── auto-detect (geometric fallback / 2-D) ───────────────────
@@ -2986,6 +3016,8 @@ echo "      Data:  band.yaml  FORCE_SETS"
         out = [f"{comment}\n", f"{npoints}\n", "Line-mode\n", "rec\n"]
         for i in range(len(kpath) - 1):
             s_lbl, e_lbl = kpath[i], kpath[i + 1]
+            if '|' in (s_lbl, e_lbl):           # segment break
+                continue
             s = kcoords.get(s_lbl, [0.0, 0.0, 0.0])
             e = kcoords.get(e_lbl, [0.0, 0.0, 0.0])
             out.append(f"  {s[0]:8.4f} {s[1]:8.4f} {s[2]:8.4f}  ! {s_lbl}\n")

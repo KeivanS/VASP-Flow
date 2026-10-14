@@ -8,7 +8,7 @@ from one atom centre to the other and plots ELF vs. distance along the bond.
 "Non-equivalent" bonds are grouped by (element pair, bond length rounded to
 0.01 A) — a dependency-light proxy for symmetry-inequivalent bonds that needs
 no spglib/pymatgen.  Only numpy + matplotlib are required, so it runs in the
-same post-processing environment as the rest of analyze.sh.
+same post-processing environment as the rest of makeplots.sh.
 
 Usage:
     ./elf_bonds.py [ELFCAR] [--out PREFIX] [--nn-scale 1.2] [--npoints 200]

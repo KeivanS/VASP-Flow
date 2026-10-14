@@ -11,7 +11,7 @@ explicit-KPOINTS marker) to be IDENTICAL in every step directory.  run.sh
 is allowed to differ (SLURM header vs. local launcher) but must call the same
 copy_from_*.sh scripts.  It also checks the semantics of each case:
 
-  * MAGMOM / ISPIN (uniform, negative, per-element, per-atom list, SOC vector)
+  * MAGMOM / ISPIN (uniform, negative, per-element, per-atom list, SOC vector, SOC non-magnetic)
   * k-mesh density reflected in the KPOINTS files (coarse 1000 / fine 6000 /
     custom kpra) and the DOS/LOBSTER = 2x SCF, DFPT = SCF relations
   * KPAR / NCORE valid for the rank count in relax, SCF and DOS (ELF => KPAR 1
@@ -154,6 +154,9 @@ def cases():
              form=form(spin_mode='soc_x', magmom='Fe=3.0, O=0', relax=False,
                        bands=False, dos=False),
              expect=dict(ispin=None, magmom='3.0 2*0.0 3.0 8*0.0')),
+        dict(name='soc-nonmagnetic', poscar=POSCAR_AFM,
+             form=form(spin_mode='soc', relax=False, bands=False, dos=False),
+             expect=dict(ispin=None, magmom='12*0.0')),
         dict(name='density-custom-kpra', poscar=POSCAR_AFM,
              form=form(kmesh_kpra='3000', relax_kmesh_density='fine'),
              expect=dict(kpra=(3000, 0.35), relax_kpra=(6000, 0.35))),

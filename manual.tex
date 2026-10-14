@@ -11,6 +11,8 @@
 \usepackage{colortbl}
 \usepackage{amsmath}
 \usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric}
 \usepackage{scrlayer-scrpage}
 % listings uses \rm internally; scrartcl marks it deprecated -- non-fatal
 \usepackage[colorlinks=true,linkcolor=mainblue,urlcolor=accentblue,
@@ -28,6 +30,8 @@
 \definecolor{notebar}    {RGB}{200, 130,   0}   % note box left bar (amber)
 \definecolor{tipbg}      {RGB}{228, 243, 255}   % tip box background
 \definecolor{tipbar}     {RGB}{ 30, 120, 210}   % tip box left bar
+\definecolor{rungray}    {RGB}{110, 110, 110}   % folder tree: written by the runs
+\definecolor{fixamber}   {RGB}{185, 105,   0}   % folder tree: written by repairs
 \definecolor{kwblue}     {RGB}{  0,  90, 190}   % keyword in code
 \definecolor{cmtgreen}   {RGB}{ 40, 130,  40}   % comment in code
 \definecolor{strred}     {RGB}{170,  20,  20}   % string in code
@@ -45,7 +49,7 @@
 % ============================================================
 \pagestyle{scrheadings}
 \clearpairofpagestyles
-\ohead{\small\textcolor{mainblue!60!black}{VASP Workflow --- User Manual}}
+\ohead{\small\textcolor{mainblue!60!black}{VASP-Flow --- User Manual}}
 \ihead{\small\textcolor{mainblue!60!black}{\headmark}}
 \cfoot{\pagemark}
 \addtokomafont{pageheadfoot}{\normalfont\small}
@@ -109,6 +113,11 @@
 
 % \cmd{text}: verbatim-ish inline code; \opt{name}: a --option
 \newcommand{\cmd}[1]{\texttt{\detokenize{#1}}}
+% task card at the start of an example: runs on, takes, success, next
+\newcommand{\taskcard}[4]{\par\noindent
+  \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash\bfseries}p{0.13\linewidth}>{\raggedright\arraybackslash}X@{}}
+  \thead \multicolumn{2}{@{}l}{\textbf{At a glance}} \\ Runs on & #1 \\ Takes & #2 \\ Success & #3 \\ Next & #4 \\ \bottomrule
+  \end{tabularx}\par\medskip}
 \newcommand{\opt}[1]{\texttt{-{}-\detokenize{#1}}}
 
 % ============================================================
@@ -117,7 +126,7 @@
 \title{%
   \vspace*{-10pt}%
   {\color{mainblue}\rule{\linewidth}{2pt}}\\[8pt]%
-  \textbf{\Huge VASP Workflow}\\[4pt]%
+  \textbf{\Huge VASP-Flow}\\[4pt]%
   \large User Manual\\[6pt]%
   \normalsize Browser GUI $\cdot$ CLI Agents $\cdot$ SLURM HPC $\cdot$ High throughput $\cdot$ Diagnosis \& repair\\[6pt]%
   {\color{mainblue}\rule{\linewidth}{0.5pt}}%
@@ -137,98 +146,105 @@
 \newpage
 % ============================================================
 \part{Getting started}
+\label{part:start}
 % ============================================================
 
 % ============================================================
-\section{What VASP-Flow does: four ways to run it}
+\section{What VASP-Flow is for}
+\label{sec:what}
+% ============================================================
+
+VASP-Flow is a set of tools that do the routine work around VASP calculations, so that your
+time goes into the physics rather than into input files, job scripts and failed runs.  You give
+it a structure (\cmd{POSCAR}) and a few lines such as ``PBEsol, relaxation, SCF, band
+structure''.  The tools then
+\begin{itemize}
+  \item \textbf{prepare and submit}: write every INCAR, KPOINTS, POTCAR and job script, and run
+        the steps in order on your computer or submit them as chained SLURM jobs that continue
+        by themselves past the walltime;
+  \item \textbf{diagnose and repair}: read the output of every failed or unfinished step, name
+        the cause (walltime, memory, SCF not converging, relaxation not finished, high LOBSTER
+        spilling, \ldots), say how certain that is, write the fix and resubmit only what has to
+        be redone, round after round;
+  \item \textbf{analyse}: plot bands, DOS, ELF, convergence and phonons, summarise Born charges
+        and dielectric tensors, and collect LOBSTER bonding data from a whole batch into one
+        table.
+\end{itemize}
+These matter most in a \textbf{high-throughput} run.  For a few hundred materials, submitting
+the jobs, finding out which ones failed and why, fixing them and gathering the results take far
+more of your time than the calculations themselves; VASP-Flow turns each of these into one
+command.  The same tools serve a single material, where they save you from writing the inputs
+by hand.
+
+\begin{center}
+\begin{tikzpicture}[every node/.style={font=\small},
+    box/.style={draw=mainblue, fill=lightblue, rounded corners=2pt, align=center,
+                minimum width=31mm, minimum height=15mm, text width=29mm, inner sep=1mm},
+    arr/.style={-{Stealth[length=2.5mm, width=2mm]}, mainblue, thick}]
+  \node[box] (in)  at (0,0)    {\cmd{POSCAR} and\\ \cmd{instructions.txt}};
+  \node[box] (gen) at (38mm,0) {step folders\\ \cmd{01_relax}, \cmd{02_scf}, \ldots};
+  \node[box] (run) at (76mm,0) {run (workstation)\\ or submit (SLURM)};
+  \node[box] (res) at (114mm,0) {plots and\\ results};
+  \node[box] (fix) at (76mm,-27mm) {diagnose and repair\\ \cmd{next_round.sh}};
+  \draw[arr] (in.east)  -- (gen.west);
+  \draw[arr] (gen.east) -- (run.west);
+  \draw[arr] (run.east) -- (res.west);
+  \draw[arr] ([xshift=-7mm]run.south) -- node[left=1mm, font=\footnotesize] {failed} ([xshift=-7mm]fix.north);
+  \draw[arr] ([xshift=7mm]fix.north) -- node[right=1mm, font=\footnotesize] {resubmit} ([xshift=7mm]run.south);
+\end{tikzpicture}
+\end{center}
+
+\noindent\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.42\linewidth}>{\raggedright\arraybackslash}X@{}}
+\thead
+Tool & What it is for \\ \midrule
+\cmd{vasp-gui.py} (\cmd{make run}) & browser GUI: set up, run and plot one material \\
+\cmd{vasp-agent.py} & the same from the terminal, on a workstation \\
+\cmd{vasp-agent-slurm.py} & the same on a SLURM cluster: one job per step, chained \\
+\cmd{ht_runs.py}, \cmd{ht-mp-scf.py} & high throughput: fetch a list of materials from
+  Materials Project, set them all up and submit them \\
+\cmd{vasp_diagnose.py}, \cmd{ht_tools/next_round.sh} & diagnosis and repair, one round per
+  command \\
+\cmd{ht_tools/show_*.sh}, \cmd{audit_run.sh} & where each material and job stands, and why \\
+\cmd{makeplots.sh}, \cmd{collect_lobster.sh}, \cmd{lobster_postprocess.py} & plots, and the
+  results of a batch gathered for a database \\
+\bottomrule
+\end{tabularx}
+
+\medskip\noindent The GUI, the two agents and the high-throughput drivers share one input
+generator, so the same request gives the same files whichever way it was made.  The methods
+covered are relaxation, SCF, bands, DOS, ELF, convergence tests, DFPT, phonons, Wannier90 and
+LOBSTER bonding, with R2SCAN (default), PBE, PBEsol, LDA or HSE06, spin, SOC and GGA+U.
+
+% ============================================================
+\section{Choose your route}
 \label{sec:start}
 % ============================================================
 
-
-VASP-Flow sets up, runs and analyses DFT calculations with VASP.  You describe
-\emph{what} you want --- a structure (POSCAR) and a few lines such as ``PBEsol,
-relaxation, SCF, band structure'' --- and it writes every INCAR, KPOINTS, POTCAR and job
-script, chooses the k-mesh, the parallelisation and the walltimes, runs the steps in the
-right order and plots the results.  There are four ways to use it:
-
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.2\linewidth}@{}}
+\medskip\noindent\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.27\linewidth}>{\raggedright\arraybackslash}p{0.2\linewidth}>{\raggedright\arraybackslash}X@{}}
 \thead
-Way & For & First example \\ \midrule
-\textbf{Browser GUI} (\cmd{vasp-gui.py}) & one material, set up with a form; runs on your
-  computer, plots in the browser & Example~1 (\ref{sec:ex-gui}) \\
-\textbf{Workstation agent} (\cmd{vasp-agent.py}) & one material from the command line,
-  described in a text file \cmd{instructions.txt} & Example~2 (\ref{sec:ex-ws}) \\
-\textbf{Cluster agent} (\cmd{vasp-agent-slurm.py}) & the same on a SLURM cluster: every step
-  is a job & Example~3 (\ref{sec:ex-slurm}) \\
-\textbf{High-throughput drivers} (\cmd{ht-mp-scf.py}, \cmd{ht_runs.py}) & a list of Materials
-  Project IDs, on a workstation or a cluster; failed runs are repaired round by round
-  (\cmd{ht_tools/next_round.sh}) & Examples~4 and~5 (\ref{sec:ex-ht-ws}, \ref{sec:ex-ht-hpc}) \\
+I want to \ldots & Start here & You also learn \\ \midrule
+run one material in the browser & Example~1 (\ref{sec:ex-gui}) & convergence tests, bands and DOS, editing a tag \\
+run one material from the terminal & Example~2 (\ref{sec:ex-ws}) & \cmd{instructions.txt}, INCAR blocks \\
+run one material on a cluster & Example~3 (\ref{sec:ex-slurm}) & SLURM jobs, rerunning one step \\
+run many materials & Example~4 (\ref{sec:ex-ht-ws}, workstation) or 5 (\ref{sec:ex-ht-hpc}, cluster) &
+  lists from Materials Project; repair rounds and your own settings (5) \\
+fix a failed batch & Section~\ref{sec:next-round} & reading the report, holding materials back \\
 \bottomrule
 \end{tabularx}
 
-\noindent All four use the same input generator (\cmd{modules/}), so a calculation set up in
-one way gives the same files as in another.
+\medskip\noindent Before the example, install what your route needs (Section~\ref{sec:install}).
 
-\textbf{How to read this manual.}  Install VASP-Flow (Section~\ref{sec:install}), then work
-through the example that matches what you want to do (Part~\ref{part:examples}).
-Part~\ref{part:reference} explains each piece and how to change it by hand;
-Part~\ref{part:check} shows how to find and repair failed runs; the appendices describe
-how values are chosen.
+\medskip\noindent\textbf{The rest of the manual}:
+Part~\ref{part:examples} --- the worked examples, the only place with step-by-step commands;
+Part~\ref{part:reference} --- the reference: every field, keyword and option, and how to
+change it;
+Part~\ref{part:check} --- diagnosis and repair of failed runs;
+the appendices --- how each value is chosen.
 
-\subsection{Find what you need}
-
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.3\linewidth}@{}}
-\thead
-I want to \ldots & Go to \\ \midrule
-install VASP-Flow and tell it where VASP and the POTCARs are & Section~\ref{sec:install} \\
-\multicolumn{2}{@{}l}{\textit{Get going with an example}} \\
-run one material in the browser, with convergence tests & Example~1, Section~\ref{sec:ex-gui} \\
-run one material from the command line & Example~2, Section~\ref{sec:ex-ws} \\
-run one material on a SLURM cluster & Example~3, Section~\ref{sec:ex-slurm} \\
-run a list of Materials Project IDs on a workstation & Example~4, Section~\ref{sec:ex-ht-ws} \\
-run a list of materials on a cluster and repair the failures & Example~5, Section~\ref{sec:ex-ht-hpc} \\
-\multicolumn{2}{@{}l}{\textit{Change something}} \\
-know every field and button of the GUI & Section~\ref{sec:gui} \\
-know which files and scripts the agents create & Section~\ref{sec:agents} \\
-make or redraw the plots (GUI or \texttt{analyze.sh}), change their energy window & Section~\ref{sec:plots} \\
-write or change \texttt{instructions.txt} (all keywords) & Section~\ref{sec:instructions} \\
-choose the functional, spin, SOC or GGA+U & Section~\ref{sec:methods} \\
-change the k-point mesh & Section~\ref{sec:kmesh} \\
-set any INCAR or KPOINTS tag myself & Section~\ref{sec:incar} \\
-get band structures, DOS, ELF, phonons, Born charges, Wannier functions or LOBSTER bonds & Sections~\ref{sec:spectra}, \ref{sec:extras} \\
-set cores, nodes, KPAR/NCORE and walltimes & Section~\ref{sec:resources} \\
-see more \texttt{instructions.txt} examples (SOC, magnetism, phonons, pressure) & Section~\ref{sec:examples} \\
-set up a high-throughput run and use its scripts & Sections~\ref{sec:highthroughput}, \ref{sec:ht-scripts} \\
-\multicolumn{2}{@{}l}{\textit{Something went wrong}} \\
-find out why runs failed and repair them, round by round & Section~\ref{sec:next-round} \\
-read the report and its certainty numbers & Section~\ref{sec:certainty} \\
-set my own parameters for some materials of a run & Section~\ref{sec:set-params} \\
-check one material or one job quickly & Section~\ref{sec:lookup} \\
-try a different INCAR setting on one material first & Section~\ref{sec:testfix} \\
-look up a symptom and its remedy & Section~\ref{sec:trouble} \\
-lower a high LOBSTER charge spilling & Appendix~\ref{app:spilling} \\
-know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, walltime continuation, \ldots) & Appendix~\ref{app:inputs} \\
-\bottomrule
-\end{tabularx}
-
-\subsection{Key features}
-
-\begin{itemize}
-  \item Functionals: R2SCAN (default), PBE, PBEsol, LDA; also HSE06, RVV10, AM05
-  \item Spin-orbit coupling (SOC) and collinear spin (ISPIN=2)
-  \item Magnetic materials: correct MAGMOM per atom; spin-resolved band
-        and DOS plots (spin-up / spin-down)
-  \item GGA+U (Dudarev, LDAUTYPE=2) per element and orbital
-  \item Automatic k-path detection via spglib
-        (Setyawan--Curtarolo standard paths), with a geometric fallback
-  \item Convergence testing: ENCUT and k-mesh sweeps
-  \item DOS with orbital projections via \texttt{sumo}
-  \item Phonons via phonopy, Wannier90 interface, DFPT Born charges
-  \item LOBSTER bonding analysis (COHP/COBI/COOP) via the
-        \texttt{08\_lobster} step
-  \item Smart KPAR/NCORE auto-defaults scaled with MPI task count
-  \item SLURM workflow with dependency-chained job submission
-\end{itemize}
+% ============================================================
+\section{Installing and configuring VASP-Flow}
+\label{sec:install}
+% ============================================================
 
 \subsection{Requirements}
 
@@ -238,7 +254,7 @@ What & Needed for & How to get it \\ \midrule
 VASP 5.4+ & everything: \texttt{vasp\_std}, \texttt{vasp\_ncl} (SOC), \texttt{vasp\_gam} (optional) & your licence \\
 POTCAR library & everything: PAW potentials in per-element folders (\texttt{PAW\_PBE}; \texttt{PAW\_LDA} for LDA) & with VASP \\
 MPI & running VASP (\texttt{mpirun}, \texttt{mpiexec} or \texttt{srun}) & system / cluster module \\
-Python $\geq$ 3.8, numpy, matplotlib & everything (agents, \texttt{analyze.sh}) & \texttt{pip install numpy matplotlib} \\
+Python $\geq$ 3.8, numpy, matplotlib & everything (agents, \texttt{makeplots.sh}) & \texttt{pip install numpy matplotlib} \\
 Flask, sumo $\geq$ 2.0 & the GUI and its band/DOS plots & \texttt{pip install flask sumo} \\
 pymatgen, mp-api, spglib & the high-throughput drivers (structures from Materials Project, the
   Materials Project POTCAR choices); spglib also finds the band-structure k-path &
@@ -255,56 +271,75 @@ phonopy, wannier90.x & optional: phonons, Wannier functions & \texttt{conda inst
 \texttt{unexpected keyword argument 'capture\_output'} or \texttt{No module named 'pymatgen'}.
 Make the environment of step~2 below once, and activate it at every login.
 
-% ============================================================
-\section{Installing and configuring VASP-Flow}
-\label{sec:install}
-% ============================================================
+\subsection{Install what your route needs}
 
-The same steps on your computer and on a cluster (on the cluster run them on the login node;
-the high-throughput drivers need its internet access):
+The same steps on your computer and on a cluster (there on the login node, which has the
+internet access the high-throughput drivers need).  Lines marked for a route you do not take
+can be skipped.
 
 \begin{lstlisting}[language=bash]
-# 1. The code (later updates: cd ~/VASP-Flow && git pull)
+# 1. The code (update later: git pull)
 cd ~ && git clone https://github.com/KeivanS/VASP-Flow.git
 
-# 2. Python environment, once (cluster: load Python >= 3.8)
-python3 --version                      # must be 3.8 or newer
+# 2. A Python >= 3.8 environment, made once
+python3 --version               # cluster: load a newer Python first
 python3 -m venv ~/vaspenv
-source ~/vaspenv/bin/activate          # at every login
-pip install numpy matplotlib flask sumo    # agents, GUI
-pip install pymatgen mp-api spglib         # HT drivers
-# optional (in a conda env instead of the venv):
+source ~/vaspenv/bin/activate   # at every login
+pip install numpy matplotlib              # all routes
+pip install flask sumo                    # GUI (Example 1)
+pip install pymatgen mp-api spglib        # many materials (Ex. 4, 5)
+# optional, in a conda env instead of the venv:
 #   conda install -c conda-forge phonopy wannier90
 
 # 3. Where VASP, MPI and the POTCARs are
 cd ~/VASP-Flow
-make setup && nano default_paths   # workstation
-nano profiles/slurm.json           # cluster
+make setup && nano default_paths   # your computer (Ex. 1, 2, 4)
+nano profiles/slurm.json           # a cluster (Ex. 3, 5)
 
-# 4. HT runs only, at every login (or in ~/.bashrc)
-export MP_API_KEY=your_key
+# 4. Many materials: Materials Project key (or in ~/.bashrc)
+export MP_API_KEY=your_key      # free: materialsproject.org/api
+
+# 5. Check
+make check
 \end{lstlisting}
 
-\noindent Which file each tool reads its paths from:
+\paragraph{Is this computer ready?}  Step~5 runs \cmd{check_setup.py} (also
+\cmd{python3 check_setup.py} without make).  It checks Python and its packages, the POTCAR
+library, the VASP and MPI programs and, on a cluster, \cmd{profiles/slurm.json} and the
+high-throughput packages, and prints for each problem the command that fixes it.  Without
+arguments it checks what fits the computer (a cluster where \cmd{sbatch} exists, else a
+workstation); \cmd{make check FOR="slurm ht"} names the routes yourself (\cmd{gui},
+\cmd{local}, \cmd{slurm}, \cmd{ht}).  \textbf{Ready.} at the end means you can start the
+example.  Run it again after every change of the set-up.
 
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.38\linewidth}>{\raggedright\arraybackslash}X@{}}
+\subsection{Where each setting comes from}
+\label{sec:precedence}
+
+One table for all of VASP-Flow; the first source that has a value wins.
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.2\linewidth}>{\raggedright\arraybackslash}p{0.22\linewidth}>{\raggedright\arraybackslash}X@{}}
 \thead
-Tool & Paths of VASP, MPI, POTCARs \\ \midrule
-GUI (\texttt{make run}) & GUI \emph{System Setup} page; \texttt{default\_paths} for a new install \\
-\texttt{vasp-agent.py} & environment variables / \texttt{default\_paths}; \texttt{profiles/workstation.json}
-  with \texttt{-{}-profile workstation} \\
-\texttt{vasp-agent-slurm.py}, \texttt{ht-mp-scf.py -{}-agent slurm} & \texttt{profiles/slurm.json} (Section~\ref{sec:remote-setup}) \\
-\texttt{ht\_runs.py} & \texttt{env.sh}, written into each run folder (Section~\ref{sec:ht-scripts});
-  \texttt{default\_paths} is not needed on the cluster \\
+Setting & Tool & Source, highest first \\ \midrule
+programs (VASP, MPI, LOBSTER), POTCAR library & GUI & \emph{System Setup} page $>$ \cmd{default_paths} $>$ shell variables \\
+ & \cmd{vasp-agent.py} & \cmd{profiles/workstation.json} (with \opt{profile workstation}) $>$ shell variables \\
+ & \cmd{vasp-agent-slurm.py} & \cmd{profiles/slurm.json} $>$ shell variables \\
+ & \cmd{ht_runs.py} jobs & \cmd{env.sh} of the run folder (Section~\ref{sec:ht-scripts}) \\ \midrule
+job size, walltime & agents & \cmd{instructions.txt} (\cmd{<STEP>_WALLTIME} $>$ \cmd{WALLTIME}) $>$ per-step defaults $>$ \cmd{profiles/slurm.json} \\
+ & high throughput & \cmd{set_params.sh} (one material) $>$ \cmd{env.sh} (\cmd{TIME_*}) \\ \midrule
+INCAR, KPOINTS & agents, GUI & blocks in \cmd{instructions.txt} $>$ its keywords $>$ the automatic choice \\
+ & repair rounds & \cmd{set_params.sh} $>$ the automatic fix \\
 \bottomrule
 \end{tabularx}
+
+\noindent Shell variables are \cmd{VASP_STD}, \cmd{VASP_POTCAR_DIR}, \ldots; \cmd{default_paths}
+reaches the agents only through \cmd{make} or when its values are exported in the shell.
 
 \subsection{default\_paths --- workstation configuration}
 \label{sec:defaultpaths}
 
 The file \texttt{default\_paths} (Makefile key=value syntax, made by \texttt{make setup} from
 \texttt{default\_paths.example}) is read by \texttt{make run}; its variables become the
-GUI's initial settings.  Settings saved on the GUI \emph{System Setup} page win.
+GUI's initial settings (precedence: Section~\ref{sec:precedence}).
 
 \begin{lstlisting}
 PYTHON          = python3
@@ -367,42 +402,52 @@ GUI, edit the file and leave it in place.  Per-project values (nodes, walltimes,
 \texttt{instructions.txt} (Section~\ref{sec:resources}).
 
 % ============================================================
-\part{Learning by example}
+\part{Worked examples}
 \label{part:examples}
 % ============================================================
 
-The five examples below go from one material in the browser to a small
-high-throughput run on a cluster that needs a repair round.  Each one is
-complete: you can type the commands as they are.  How things work behind the
-scenes, and every option, is in Part~\ref{part:reference}.
-
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.3\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.17\linewidth}@{}}
-\thead
-Example & What you learn & Runs on \\ \midrule
-1. Silicon in the browser (Section~\ref{sec:ex-gui}) & convergence tests, choosing ENCUT and the
-  k-mesh, bands and DOS, changing an INCAR tag by hand & your computer \\
-2. GaAs from the command line (Section~\ref{sec:ex-ws}) & \cmd{instructions.txt}, the two-phase
-  workflow, INCAR blocks, editing inputs & a workstation \\
-3. GaAs on a cluster (Section~\ref{sec:ex-slurm}) & the same with SLURM jobs; rerunning one step & a SLURM cluster \\
-4. Three materials on a workstation (Section~\ref{sec:ex-ht-ws}) & a high-throughput list from
-  Materials Project; checking the runs & a workstation \\
-5. Three materials on a cluster (Section~\ref{sec:ex-ht-hpc}) & a high-throughput run with repair
-  rounds, your own settings, collecting the results & a SLURM cluster \\
-\bottomrule
-\end{tabularx}
+Five complete recipes, from one material in the browser to a high-throughput run on a
+cluster that needs a repair round (choose one with the table of Section~\ref{sec:start}).
+Each starts with a short card --- where it runs, how long it takes, what success looks like,
+what to do next --- and assumes that \cmd{make check} passed.  You can type the commands as
+they are.
 
 % ============================================================
-\section{Example 1 --- Silicon in the browser: convergence tests, then bands and DOS}
+\section{Example 1 --- Silicon in the browser: convergence tests, bands, DOS, ELF and bonding}
 \label{sec:ex-gui}
 % ============================================================
 
-\paragraph{1. Start the GUI.}  In the VASP-Flow folder run \cmd{make run} and open
-\url{http://localhost:5001}.  (On a cluster, see Section~\ref{sec:gui} for the SSH tunnel.)
+\taskcard{your computer, with VASP, MPI and LOBSTER (\cmd{make check FOR="gui local"})}
+  {about half an hour on 8 cores, most of it the convergence tests}
+  {the Results tab shows the band structure with the gap of step~5, the DOS, the ELF and the
+   COHP of the Si--Si bond}
+  {Example~2 (the same without the browser)}
 
-\paragraph{2. Setup tab.}  Fill in:
-\begin{itemize}
-  \item \textbf{Project name}: \cmd{Si_example}.
-  \item \textbf{POSCAR}: paste the primitive cell of silicon:
+This example is also the reference of the browser GUI: every field, button and panel is
+described where the example first uses it.
+
+\subsection{Starting the GUI}
+\label{sec:gui}
+
+In the VASP-Flow folder run \cmd{make run} and open \url{http://localhost:5001}.  On a SLURM
+cluster, start it on the login node and open it on your laptop through an SSH tunnel:
+\begin{lstlisting}[language=bash]
+ssh -L 5001:localhost:5001 username@cluster     # on your laptop
+cd ~/VASP-Flow && make run                       # on the login node
+# then open http://localhost:5001 in the laptop's browser
+\end{lstlisting}
+The GUI has three tabs: \textbf{Setup} (describe the calculation, then \emph{Generate
+Workflow}), \textbf{Workflow} (run the steps; the VASP output streams into the page) and
+\textbf{Results} (plots and the OUTCAR summary).  The bar under the tabs returns to an earlier
+project: choose it under \emph{Resume project}; \textbf{$\to$ Workflow} and \textbf{Results}
+jump to those tabs, \textbf{Edit \& Regenerate} reopens Setup with every field filled in.  The
+first time, open \emph{System Setup} at the top of the Setup tab, enter the paths of VASP, the
+POTCARs and MPI (they are stored in \cmd{settings.json}) and click \emph{Save Settings}.
+
+\subsection{Step 1: the Setup tab}
+
+\paragraph{Project and structure.}  Enter the project name \cmd{Si_example}, 8 MPI cores, and
+paste the primitive cell of silicon into the POSCAR box (Figure~\ref{fig:gui-setup-top}):
 \begin{lstlisting}
 Si
 1.0
@@ -415,55 +460,239 @@ Direct
    0.00 0.00 0.00
    0.25 0.25 0.25
 \end{lstlisting}
-  \item \textbf{Functional}: PBEsol (the default is R2SCAN; PBEsol is quicker for a first
-        try).  \textbf{Spin / SOC}: None.
-  \item \textbf{Tasks}: Structure relaxation, SCF, Band structure, DOS (projection row:
-        Element \cmd{Si}, Orbitals \cmd{s} and \cmd{p}).  Leave the k-path empty: it is
-        detected from the cell (the standard FCC path G-X-W-K-G-L-U-W-L-K).
-  \item \textbf{Calculation parameters}: choose \emph{Run convergence tests first} and enter
-        \textbf{K-point meshes} \cmd{4x4x4, 6x6x6, 8x8x8, 10x10x10, 12x12x12} and
-        \textbf{ENCUT range} \cmd{250-500}.
-\end{itemize}
-Click \textbf{Generate Workflow}.  The project folder \cmd{Si_example/} is created
-with one sub-folder per step (Section~\ref{sec:agent-files}).
 
-\paragraph{3. Phase 1: convergence tests.}  On the \textbf{Workflow} tab, run
-\emph{Convergence tests}.  Each ENCUT and each k-mesh is one short SCF; the plots of
-energy, pressure and force against ENCUT and against the k-mesh appear below the
-button.  When they are done, the fields under \emph{Review results then set production
-parameters} are filled with the automatic choice --- the smallest ENCUT and k-mesh
-after which the force and the pressure no longer change (by more than 5~meV/\AA\ and
-0.5~kbar).  For silicon this is typically ENCUT $\approx$ 300--350~eV and an
-8$\times$8$\times$8 to 10$\times$10$\times$10 mesh.  You may type other values.
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/gui_setup_project.png}\par\smallskip
+\includegraphics[width=\linewidth]{figures/gui_setup_poscar.png}\par\smallskip
+\includegraphics[width=\linewidth]{figures/gui_setup_method.png}
+\caption{Setup tab, top: project, structure and method for silicon.}
+\label{fig:gui-setup-top}
+\end{figure}
 
-\paragraph{4. Phase 2: production.}  Click \textbf{Run Phase 2 with these parameters}.
-ENCUT is written into every INCAR, the k-meshes are regenerated (the DOS gets twice the
-SCF mesh) and relax $\to$ SCF $\to$ bands $\to$ DOS run one after the other; the output
-streams into the page.
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.25\linewidth}X@{}}
+\thead
+Field & Meaning \\ \midrule
+Project name & the folder created in the projects folder; a new name starts a new project
+  without overwriting the old one \\
+Execution profile & \emph{Workstation} runs VASP on this computer; \emph{SLURM HPC} writes
+  \cmd{sbatch} scripts (set \cmd{profiles/slurm.json} first) \\
+MPI cores & cores per calculation \\
+POSCAR & paste the structure or \emph{Load file}; \emph{Visualize} opens it in the viewer of
+  System Setup (Jmol, VESTA, OVITO, \ldots) \\
+POTCAR directory & blank = the library of System Setup; an element with several variants
+  (\cmd{Ga}, \cmd{Ga_d}) gets a chooser \\
+\bottomrule
+\end{tabularx}
 
-\paragraph{5. Results tab.}  Band structure, total and projected DOS and the OUTCAR
-summary (energy, Fermi level, forces).  Silicon should show an indirect gap of about
-0.5--0.6~eV (PBEsol underestimates the experimental 1.1~eV).  The plots are drawn when you
-open the tab and saved in \cmd{Si_example/analysis/}; the \textbf{Zoom} bar changes the
-energy window and the \textbf{PDF} buttons download them (Section~\ref{sec:plots}).
+\paragraph{Method.}  Choose \textbf{PBEsol} (the default R2SCAN is better but slower) and
+\textbf{Spin / SOC}: None.  \emph{Hexagonal BZ} stays unticked: the GUI ticks it itself
+when the pasted cell is hexagonal, and silicon is cubic.
 
-\paragraph{6. Change a tag by hand.}  Two ways:
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.25\linewidth}X@{}}
+\thead
+Choice & Meaning \\ \midrule
+R2SCAN & \textbf{default}; meta-GGA, better structures, energies and gaps than the GGAs at
+  1.5--3$\times$ the cost \\
+PBE, PBEsol & GGAs; PBE is what the high-throughput drivers use, PBEsol gives good lattice
+  constants \\
+LDA & \texttt{GGA = CA}, with the LDA POTCARs (\texttt{VASP\_POTCAR\_DIR\_LDA},
+  \S\ref{sec:defaultpaths}) \\
+HSE06, RVV10, AM05 & hybrid (accurate gaps, much slower); van der Waals for layered materials;
+  rarely needed \\
+\midrule
+Spin: None & non-magnetic \\
+Collinear spin & \texttt{ISPIN = 2}; shows the \emph{Magnetic moment / atom} field
+  (Section~\ref{sec:magnetic}) \\
+SOC, non-magnetic & \texttt{LSORBIT}, \texttt{MAGMOM = 3N*0}, \texttt{vasp\_ncl}; for
+  non-magnetic materials with heavy elements (Bi\textsubscript{2}Se\textsubscript{3},
+  MoS\textsubscript{2}) \\
+SOC $\parallel$ z/x/y & the same with initial moments along z, x or y; magnetic materials only \\
+\midrule
+Hexagonal BZ & ticked automatically for a hexagonal cell; matters only for a k-path typed by
+  hand with labels spglib does not know (the $M$ point of the generic table) \\
+2D / slab & $k_z = 1$: one k-point across the vacuum \\
+GGA+U (explicit) & your own $U$ per element and orbital; \emph{Default Hubbard U} chooses the
+  tabulated values (Section~\ref{sec:ggau}) \\
+\bottomrule
+\end{tabularx}
+
+\paragraph{Convergence tests and tasks.}  Under \emph{Calculation parameters} keep \emph{Run
+convergence tests first} and enter the k-point meshes \cmd{4x4x4, 6x6x6, 8x8x8, 10x10x10,
+12x12x12} and the ENCUT range \cmd{250-500}.  Under \emph{Tasks} keep Structure relaxation, SCF
+with ELF, Band structure and DOS, add a projection row (element \cmd{Si}, orbitals \cmd{s} and
+\cmd{p}), and tick \emph{LOBSTER bonding analysis} (Figure~\ref{fig:gui-setup-tasks}).  The
+\emph{K-path} field is already filled: as soon as the POSCAR was pasted, the GUI asked spglib for
+the standard path of the cell, here the FCC path \cmd{G-X-W-K-G-L-U-W-L-K|U-X}
+(Section~\ref{sec:kpath}; \cmd{|} starts a new segment).  Keep it, or type your own,
+e.g.\ \cmd{G-X-W-K-G-L}; a path you typed is kept when you paste another POSCAR.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/gui_setup_conv.png}\par\smallskip
+\includegraphics[width=0.92\linewidth]{figures/gui_setup_tasks.png}
+\caption{Setup tab, lower part: convergence tests and the tasks of this example.}
+\label{fig:gui-setup-tasks}
+\end{figure}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.22\linewidth}l>{\raggedright\arraybackslash}X@{}}
+\thead
+Task & Folder & What it does \\ \midrule
+Structure relaxation & \cmd{01_relax} & cell and ions (ISIF, NSW, EDIFFG in the task) \\
+SCF (+ ELF) & \cmd{02_scf} & charge density; needed by every later step; ELF writes ELFCAR \\
+Band structure & \cmd{03_bands} & along the k-path; energy window of the plot \\
+DOS & \cmd{04_dos} & twice the SCF mesh; one projection row per element \\
+LOBSTER & \cmd{08_lobster} & symmetry-off NSCF, then COHP/COBI/COOP (Section~\ref{sec:lobster}) \\
+DFPT & \cmd{06_dfpt} & dielectric constant and Born charges (Section~\ref{sec:dfpt}) \\
+Phonons & \cmd{07_phonons} & phonopy supercells (Section~\ref{sec:phonons}) \\
+Wannier90 & \cmd{05_wannier} & NSCF and \cmd{wannier90.win} (Section~\ref{sec:wannier}) \\
+\bottomrule
+\end{tabularx}
+
+\medskip\noindent Click \textbf{Generate Workflow} at the bottom of the tab.  The project
+folder \cmd{Si_example/} is created with one sub-folder per step; its layout is that of
+Example~2 (Figure~\ref{fig:single-tree}).
+
+\subsection{Step 2: convergence tests (Workflow tab, phase 1)}
+
+On the \textbf{Workflow} tab every step has \textbf{Run}, \textbf{Edit files} (its INCAR,
+KPOINTS and POSCAR in the browser; a \cmd{.bak} copy is kept) and a status badge;
+\textbf{Run All Steps} runs them in order and stops at the first failure.  Run
+\emph{Convergence tests}.  Each ENCUT and each k-mesh is one short SCF; the plots of energy,
+pressure and force against ENCUT and against the k-mesh appear below the button.  When they
+are done, the fields under \emph{Review results then set production parameters} hold the
+automatic choice: the smallest ENCUT and k-mesh after which the force and the pressure no
+longer change (by more than 5~meV/\AA\ and 0.5~kbar).  For silicon this is typically ENCUT
+$\approx$ 300--350~eV and an 8$\times$8$\times$8 to 10$\times$10$\times$10 mesh.  You may type
+other values.
+
+\subsection{Step 3: production (Workflow tab, phase 2)}
+
+Click \textbf{Run Phase 2 with these parameters}.  ENCUT is written into every INCAR, the
+k-meshes are regenerated (the DOS gets twice the SCF mesh) and relax $\to$ SCF $\to$ bands
+$\to$ DOS $\to$ LOBSTER run one after the other.  Each step takes its structure and charge
+density from the one before.
+
+\subsection{Step 4: the Results tab}
+\label{sec:gui-results}
+
+The plots are drawn from the outputs when you open the tab --- nothing has to be run first ---
+and saved in \cmd{Si_example/plots/} (plots that \cmd{makeplots.sh} already made are shown as
+they are).  Each group has a bar \emph{Energy window (eV): min to max}: \textbf{Zoom} redraws
+it for that range, \textbf{Reset} returns to the default, and the \textbf{PDF} buttons give the
+vector files.  The default band window is the \emph{Energy window} of the band task.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/gui_results_bands_dos.jpg}
+\caption{Results tab for silicon: the band structure (plain and weighted by the Si-$s$ and
+Si-$p$ character) and the total and projected DOS.  The indirect gap is about 0.55~eV, with the
+conduction-band minimum on the $\Gamma$--X line; the top of the valence band is Si-$p$.  (This
+run is R2SCAN at the PBEsol lattice constant, slightly too small for R2SCAN; at its own lattice
+constant R2SCAN gives 0.6~eV.)}
+\label{fig:gui-results-bands}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/gui_results_elf.jpg}
+\caption{Results tab for silicon: the ELF along the first- and second-neighbour Si--Si lines
+(about 0.95 in the middle of the bond; dotted inside the PAW spheres, where it is not
+meaningful), and in the plane through an atom and its neighbours.}
+\label{fig:gui-results-dos}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/gui_results_summary.png}\par\smallskip
+\includegraphics[width=\linewidth]{figures/gui_results_lobster.png}
+\caption{Results tab for silicon (the Si run mp-149 of the high-throughput database, PBE, so
+there is no \cmd{04_dos}): the summary of every step, and LOBSTER $-$COHP, COBI and COOP for
+the first (2.37~\AA, ICOHP $= -4.5$~eV per bond) and second neighbours, with their integrals up
+to $E_F$.  Below them the tab also shows the LOBSTER projected DOS (needs
+\cmd{DOSCAR.lobster}, not kept in that run).}
+\label{fig:gui-results-lobster}
+\end{figure}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.22\linewidth}X@{}}
+\thead
+Panel & What it shows \\ \midrule
+Calculation summary & per step: final energy, Fermi level, moment, converged; \emph{OUTCAR}
+  shows the energy, Fermi level, moment and forces of that step \\
+Band structure & $E_F = 0$; spin up blue, spin down red dashed; fat bands weighted by orbital
+  (needs PROCAR); sumo, with a built-in plotter if sumo fails \\
+Density of states & total, and projected on the orbitals of the projection rows (spin down
+  mirrored) \\
+ELF & along the nearest-neighbour bonds and in the plane of an atom and its neighbours (needs
+  ELFCAR; not for SOC) \\
+LOBSTER & $-$COHP, COBI, COOP per bond type and their integrals; the LOBSTER projected DOS
+  against the VASP total (the gap between them is the charge spilling, Appendix~\ref{app:spilling}) \\
+Born charges, phonons & after \cmd{06_dfpt} (\emph{Extract from OUTCAR}) and \cmd{07_phonons} \\
+\bottomrule
+\end{tabularx}
+
+\medskip\noindent Silicon should show an indirect gap of about 0.5--0.6~eV (PBEsol
+underestimates the experimental 1.1~eV), a DOS dominated by Si-$p$ at the valence-band top, an
+ELF of about 0.95 in the middle of the Si--Si bond, and a bonding $-$COHP below $E_F$
+(ICOHP about $-4.5$~eV per Si--Si bond, COBI about 0.9).
+
+\subsection{Step 5: changing a tag by hand}
+
 \begin{itemize}
-  \item \textbf{One file, now}: on the Workflow tab, \textbf{Edit files} next to a step
-        opens its INCAR, KPOINTS and POSCAR in the browser (a \cmd{.bak} copy is kept).
-        Change e.g.\ \cmd{SIGMA = 0.05} to \cmd{SIGMA = 0.02} in \cmd{03_bands/INCAR}, save,
-        and run that step again.
-  \item \textbf{In the project, for good}: \textbf{Edit \& Regenerate} reopens Setup with
-        everything filled in.  Under \emph{Advanced --- explicit INCAR / KPOINTS} choose a
-        step and type tags (one \cmd{TAG = value} per line) or a whole KPOINTS file;
+  \item \textbf{One file, now}: on the Workflow tab, \textbf{Edit files} next to a step opens
+        its INCAR, KPOINTS and POSCAR.  Change e.g.\ \cmd{SIGMA = 0.05} to \cmd{SIGMA = 0.02}
+        in \cmd{03_bands/INCAR}, save, and run that step again.
+  \item \textbf{In the project, for good}: \textbf{Edit \& Regenerate} reopens Setup.  Under
+        \emph{Advanced --- explicit INCAR / KPOINTS} (Figure~\ref{fig:gui-advanced}) choose a
+        step and type tags, one \cmd{TAG = value} per line, or a whole KPOINTS file; then
         \textbf{Generate Workflow} again.  These override every automatic choice
         (Section~\ref{sec:incar}).
 \end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{figures/gui_setup_advanced.png}
+\caption{Setup tab, bottom: your own INCAR tags and KPOINTS file for one step or all.}
+\label{fig:gui-advanced}
+\end{figure}
+
+\subsection{Viewing results of jobs run elsewhere}
+\label{sec:open-results}
+
+The Results tab also shows calculations the GUI did not set up or run: a cluster job, a whole
+high-throughput run, or the tarball of \cmd{collect_results.sh}.  Type the path in
+\textbf{Open results folder} on the bar under the tabs and press \textbf{Open}:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Path & What is opened \\ \midrule
+one calculation, e.g.\ \texttt{\ldots/materials/mp-8} & that project (listed as \texttt{mp-8}) \\
+a high-throughput folder, e.g.\ \texttt{\ldots/HT\_example5} & every
+  \texttt{materials/<id>} (listed as \texttt{HT\_example5\textasciitilde mp-8}, \ldots) \\
+an unpacked \texttt{screen\_results.tar.gz} (\texttt{\ldots/results}) & every
+  \texttt{results/<id>} \\
+\bottomrule
+\end{tabularx}
+
+The opened calculations join the project list (marked \emph{opened}) and are remembered in
+\texttt{settings.json}.  Plots missing from \texttt{plots/} are drawn from the raw outputs
+--- bands from \texttt{03\_bands/EIGENVAL}, COHP/COBI/COOP and the LOBSTER DOS from
+\texttt{08\_lobster/*.lobster}, ELF from \texttt{02\_scf/ELFCAR} --- and saved there.  Nothing
+is submitted or rerun.  A step counts as done when its OUTCAR shows VASP finished (a
+relaxation must also reach the ionic criterion).  \textbf{Forget opened} removes them from the
+list without touching any file.  \texttt{collect\_results.sh} keeps this layout with trimmed
+OUTCARs, so its tarball opens directly; set \texttt{FULL\_OUTCAR=1} to keep the complete
+OUTCARs.
 
 % ============================================================
 \section{Example 2 --- GaAs from the command line on a workstation}
 \label{sec:ex-ws}
 % ============================================================
+
+\taskcard{a workstation (\cmd{make check FOR=local})}
+  {about an hour on 8 cores}
+  {\cmd{plots/GaAs_example_band.png} shows the direct gap of GaAs at $\Gamma$}
+  {Example~3 (the same on a cluster); all keywords: Section~\ref{sec:keywords}}
 
 The same steps without the browser, with \cmd{vasp-agent.py}.  Work in a folder of your
 own, outside the VASP-Flow folder.
@@ -505,32 +734,136 @@ END_INCAR
 Section~\ref{sec:keywords}.  The \cmd{INCAR scf:} \dots\ \cmd{END_INCAR} blocks put your
 own tags into one step's INCAR and override the generated values.
 
-\paragraph{2. Generate the inputs.}  Run the agent in that folder:
+\paragraph{2. Generate the inputs.}  Make a folder, move the two files into it (here they
+were saved in \cmd{~/Downloads}) and run the agent there:
 \begin{lstlisting}[language=bash]
-mkdir -p ~/calc && cd ~/calc            # POSCAR and instructions.txt are here
-python3 ~/VASP-Flow/vasp-agent.py       # or: -i my_inst.txt -s my.vasp
+mkdir -p ~/calc
+mv ~/Downloads/POSCAR ~/Downloads/instructions.txt ~/calc/
+cd ~/calc
+python3 ~/VASP-Flow/vasp-agent.py
 \end{lstlisting}
+Without arguments the agent reads \cmd{instructions.txt} and \cmd{POSCAR} of the current
+folder; other names are given with \cmd{-i my_inst.txt -s my.vasp}.
 It creates \cmd{GaAs_example/} with \cmd{00_convergence/}, \cmd{01_relax/},
 \cmd{02_scf/}, \cmd{03_bands/}, \cmd{04_dos/} (each with INCAR, KPOINTS, POTCAR and
 \cmd{run.sh}) and the scripts \cmd{run_convergence.sh}, \cmd{run_calculations.sh},
-\cmd{analyze_convergence.sh} and \cmd{analyze.sh}.  Look at the INCARs: they are complete
-and commented, and \cmd{02_scf/INCAR} ends with your \cmd{EDIFF}.
+\cmd{makeplots_convergence.sh} and \cmd{makeplots.sh}.  Look at the INCARs: they are complete
+and commented, and \cmd{02_scf/INCAR} ends with your \cmd{EDIFF}.  The whole folder is
+drawn in Figure~\ref{fig:single-tree}.
+
+\begin{figure}[p]
+\centering
+\textbf{The folder of one calculation (\cmd{vasp-agent.py}, Example~2)}\par\medskip
+\footnotesize
+\textcolor{mainblue}{\textbf{folder}} \quad written at set-up \quad
+\textcolor{rungray}{written by the runs} \quad
+\textcolor{fixamber}{written by the repairs}\par\bigskip
+\raggedright
+\begin{tikzpicture}[x=1mm, y=1mm, every node/.style={inner sep=0pt, anchor=west, font=\footnotesize}]
+\node at (0.0,0.0) {\color{mainblue}\bfseries\texttt{\textasciitilde{}/calc/GaAs\_example/}};
+\node at (92.0,0.0) {\color{black!65}made by \cmd{vasp-agent.py} in \cmd{~/calc}};
+\node at (5.0,-4.5) {\texttt{instructions.txt, POSCAR, POTCAR}};
+\node at (92.0,-4.5) {\color{black!65}your input; POTCAR built from the library};
+\draw[black!40] (1.5,-2.0) |- (4.2,-4.5);
+\node at (5.0,-9.0) {\texttt{run\_convergence.sh}};
+\node at (92.0,-9.0) {\color{black!65}phase 1: the ENCUT and k-mesh tests};
+\draw[black!40] (1.5,-2.0) |- (4.2,-9.0);
+\node at (5.0,-13.5) {\texttt{makeplots\_convergence.sh}};
+\node at (92.0,-13.5) {\color{black!65}their plots and the automatic choice};
+\draw[black!40] (1.5,-2.0) |- (4.2,-13.5);
+\node at (5.0,-18.0) {\texttt{run\_calculations.sh}};
+\node at (92.0,-18.0) {\color{black!65}phase 2: asks ENCUT and mesh, runs the steps};
+\draw[black!40] (1.5,-2.0) |- (4.2,-18.0);
+\node at (5.0,-22.5) {\texttt{makeplots.sh, dos\_proj.json}};
+\node at (92.0,-22.5) {\color{black!65}the plots; the DOS projections asked for};
+\draw[black!40] (1.5,-2.0) |- (4.2,-22.5);
+\node at (5.0,-27.0) {\color{mainblue}\bfseries\texttt{00\_convergence/}};
+\node at (92.0,-27.0) {\color{black!65}ENCUT and k-mesh tests};
+\draw[black!40] (1.5,-2.0) |- (4.2,-27.0);
+\node at (10.0,-31.5) {\texttt{choose\_params.py, plot\_convergence.py}};
+\draw[black!40] (6.5,-29.0) |- (9.2,-31.5);
+\node at (10.0,-36.0) {\color{mainblue}\bfseries\texttt{encut/}};
+\node at (92.0,-36.0) {\color{black!65}INCAR KPOINTS POSCAR POTCAR run.sh};
+\draw[black!40] (6.5,-29.0) |- (9.2,-36.0);
+\node at (15.0,-40.5) {\color{rungray}\texttt{encut\_250/ ... encut\_500/}};
+\node at (92.0,-40.5) {\color{black!65}one SCF per ENCUT};
+\draw[black!40] (11.5,-38.0) |- (14.2,-40.5);
+\node at (10.0,-45.0) {\color{mainblue}\bfseries\texttt{kpoints/}};
+\node at (92.0,-45.0) {\color{black!65}INCAR POSCAR POTCAR run.sh};
+\draw[black!40] (6.5,-29.0) |- (9.2,-45.0);
+\node at (15.0,-49.5) {\color{rungray}\texttt{4x4x4/ ... 10x10x10/}};
+\node at (92.0,-49.5) {\color{black!65}one SCF per mesh};
+\draw[black!40] (11.5,-47.0) |- (14.2,-49.5);
+\node at (10.0,-54.0) {\color{rungray}\texttt{converged\_params.txt}};
+\node at (92.0,-54.0) {\color{black!65}the automatic ENCUT and mesh};
+\draw[black!40] (6.5,-29.0) |- (9.2,-54.0);
+\node at (10.0,-58.5) {\color{rungray}\texttt{encut\_*.png, kpoints\_*.png}};
+\node at (92.0,-58.5) {\color{black!65}energy, pressure, force};
+\draw[black!40] (6.5,-29.0) |- (9.2,-58.5);
+\node at (5.0,-63.0) {\color{mainblue}\bfseries\texttt{01\_relax/}};
+\node at (92.0,-63.0) {\color{black!65}cell and ions};
+\draw[black!40] (1.5,-2.0) |- (4.2,-63.0);
+\node at (10.0,-67.5) {\texttt{INCAR KPOINTS POSCAR POTCAR run.sh}};
+\draw[black!40] (6.5,-65.0) |- (9.2,-67.5);
+\node at (10.0,-72.0) {\color{rungray}\texttt{OUTCAR OSZICAR CONTCAR CHGCAR WAVECAR}};
+\draw[black!40] (6.5,-65.0) |- (9.2,-72.0);
+\node at (5.0,-76.5) {\color{mainblue}\bfseries\texttt{02\_scf/}};
+\node at (92.0,-76.5) {\color{black!65}charge density};
+\draw[black!40] (1.5,-2.0) |- (4.2,-76.5);
+\node at (10.0,-81.0) {\texttt{INCAR KPOINTS POSCAR POTCAR run.sh}};
+\draw[black!40] (6.5,-78.5) |- (9.2,-81.0);
+\node at (10.0,-85.5) {\texttt{copy\_from\_relax.sh}};
+\node at (92.0,-85.5) {\color{black!65}takes CONTCAR and CHGCAR};
+\draw[black!40] (6.5,-78.5) |- (9.2,-85.5);
+\node at (10.0,-90.0) {\color{rungray}\texttt{OUTCAR CHGCAR DOSCAR vasprun.xml}};
+\draw[black!40] (6.5,-78.5) |- (9.2,-90.0);
+\node at (5.0,-94.5) {\color{mainblue}\bfseries\texttt{03\_bands/}};
+\node at (92.0,-94.5) {\color{black!65}band structure};
+\draw[black!40] (1.5,-2.0) |- (4.2,-94.5);
+\node at (10.0,-99.0) {\texttt{INCAR KPOINTS POTCAR run.sh copy\_from\_scf.sh}};
+\node at (92.0,-99.0) {\color{black!65}KPOINTS: the k-path};
+\draw[black!40] (6.5,-96.5) |- (9.2,-99.0);
+\node at (10.0,-103.5) {\color{rungray}\texttt{OUTCAR EIGENVAL PROCAR vasprun.xml}};
+\draw[black!40] (6.5,-96.5) |- (9.2,-103.5);
+\node at (5.0,-108.0) {\color{mainblue}\bfseries\texttt{04\_dos/}};
+\node at (92.0,-108.0) {\color{black!65}density of states, twice the SCF mesh};
+\draw[black!40] (1.5,-2.0) |- (4.2,-108.0);
+\node at (10.0,-112.5) {\texttt{INCAR KPOINTS POTCAR run.sh copy\_from\_scf.sh}};
+\draw[black!40] (6.5,-110.0) |- (9.2,-112.5);
+\node at (10.0,-117.0) {\color{rungray}\texttt{OUTCAR DOSCAR vasprun.xml}};
+\draw[black!40] (6.5,-110.0) |- (9.2,-117.0);
+\node at (5.0,-121.5) {\color{mainblue}\bfseries\texttt{plots/}};
+\node at (92.0,-121.5) {\color{black!65}plotting scripts};
+\draw[black!40] (1.5,-2.0) |- (4.2,-121.5);
+\node at (10.0,-126.0) {\color{rungray}\texttt{GaAs\_example\_band.png, GaAs\_example\_dos.png}};
+\node at (92.0,-126.0) {\color{black!65}and their PDFs};
+\draw[black!40] (6.5,-123.5) |- (9.2,-126.0);
+\end{tikzpicture}
+\caption{The project folder of Example~2.  Every step folder is an ordinary VASP folder: edit its
+INCAR and rerun it with its \cmd{run.sh}.  The GUI (Example~1) makes the same folder.  On a
+cluster (\cmd{vasp-agent-slurm.py}, Example~3) the layout is the same, with
+\cmd{submit_convergence.sh} and \cmd{submit_calculations.sh} in place of the \cmd{run_*.sh}
+scripts; each \cmd{run.sh} is then an \cmd{sbatch} script and writes its log
+\cmd{slurm-<jobid>.out} into its step folder.  Without a \cmd{Convergence:} line there is no
+\cmd{00_convergence/}, and one \cmd{run_all.sh} (\cmd{submit_all.sh}) runs every step.}
+\label{fig:single-tree}
+\end{figure}
 
 \paragraph{3. Phase 1: convergence tests.}  Run the tests, plot them and look at the automatic choice:
 \begin{lstlisting}[language=bash]
 cd GaAs_example
-./run_convergence.sh                    # one short SCF per ENCUT and per mesh
-./analyze_convergence.sh                # plots in 00_convergence/
-cat 00_convergence/converged_params.txt # the automatic choice
+./run_convergence.sh         # one short SCF per ENCUT, mesh
+./makeplots_convergence.sh   # plots in 00_convergence/
+cat 00_convergence/converged_params.txt   # the choice
 \end{lstlisting}
 
 \paragraph{4. Phase 2: production.}  Then run the calculations and the plots:
 \begin{lstlisting}[language=bash]
-./run_calculations.sh     # asks for ENCUT and the k-mesh (Enter = automatic choice)
-./analyze.sh              # band structure, DOS and OUTCAR summary in analysis/
+./run_calculations.sh   # asks ENCUT, k-mesh (Enter = automatic)
+./makeplots.sh          # bands, DOS, OUTCAR summary in plots/
 \end{lstlisting}
 \cmd{run_calculations.sh} writes the chosen ENCUT and mesh into every step and runs relax
-$\to$ SCF $\to$ bands $\to$ DOS.  \cmd{analyze.sh} writes \cmd{analysis/GaAs_example_band.png},
+$\to$ SCF $\to$ bands $\to$ DOS.  \cmd{makeplots.sh} writes \cmd{plots/GaAs_example_band.png},
 \cmd{..._dos.png} and their PDFs; to view the project in the browser instead, start the GUI
 and select it (Section~\ref{sec:plots}).  Without a \cmd{Convergence:} line the agent writes a
 single \cmd{run_all.sh} instead.
@@ -551,37 +884,42 @@ single \cmd{run_all.sh} instead.
 \label{sec:ex-slurm}
 % ============================================================
 
+\taskcard{the login node of a SLURM cluster (\cmd{make check FOR=slurm})}
+  {about an hour of compute time, plus the time in the queue}
+  {the queue is empty and \cmd{vasp_diagnose.py} (step~3) reports every step \cmd{ok}}
+  {many materials: Example~5; nodes and walltimes: Section~\ref{sec:resources}}
+
 Exactly Example~2, with \cmd{vasp-agent-slurm.py}: every step becomes a SLURM job.
 
-\paragraph{1. Once per cluster.}  Put the VASP binaries, modules, partition and account
-into \cmd{~/VASP-Flow/profiles/slurm.json} (Section~\ref{sec:remote-setup}).
-
-\paragraph{2. Inputs.}  The same \cmd{POSCAR} and \cmd{instructions.txt}, with the job
+\paragraph{1. Inputs.}  The same \cmd{POSCAR} and \cmd{instructions.txt}, with the job
 size instead of \cmd{MPI: 8}:
 \begin{lstlisting}
 NODES: 1
 NTASKS_PER_NODE: 40
-RELAX_WALLTIME: 02:00:00      # optional; each step has a default walltime
+RELAX_WALLTIME: 02:00:00    # optional; default per step
 \end{lstlisting}
 
-\paragraph{3. Generate, then run the two phases.}  On the login node:
+\paragraph{2. Generate, then run the two phases.}  On the login node, move the two files
+(here copied to your home folder, e.g.\ with \cmd{scp}) into a folder on scratch and run there:
 \begin{lstlisting}[language=bash]
+mkdir -p /scratch/$USER/calc
+mv ~/POSCAR ~/instructions.txt /scratch/$USER/calc/
 cd /scratch/$USER/calc
 python3 ~/VASP-Flow/vasp-agent-slurm.py
 cd GaAs_example
 ./submit_convergence.sh       # phase 1: the test jobs
 squeue -u $USER               # wait until they are gone
-./analyze_convergence.sh
-./submit_calculations.sh      # phase 2: asks ENCUT/k-mesh, submits relax->scf->bands->dos
-./analyze.sh                  # after the jobs have finished
+./makeplots_convergence.sh
+./submit_calculations.sh      # phase 2: relax->scf->bands->dos
+./makeplots.sh                # after the jobs have finished
 \end{lstlisting}
 The production jobs are chained (\cmd{--dependency=afterok}): the SCF starts only when
-the relaxation ended well.  Run \cmd{analyze.sh} on the login node after the jobs, or copy the
+the relaxation ended well.  Run \cmd{makeplots.sh} on the login node after the jobs, or copy the
 project to your computer and open it in the GUI (Section~\ref{sec:plots}).  Each step has its own walltime, and a step that reaches it
 is stopped cleanly and continued in a new job automatically
 (Section~\ref{sec:slurm-time}).
 
-\paragraph{4. If a step failed.}  Find out why and repair it with the diagnosis
+\paragraph{3. If a step failed.}  Find out why and repair it with the diagnosis
 (Part~\ref{part:check}); for one project the list has one line:
 \begin{lstlisting}[language=bash]
 echo GaAs_example > mylist.txt
@@ -590,17 +928,21 @@ python3 ~/VASP-Flow/vasp_diagnose.py mylist.txt     # -> diagnosis_round1/report
 To rerun one step by hand after editing its INCAR: \cmd{cd 03_bands && sbatch run.sh}.
 
 % ============================================================
-\section{Example 4 --- Three materials from Materials Project on a workstation}
+\section{Example 4 --- High-throughput on a workstation: three materials from Materials Project}
 \label{sec:ex-ht-ws}
 % ============================================================
 
 \cmd{ht-mp-scf.py} takes a list of Materials Project IDs, downloads each primitive
 cell and runs relax $\to$ SCF (+ ELF) $\to$ LOBSTER for each with
-\cmd{vasp-agent.py}.  It needs internet access and the Python environment with pymatgen and
-the Materials Project key of Section~\ref{sec:install}.
+\cmd{vasp-agent.py}.
+
+\taskcard{a workstation with internet access (\cmd{make check FOR="local ht"})}
+  {a few hours: the three materials run one after another}
+  {\cmd{diagnosis_round1/report.txt} lists all three as \cmd{ok}}
+  {the same on a cluster with repair rounds: Example~5; both drivers: Section~\ref{sec:highthroughput}}
 
 \begin{lstlisting}[language=bash]
-source ~/vaspenv/bin/activate          # Section 2, step 2
+source ~/vaspenv/bin/activate          # made once at installation
 export MP_API_KEY=your_key
 export VASP_POTCAR_DIR=/path/to/potpaw_PBE
 mkdir -p ~/ht_small && cd ~/ht_small
@@ -611,7 +953,96 @@ python3 ~/VASP-Flow/ht-mp-scf.py -l my_list.txt --agent local --mpi 8
 Each material gets a project folder like those of Example~2 (\cmd{mp-149/01_relax},
 \cmd{02_scf}, \cmd{08_lobster}, \dots).  The settings written for each material are in
 \cmd{_ht_inputs/<id>/instructions.txt}; edit one and run \cmd{runall.sh} again to change
-that material.
+that material.  Figure~\ref{fig:ex4-tree} shows the folder.
+
+\begin{figure}[p]
+\centering
+\textbf{The folder of a high-throughput run (\cmd{ht-mp-scf.py}, Example~4)}\par\medskip
+\footnotesize
+\textcolor{mainblue}{\textbf{folder}} \quad written at set-up \quad
+\textcolor{rungray}{written by the runs} \quad
+\textcolor{fixamber}{written by the repairs}\par\bigskip
+\raggedright
+\begin{tikzpicture}[x=1mm, y=1mm, every node/.style={inner sep=0pt, anchor=west, font=\footnotesize}]
+\node at (0.0,0.0) {\color{mainblue}\bfseries\texttt{\textasciitilde{}/ht\_small/}};
+\node at (92.0,0.0) {\color{black!65}where \cmd{ht-mp-scf.py} ran};
+\node at (5.0,-4.5) {\texttt{my\_list.txt}};
+\node at (92.0,-4.5) {\color{black!65}your mp-IDs};
+\draw[black!40] (1.5,-2.0) |- (4.2,-4.5);
+\node at (5.0,-9.0) {\texttt{runall.sh}};
+\node at (92.0,-9.0) {\color{black!65}builds and runs the materials in turn};
+\draw[black!40] (1.5,-2.0) |- (4.2,-9.0);
+\node at (5.0,-13.5) {\color{mainblue}\bfseries\texttt{\_ht\_inputs/}};
+\node at (92.0,-13.5) {\color{black!65}what the agent is given, per material};
+\draw[black!40] (1.5,-2.0) |- (4.2,-13.5);
+\node at (10.0,-18.0) {\texttt{elements\_Z.txt}};
+\draw[black!40] (6.5,-15.5) |- (9.2,-18.0);
+\node at (10.0,-22.5) {\color{mainblue}\bfseries\texttt{mp-2534/}};
+\node at (92.0,-22.5) {\color{black!65}POSCAR (from MP), instructions.txt};
+\draw[black!40] (6.5,-15.5) |- (9.2,-22.5);
+\node at (5.0,-27.0) {\color{fixamber}\texttt{diagnosis\_round1/}};
+\node at (92.0,-27.0) {\color{black!65}\cmd{vasp_diagnose.py}: report.txt, fix/*.sh};
+\draw[black!40] (1.5,-2.0) |- (4.2,-27.0);
+\node at (5.0,-31.5) {\color{mainblue}\bfseries\texttt{mp-149/}};
+\node at (92.0,-31.5) {\color{black!65}Si};
+\draw[black!40] (1.5,-2.0) |- (4.2,-31.5);
+\node at (5.0,-36.0) {\color{mainblue}\bfseries\texttt{mp-2534/}};
+\node at (92.0,-36.0) {\color{black!65}GaAs, opened below: a project as in Example~2};
+\draw[black!40] (1.5,-2.0) |- (4.2,-36.0);
+\node at (10.0,-40.5) {\texttt{instructions.txt, POSCAR, POTCAR}};
+\draw[black!40] (6.5,-38.0) |- (9.2,-40.5);
+\node at (10.0,-45.0) {\texttt{run\_all.sh, makeplots.sh}};
+\node at (92.0,-45.0) {\color{black!65}runs the steps; the plots};
+\draw[black!40] (6.5,-38.0) |- (9.2,-45.0);
+\node at (10.0,-49.5) {\color{mainblue}\bfseries\texttt{01\_relax/}};
+\node at (92.0,-49.5) {\color{black!65}cell and ions (ISIF = 3)};
+\draw[black!40] (6.5,-38.0) |- (9.2,-49.5);
+\node at (15.0,-54.0) {\texttt{INCAR KPOINTS POSCAR POTCAR run.sh}};
+\draw[black!40] (11.5,-51.5) |- (14.2,-54.0);
+\node at (15.0,-58.5) {\color{rungray}\texttt{OUTCAR OSZICAR CONTCAR CHGCAR WAVECAR}};
+\draw[black!40] (11.5,-51.5) |- (14.2,-58.5);
+\node at (10.0,-63.0) {\color{mainblue}\bfseries\texttt{02\_scf/}};
+\node at (92.0,-63.0) {\color{black!65}charge density, then the ELF};
+\draw[black!40] (6.5,-38.0) |- (9.2,-63.0);
+\node at (15.0,-67.5) {\texttt{INCAR KPOINTS POSCAR POTCAR run.sh}};
+\draw[black!40] (11.5,-65.0) |- (14.2,-67.5);
+\node at (15.0,-72.0) {\texttt{copy\_from\_relax.sh, run\_elf.sh}};
+\node at (92.0,-72.0) {\color{black!65}takes CONTCAR, CHGCAR; the ELF pass};
+\draw[black!40] (11.5,-65.0) |- (14.2,-72.0);
+\node at (15.0,-76.5) {\color{mainblue}\bfseries\texttt{elf/}};
+\node at (92.0,-76.5) {\color{black!65}short KPAR = 1 restart that writes ELFCAR};
+\draw[black!40] (11.5,-65.0) |- (14.2,-76.5);
+\node at (15.0,-81.0) {\color{rungray}\texttt{OUTCAR CHGCAR ELFCAR vasprun.xml}};
+\draw[black!40] (11.5,-65.0) |- (14.2,-81.0);
+\node at (10.0,-85.5) {\color{mainblue}\bfseries\texttt{08\_lobster/}};
+\node at (92.0,-85.5) {\color{black!65}symmetry-off NSCF, then LOBSTER};
+\draw[black!40] (6.5,-38.0) |- (9.2,-85.5);
+\node at (15.0,-90.0) {\texttt{INCAR KPOINTS POTCAR run.sh lobsterin}};
+\draw[black!40] (11.5,-87.5) |- (14.2,-90.0);
+\node at (15.0,-94.5) {\texttt{copy\_from\_scf.sh, lobster\_basis.py}};
+\node at (92.0,-94.5) {\color{black!65}takes CHGCAR; basis and NBANDS};
+\draw[black!40] (11.5,-87.5) |- (14.2,-94.5);
+\node at (15.0,-99.0) {\color{rungray}\texttt{lobsterout *LIST.lobster *CAR.lobster}};
+\node at (92.0,-99.0) {\color{black!65}spilling, bond integrals, curves};
+\draw[black!40] (11.5,-87.5) |- (14.2,-99.0);
+\node at (10.0,-103.5) {\color{mainblue}\bfseries\texttt{plots/}};
+\node at (92.0,-103.5) {\color{black!65}COHP, ELF and DOS plots};
+\draw[black!40] (6.5,-38.0) |- (9.2,-103.5);
+\node at (10.0,-108.0) {\color{fixamber}\texttt{round\_1\_\textless{}date\textgreater{}/, repair\_history.tsv}};
+\node at (92.0,-108.0) {\color{black!65}failed run saved; what was repaired};
+\draw[black!40] (6.5,-38.0) |- (9.2,-108.0);
+\node at (5.0,-112.5) {\color{mainblue}\bfseries\texttt{mp-22862/}};
+\node at (92.0,-112.5) {\color{black!65}NaCl};
+\draw[black!40] (1.5,-2.0) |- (4.2,-112.5);
+\end{tikzpicture}
+\caption{The folder of Example~4.  Each material is a project folder of the agent, as in
+Example~2, named by its mp-ID.  With \cmd{--agent slurm} on a cluster the folder is the same:
+\cmd{runall.sh} then submits every material, each with its own \cmd{submit_all.sh} and SLURM
+step scripts (logs \cmd{slurm-<jobid>.out} in the step folders).  The cluster driver
+\cmd{ht_runs.py} of Example~5 puts the materials into a \cmd{materials/} folder instead
+(Figure~\ref{fig:ht-tree}).}
+\label{fig:ex4-tree}
+\end{figure}
 
 \paragraph{Check the runs.}  When \cmd{runall.sh} has finished:
 \begin{lstlisting}[language=bash]
@@ -623,9 +1054,14 @@ Every material should be \cmd{ok}.  If one is not, its repair script is in
 VASP may run: \cmd{bash diagnosis_round1/fix/ht_small__mp-2534.sh}.
 
 % ============================================================
-\section{Example 5 --- Three materials on a cluster, with repair rounds}
+\section{Example 5 --- High-throughput on a cluster: three materials, with repair rounds}
 \label{sec:ex-ht-hpc}
 % ============================================================
+
+\taskcard{the login node of a SLURM cluster (\cmd{make check FOR="slurm ht"})}
+  {one or two days, mostly in the queue, with one or two repair rounds}
+  {\cmd{next_round.sh} says \cmd{Nothing to submit.} and \cmd{audit_run.sh} shows every material ok}
+  {your own list: Section~\ref{sec:ht-howto}; reading the report: Part~\ref{part:check}}
 
 \cmd{ht_runs.py} is the cluster driver for a list of materials: relax $\to$ SCF $\to$
 bands $\to$ LOBSTER, one SLURM job per step, every setting chosen per material.  This
@@ -645,12 +1081,155 @@ Material & Why it is in the list \\ \midrule
 \paragraph{1. Generate the run.}  On the login node (it downloads from Materials Project):
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow && git pull
-source ~/vaspenv/bin/activate          # Section 2, step 2 (pymatgen, mp-api, ...)
+source ~/vaspenv/bin/activate          # made once at installation (pymatgen, mp-api, ...)
 export MP_API_KEY=your_key
 printf 'mp-149\nmp-972937\nmp-1080459\n' > lists/example5.txt
 python3 ht_runs.py --list lists/example5.txt --single-node \
     --out /scratch/$USER/VASP-Flow/HT_example5
 \end{lstlisting}
+Figure~\ref{fig:ht-tree} shows the folder it makes.  Every material has the same steps,
+and each step folder is an ordinary VASP folder: you can look into it, edit its INCAR and
+rerun it.
+
+\begin{figure}[p]
+\centering
+\textbf{The folder of a high-throughput run on a cluster (\cmd{ht_runs.py}, Example~5)}\par\medskip
+\footnotesize
+\textcolor{mainblue}{\textbf{folder}} \quad written at set-up \quad
+\textcolor{rungray}{written by the runs} \quad
+\textcolor{fixamber}{written by the repairs}\par\bigskip
+\raggedright
+\begin{tikzpicture}[x=1mm, y=1mm, every node/.style={inner sep=0pt, anchor=west, font=\footnotesize}]
+\node at (0.0,0.0) {\color{mainblue}\bfseries\texttt{\textasciitilde{}/VASP-Flow/MY\_HT\_CALCS/}};
+\node at (96.0,0.0) {\color{black!65}made by \cmd{ht_runs.py -o MY_HT_CALCS}};
+\node at (5.0,-4.5) {\texttt{env.sh}};
+\node at (96.0,-4.5) {\color{black!65}account, partition, walltimes, LOBSTER};
+\draw[black!40] (1.5,-2.0) |- (4.2,-4.5);
+\node at (5.0,-9.0) {\texttt{material\_list.txt}};
+\node at (96.0,-9.0) {\color{black!65}the mp-IDs};
+\draw[black!40] (1.5,-2.0) |- (4.2,-9.0);
+\node at (5.0,-13.5) {\texttt{materials\_summary.csv}};
+\node at (96.0,-13.5) {\color{black!65}formula, atoms, nodes per material};
+\draw[black!40] (1.5,-2.0) |- (4.2,-13.5);
+\node at (5.0,-18.0) {\texttt{potcar\_manifest.json}};
+\node at (96.0,-18.0) {\color{black!65}POTCAR variant of each element};
+\draw[black!40] (1.5,-2.0) |- (4.2,-18.0);
+\node at (5.0,-22.5) {\texttt{submit\_all.sh, make\_potcars.sh}};
+\node at (96.0,-22.5) {\color{black!65}build POTCARs, submit the job chains};
+\draw[black!40] (1.5,-2.0) |- (4.2,-22.5);
+\node at (5.0,-27.0) {\texttt{status.sh, retune.sh}};
+\node at (96.0,-27.0) {\color{black!65}progress; change the job sizes};
+\draw[black!40] (1.5,-2.0) |- (4.2,-27.0);
+\node at (5.0,-31.5) {\texttt{makeplots\_all.sh, postprocess\_all.sh}};
+\node at (96.0,-31.5) {\color{black!65}plots and bond tables of all materials};
+\draw[black!40] (1.5,-2.0) |- (4.2,-31.5);
+\node at (5.0,-36.0) {\texttt{collect\_results.sh}};
+\node at (96.0,-36.0) {\color{black!65}one tarball of the results};
+\draw[black!40] (1.5,-2.0) |- (4.2,-36.0);
+\node at (5.0,-40.5) {\texttt{README\_HPC.md, tools/}};
+\node at (96.0,-40.5) {\color{black!65}instructions; plotting scripts};
+\draw[black!40] (1.5,-2.0) |- (4.2,-40.5);
+\node at (5.0,-45.0) {\color{fixamber}\texttt{diagnosis\_round1/}};
+\node at (96.0,-45.0) {\color{black!65}report.txt, diagnosis.tsv, fix/*.sh};
+\draw[black!40] (1.5,-2.0) |- (4.2,-45.0);
+\node at (5.0,-49.5) {\color{mainblue}\bfseries\texttt{materials/}};
+\node at (96.0,-49.5) {\color{black!65}one folder per material};
+\draw[black!40] (1.5,-2.0) |- (4.2,-49.5);
+\node at (10.0,-54.0) {\color{mainblue}\bfseries\texttt{mp-149/}};
+\node at (96.0,-54.0) {\color{black!65}Si};
+\draw[black!40] (6.5,-51.5) |- (9.2,-54.0);
+\node at (10.0,-58.5) {\color{mainblue}\bfseries\texttt{mp-2534/}};
+\node at (96.0,-58.5) {\color{black!65}GaAs, opened below};
+\draw[black!40] (6.5,-51.5) |- (9.2,-58.5);
+\node at (15.0,-63.0) {\texttt{POSCAR}};
+\node at (96.0,-63.0) {\color{black!65}the primitive cell from MP};
+\draw[black!40] (11.5,-60.5) |- (14.2,-63.0);
+\node at (15.0,-67.5) {\texttt{instructions.txt}};
+\node at (96.0,-67.5) {\color{black!65}the request given to the agent};
+\draw[black!40] (11.5,-60.5) |- (14.2,-67.5);
+\node at (15.0,-72.0) {\texttt{job.sbatch}};
+\node at (96.0,-72.0) {\color{black!65}one job script, the step as argument};
+\draw[black!40] (11.5,-60.5) |- (14.2,-72.0);
+\node at (15.0,-76.5) {\texttt{makeplots.sh}};
+\node at (96.0,-76.5) {\color{black!65}makes the plots in \cmd{plots/}};
+\draw[black!40] (11.5,-60.5) |- (14.2,-76.5);
+\node at (15.0,-81.0) {\color{mainblue}\bfseries\texttt{01\_relax/}};
+\node at (96.0,-81.0) {\color{black!65}cell and ions (ISIF = 3)};
+\draw[black!40] (11.5,-60.5) |- (14.2,-81.0);
+\node at (20.0,-85.5) {\texttt{INCAR KPOINTS POSCAR POTCAR run.sh}};
+\draw[black!40] (16.5,-83.0) |- (19.2,-85.5);
+\node at (20.0,-90.0) {\color{rungray}\texttt{OUTCAR OSZICAR CONTCAR CHGCAR WAVECAR}};
+\draw[black!40] (16.5,-83.0) |- (19.2,-90.0);
+\node at (15.0,-94.5) {\color{mainblue}\bfseries\texttt{02\_scf/}};
+\node at (96.0,-94.5) {\color{black!65}self-consistent charge density};
+\draw[black!40] (11.5,-60.5) |- (14.2,-94.5);
+\node at (20.0,-99.0) {\texttt{INCAR KPOINTS POSCAR POTCAR run.sh}};
+\draw[black!40] (16.5,-96.5) |- (19.2,-99.0);
+\node at (20.0,-103.5) {\texttt{copy\_from\_relax.sh}};
+\node at (96.0,-103.5) {\color{black!65}takes CONTCAR and CHGCAR};
+\draw[black!40] (16.5,-96.5) |- (19.2,-103.5);
+\node at (20.0,-108.0) {\color{rungray}\texttt{OUTCAR OSZICAR CHGCAR DOSCAR vasprun.xml}};
+\draw[black!40] (16.5,-96.5) |- (19.2,-108.0);
+\node at (15.0,-112.5) {\color{mainblue}\bfseries\texttt{03\_bands/}};
+\node at (96.0,-112.5) {\color{black!65}band structure};
+\draw[black!40] (11.5,-60.5) |- (14.2,-112.5);
+\node at (20.0,-117.0) {\texttt{INCAR KPOINTS POTCAR run.sh}};
+\node at (96.0,-117.0) {\color{black!65}KPOINTS: the k-path};
+\draw[black!40] (16.5,-114.5) |- (19.2,-117.0);
+\node at (20.0,-121.5) {\texttt{copy\_from\_scf.sh}};
+\node at (96.0,-121.5) {\color{black!65}takes CHGCAR};
+\draw[black!40] (16.5,-114.5) |- (19.2,-121.5);
+\node at (20.0,-126.0) {\color{rungray}\texttt{OUTCAR EIGENVAL vasprun.xml}};
+\draw[black!40] (16.5,-114.5) |- (19.2,-126.0);
+\node at (15.0,-130.5) {\color{mainblue}\bfseries\texttt{08\_lobster/}};
+\node at (96.0,-130.5) {\color{black!65}symmetry-off NSCF, then LOBSTER};
+\draw[black!40] (11.5,-60.5) |- (14.2,-130.5);
+\node at (20.0,-135.0) {\texttt{INCAR KPOINTS POTCAR run.sh lobsterin}};
+\draw[black!40] (16.5,-132.5) |- (19.2,-135.0);
+\node at (20.0,-139.5) {\texttt{copy\_from\_scf.sh}};
+\node at (96.0,-139.5) {\color{black!65}takes CHGCAR};
+\draw[black!40] (16.5,-132.5) |- (19.2,-139.5);
+\node at (20.0,-144.0) {\texttt{lobster\_basis.py, lobster\_basis\_table.json}};
+\node at (96.0,-144.0) {\color{black!65}basis and NBANDS};
+\draw[black!40] (16.5,-132.5) |- (19.2,-144.0);
+\node at (20.0,-148.5) {\color{rungray}\texttt{lobsterout}};
+\node at (96.0,-148.5) {\color{black!65}charge spilling};
+\draw[black!40] (16.5,-132.5) |- (19.2,-148.5);
+\node at (20.0,-153.0) {\color{rungray}\texttt{ICOHPLIST.lobster ICOBILIST.lobster}};
+\node at (96.0,-153.0) {\color{black!65}bond integrals};
+\draw[black!40] (16.5,-132.5) |- (19.2,-153.0);
+\node at (20.0,-157.5) {\color{rungray}\texttt{COHPCAR.lobster DOSCAR.lobster}};
+\node at (96.0,-157.5) {\color{black!65}COHP and DOS curves};
+\draw[black!40] (16.5,-132.5) |- (19.2,-157.5);
+\node at (20.0,-162.0) {\color{rungray}\texttt{basis\_scan.tsv}};
+\node at (96.0,-162.0) {\color{black!65}bases tried (spilling above 5\,\%)};
+\draw[black!40] (16.5,-132.5) |- (19.2,-162.0);
+\node at (15.0,-166.5) {\color{mainblue}\bfseries\texttt{plots/}};
+\node at (96.0,-166.5) {\color{black!65}band, COHP, ELF and DOS plots};
+\draw[black!40] (11.5,-60.5) |- (14.2,-166.5);
+\node at (15.0,-171.0) {\color{rungray}\texttt{mp-2534-mp-2534\_scf-\textless{}jobid\textgreater{}.out, .err}};
+\node at (96.0,-171.0) {\color{black!65}SLURM log of each job};
+\draw[black!40] (11.5,-60.5) |- (14.2,-171.0);
+\node at (15.0,-175.5) {\color{fixamber}\texttt{round\_1\_\textless{}date\textgreater{}/}};
+\node at (96.0,-175.5) {\color{black!65}failed run, saved before a repair};
+\draw[black!40] (11.5,-60.5) |- (14.2,-175.5);
+\node at (15.0,-180.0) {\color{fixamber}\texttt{repair\_history.tsv}};
+\node at (96.0,-180.0) {\color{black!65}what was repaired, round by round};
+\draw[black!40] (11.5,-60.5) |- (14.2,-180.0);
+\node at (15.0,-184.5) {\color{fixamber}\texttt{user\_params.txt}};
+\node at (96.0,-184.5) {\color{black!65}your settings (\cmd{set_params.sh})};
+\draw[black!40] (11.5,-60.5) |- (14.2,-184.5);
+\node at (10.0,-189.0) {\color{mainblue}\bfseries\texttt{mp-22862/}};
+\node at (96.0,-189.0) {\color{black!65}NaCl};
+\draw[black!40] (6.5,-51.5) |- (9.2,-189.0);
+\node at (10.0,-193.5) {\color{mainblue}\bfseries\ldots};
+\draw[black!40] (6.5,-51.5) |- (9.2,-193.5);
+\end{tikzpicture}
+\caption{The folder of Example~5 (here with Si, GaAs and NaCl).  The POTCARs are built on the
+cluster by \cmd{submit_all.sh} from \cmd{potcar_manifest.json}; WAVECAR is deleted once
+LOBSTER has finished.}
+\label{fig:ht-tree}
+\end{figure}
 
 \paragraph{2. Optional: see an out-of-memory repair.}  Generate with the dense mesh of
 VASP-Flow before v2.5 and without the LOBSTER memory guard:
@@ -706,224 +1285,34 @@ Open the unpacked tarball in the GUI with \textbf{Open results folder}
 (Section~\ref{sec:open-results}).
 
 % ============================================================
-\part{How it works and how to change it}
+\part{Reference: inputs, methods and options}
 \label{part:reference}
 % ============================================================
 
-This part explains each piece the examples used --- every field of the GUI, the
-files and scripts the agents write, every keyword of \cmd{instructions.txt} --- and how
-to change any of it by hand.  The appendices go one level deeper.
+Every piece the examples used, and how to change it by hand.  The automatic choices are
+meant to be left alone; each section says when it is worth changing them.
 
-% ============================================================
-\section{The browser GUI: every field and button}
-\label{sec:gui}
-% ============================================================
-
-\subsection{Starting the GUI}
-
-\begin{lstlisting}[language=bash]
-make run          # launches on http://localhost:5001
-\end{lstlisting}
-
-\textbf{On a SLURM cluster} --- run on the login node, open on your
-laptop via SSH port-forwarding:
-
-\begin{lstlisting}[language=bash]
-# On your laptop:
-ssh -L 5001:localhost:5001 username@cluster
-
-# On the cluster login node:
-make run
-
-# Open http://localhost:5001 in your laptop's browser
-\end{lstlisting}
-
-\subsection{Three-tab workflow}
-
-\begin{enumerate}
-  \item \textbf{Setup} --- configure the project, then click
-        \emph{Generate Workflow}.
-  \item \textbf{Workflow} --- run each calculation step; live VASP
-        output streams to the browser.
-  \item \textbf{Results} --- band-structure and DOS plots; OUTCAR analysis.
-\end{enumerate}
-
-To return to a previous project use the \emph{Select project} dropdown.
-\textbf{$\to$ Workflow} jumps to the run tab; \textbf{Edit \&
-Regenerate} re-opens Setup with all settings pre-filled.
-
-\subsection{Setup tab --- field guide}
-
-\subsubsection{Structure and POTCAR}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.22\linewidth}@{}}
 \thead
-Field & Description \\ \midrule
-Project name & Folder created in the working directory. \\
-POSCAR & Paste the crystal structure, or click \emph{Load file}.
-  Click \emph{Visualize} to convert the current POSCAR to XYZ and open
-  it in the structure viewer configured under System Setup
-  (Jmol, VESTA, OVITO, \ldots). \\
-POTCAR directory & Path to your PAW library.
-  If an element has multiple variants (\texttt{Ga} vs \texttt{Ga\_d})
-  a chooser appears. \\
+I want to \ldots & Go to \\ \midrule
+know every field, button and panel of the GUI & Example~1 (Section~\ref{sec:ex-gui}) \\
+know which files and scripts the agents create & Section~\ref{sec:agents} \\
+make or redraw the plots, change their energy window & Section~\ref{sec:plots} \\
+write or change \texttt{instructions.txt} (all keywords) & Section~\ref{sec:instructions} \\
+choose the functional, spin, SOC or GGA+U & Section~\ref{sec:methods} \\
+test ENCUT and the k-mesh & Section~\ref{sec:conv} \\
+change the k-point mesh & Section~\ref{sec:kmesh} \\
+set any INCAR or KPOINTS tag myself & Section~\ref{sec:incar} \\
+get bands, DOS and ELF & Section~\ref{sec:spectra} \\
+get LOBSTER bonds (COHP, COBI) & Section~\ref{sec:lobster} \\
+get the dielectric constant and Born charges & Section~\ref{sec:dfpt} \\
+get Wannier functions or phonons & Sections~\ref{sec:wannier}, \ref{sec:phonons} \\
+set cores, nodes, KPAR/NCORE and walltimes & Section~\ref{sec:resources} \\
+see more \texttt{instructions.txt} examples (SOC, magnetism, phonons, pressure) & Section~\ref{sec:examples} \\
+set up my own high-throughput run and use its scripts & Sections~\ref{sec:highthroughput}, \ref{sec:ht-scripts} \\
+know how a value was chosen (k-mesh, KPAR/NCORE, ALGO, \ldots) & Appendix~\ref{app:inputs} \\
 \bottomrule
 \end{tabularx}
-
-\subsubsection{Functional}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Choice & Description \\ \midrule
-R2SCAN & \textbf{Default.} Meta-GGA; better structures, energies and gaps than the
-  GGAs at about 1.5--3$\times$ the cost. \\
-PBE    & Standard GGA; widely used (the high-throughput drivers use it by default). \\
-PBEsol & GGA optimised for solids; good lattice constants, cheap. \\
-LDA    & Local density approximation (\texttt{GGA = CA}); uses the LDA POTCARs
-  (\texttt{VASP\_POTCAR\_DIR\_LDA}, \S\ref{sec:defaultpaths}). \\
-HSE06  & Hybrid --- accurate band gaps, significantly slower. \\
-RVV10  & van der Waals; for layered or molecular materials. \\
-AM05   & Rarely needed. \\
-\bottomrule
-\end{tabularx}
-
-\subsubsection{Spin / SOC}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Choice & Effect \\ \midrule
-None & Non-magnetic. \\
-Collinear spin (ISPIN=2) & Sets \texttt{ISPIN = 2}; reveals the
-  \emph{Magnetic moment / atom} field (Section~\ref{sec:magnetic}). \\
-SOC $\parallel$ z/x/y & Sets \texttt{LSORBIT}, \texttt{LNONCOLLINEAR},
-  \texttt{SAXIS}; uses the \texttt{vasp\_ncl} binary. \\
-\bottomrule
-\end{tabularx}
-
-\subsubsection{Other flags}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Field & Effect \\ \midrule
-Hexagonal BZ & Correct $M$ point for hexagonal structures. \\
-2D / slab & Sets $k_z = 1$ (Gamma-only out-of-plane). \\
-GGA+U & Adds Hubbard $U$ rows per element/orbital
-  (Section~\ref{sec:ggau}). \\
-Execution profile & Select \emph{SLURM HPC} to generate \texttt{sbatch}
-  scripts; edit \texttt{profiles/slurm.json} first. \\
-MPI tasks & CPU cores per calculation. \\
-\bottomrule
-\end{tabularx}
-
-\subsection{Task checkboxes}
-
-\begin{tabularx}{\linewidth}{@{}llX@{}}
-\thead
-Task & Directory & Notes \\ \midrule
-Structure relaxation & \texttt{01\_relax} &
-  IBRION=2; run first if geometry is not pre-optimised. \\
-SCF & \texttt{02\_scf} &
-  Required before bands or DOS. \\
-Band structure & \texttt{03\_bands} &
-  Line-mode KPOINTS; Section~\ref{sec:kpath}. \\
-DOS & \texttt{04\_dos} &
-  Dense k-mesh; orbital projections via sumo. \\
-DFPT & \texttt{06\_dfpt} &
-  Born charges, dielectric + piezoelectric tensors;
-  Section~\ref{sec:dfpt}. \\
-Phonons & \texttt{07\_phonons} &
-  Phonopy finite-displacement; DFPT needed for NAC. \\
-Wannier90 & \texttt{05\_wannier} &
-  NSCF interface; Section~\ref{sec:wannier}. \\
-LOBSTER & \texttt{08\_lobster} &
-  COHP/COBI/COOP bonding analysis; needs SCF;
-  Section~\ref{sec:lobster}. \\
-\bottomrule
-\end{tabularx}
-
-\begin{notebox}
-Normal execution order: \textbf{relaxation $\to$ SCF $\to$ bands $\to$
-DOS}.  Each step copies POSCAR/CHGCAR from the previous one automatically.
-\end{notebox}
-
-\subsection{Band structure options}
-
-Leave the \emph{k-path} field blank to trigger \textbf{automatic
-detection} from the POSCAR lattice vectors (Section~\ref{sec:kpath}).
-Enter a path manually to override, e.g.\ \texttt{G-M-K-G}.
-
-\subsection{DOS options}
-
-Add projection rows to request orbital-resolved DOS:
-
-\medskip
-\noindent\hspace{1cm}Element: \texttt{Mo}\quad Orbitals: \textbf{d}
-\hspace{1.5cm}
-Element: \texttt{S}\quad Orbitals: \textbf{p}
-\medskip
-
-For spin-polarised calculations sumo plots spin-up positive and
-spin-down mirrored below zero automatically.
-
-\subsection{Workflow tab}
-
-Each step shows three controls: \textbf{Run} (submit the step),
-\textbf{Edit files} (open INCAR/KPOINTS/POSCAR in the browser; a
-\texttt{.bak} is created on first edit), and a \textbf{status badge}.
-\textbf{Run All Steps} chains every step and stops on failure.
-
-\subsection{Results tab}
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Panel & Contents \\ \midrule
-Band structure & Spin-polarised: blue = $\uparrow$, red dashed = $\downarrow$,
-  same k-axis, $E_F = 0$.  Non-magnetic: single-colour sumo plot.
-  If sumo fails (e.g.\ a pymatgen gap-detection crash) the GUI falls back to a
-  built-in \texttt{vasprun.xml} plotter so a band plot still renders. \\
-Cumulative DOS & Stacked filled-area by element.
-  Spin-polarised: up positive, down mirrored. \\
-Projected DOS & Orbital-resolved via sumo; spin-down negated
-  automatically. \\
-OUTCAR analysis & Energy, Fermi level, magnetic moment, forces. \\
-\bottomrule
-\end{tabularx}
-
-\subsection{Viewing results of jobs run elsewhere}
-\label{sec:open-results}
-
-The GUI can show the results of calculations it did not set up or run ---
-a finished cluster job, a whole high-throughput screen, or the small tarball
-from \texttt{collect\_results.sh}.  On the bar under the tabs, type a path in
-\textbf{Open results folder} and press \textbf{Open}:
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Path & What is opened \\ \midrule
-one calculation, e.g.\ \texttt{\ldots/materials/mp-8} & that project (listed as \texttt{mp-8}) \\
-a highthroughput folder, e.g.\ \texttt{\ldots/highthroughput\_test} & every
-  \texttt{materials/<id>} (listed as \texttt{highthroughput\_test\textasciitilde mp-8}, \ldots) \\
-an unpacked \texttt{screen\_results.tar.gz} (\texttt{\ldots/results}) & every
-  \texttt{results/<id>} \\
-\bottomrule
-\end{tabularx}
-
-The opened calculations are added to the project list (marked
-\emph{opened}) and remembered in \texttt{settings.json}; \textbf{Results}
-shows the selected one.  Plots that \texttt{analyze.sh} already wrote to
-\texttt{analysis/} are shown as they are; any that are missing (because
-\texttt{analyze.sh} never ran, or ran without matplotlib) are drawn by the GUI
-from the raw outputs --- bands from \texttt{03\_bands/EIGENVAL}, COHP / COBI /
-COOP and LOBSTER DOS from \texttt{08\_lobster/*.lobster}, ELF from
-\texttt{02\_scf/ELFCAR} --- and saved into \texttt{analysis/}.  Nothing is
-submitted or rerun.  A step counts as done when its OUTCAR shows VASP
-finished (a relaxation must also reach the ionic criterion).
-\textbf{Forget opened} removes them from the list without touching any file.
-
-\texttt{collect\_results.sh} keeps this folder layout (\texttt{02\_scf},
-\texttt{03\_bands}, \texttt{08\_lobster}, \texttt{analysis} per material)
-with trimmed OUTCARs, so the tarball opens directly; set
-\texttt{FULL\_OUTCAR=1} to keep the complete OUTCARs.
 
 % ============================================================
 \section{The command-line agents: commands and the files they create}
@@ -932,10 +1321,10 @@ with trimmed OUTCARs, so the tarball opens directly; set
 
 \subsection{On a workstation: \texttt{vasp-agent.py}}
 
-The vasp agents read by default the POSCAR file and the instructions.txt file which contains 
-the project name and type of calculation the user wants. 
-It creates a folder by than name, from which the calculations must be launched.
-Plots can be generated by running analyze.sh script from that folder.
+The agents read \cmd{POSCAR} and \cmd{instructions.txt} from the current folder (or the
+files given with \opt{i} and \opt{s}), create a project folder named by its \cmd{Project:} line,
+and generate the calculation steps inside it.  Run the steps, and \cmd{makeplots.sh} for the
+plots, from that folder.
 
 \begin{lstlisting}[language=bash]
 ./vasp-agent.py
@@ -943,7 +1332,7 @@ Plots can be generated by running analyze.sh script from that folder.
 
 cd ProjectName
 ./run_all.sh          # runs every step in sequence
-./analyze.sh          # plots after all steps complete
+./makeplots.sh        # plots after all steps complete
 \end{lstlisting}
 
 \subsection{On a SLURM cluster: \texttt{vasp-agent-slurm.py}}
@@ -955,7 +1344,7 @@ cd ProjectName
 cd ProjectName
 ./submit_all.sh        # sbatch with dependency chaining
 squeue -u $USER        # monitor jobs
-./analyze.sh           # run locally after jobs finish
+./makeplots.sh         # run locally after jobs finish
 \end{lstlisting}
 
 Two-phase workflow when convergence tests are requested:
@@ -969,36 +1358,23 @@ Two-phase workflow when convergence tests are requested:
 \subsection{What the agent creates}
 \label{sec:agent-files}
 
-\begin{lstlisting}
-ProjectName/
-  instructions.txt
-  POSCAR
-  POTCAR               built once from $VASP_POTCAR_DIR
-  01_relax/            INCAR  KPOINTS  POSCAR  POTCAR  run.sh
-  02_scf/
-  03_bands/
-  04_dos/
-  08_lobster/          if LOBSTER task selected (ISYM=0 NSCF + lobster)
-  analysis/            plots generated by analyze.sh
-  run_all.sh           workstation sequential runner
-  submit_all.sh        SLURM job submission (dependency chained)
-  analyze.sh           post-processing: plots + OUTCAR extraction
-\end{lstlisting}
+One project folder named by the \cmd{Project:} line, with one sub-folder per step, the input
+files, and the scripts that run the steps and make the plots: Figure~\ref{fig:single-tree}.
 
 Without the GUI on a cluster, first set the VASP paths and SLURM defaults in \cmd{profiles/slurm.json} (Section~\ref{sec:remote-setup}).
 
 % ============================================================
-\section{Making the plots: in the GUI or with \texttt{analyze.sh}}
+\section{Making the plots: in the GUI or with \texttt{makeplots.sh}}
 \label{sec:plots}
 % ============================================================
 
 The same plots can be made in two ways: in the browser (Results tab) or on the command
-line with the project's \cmd{analyze.sh}.  Both read the raw VASP and LOBSTER outputs
-and write PNG and PDF files into the project's \cmd{analysis/} folder.
+line with the project's \cmd{makeplots.sh}.  Both read the raw VASP and LOBSTER outputs
+and write PNG and PDF files into the project's \cmd{plots/} folder.
 
 \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.25\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.3\linewidth}@{}}
 \thead
-Plot & Made from & File in \cmd{analysis/} \\ \midrule
+Plot & Made from & File in \cmd{plots/} \\ \midrule
 Band structure & \cmd{03_bands/EIGENVAL} (sumo or \cmd{vasprun.xml} as fallback);
   spin up/down in two colours & \cmd{<project>_band.png/pdf} \\
 Total and projected DOS & \cmd{04_dos/DOSCAR}; projections as asked in
@@ -1009,58 +1385,46 @@ COHP, COBI, COOP & \cmd{08_lobster/*CAR.lobster} & \cmd{*_cohp.*}, \cmd{*_cobi.*
 LOBSTER projected DOS & \cmd{08_lobster/DOSCAR.lobster}, with the \cmd{04_dos} total for comparison
   & \cmd{*_lobster_dos.*} \\
 Bond table & ICOHP/ICOBI/ICOOP per bond, antibonding integrals & \cmd{lobster_summary.csv} \\
-Convergence tests (energy, pressure, force vs.\ ENCUT and k-mesh; \cmd{analyze_convergence.sh}) & the test points in \cmd{00_convergence/encut/}, \cmd{kpoints/} & \cmd{00_convergence/encut_*.png}, \cmd{kpoints_*.png} (not in \cmd{analysis/}) \\
+Convergence tests (energy, pressure, force vs.\ ENCUT and k-mesh; \cmd{makeplots_convergence.sh}) & the test points in \cmd{00_convergence/encut/}, \cmd{kpoints/} & \cmd{00_convergence/encut_*.png}, \cmd{kpoints_*.png} (not in \cmd{plots/}) \\
 \bottomrule
 \end{tabularx}
 
-\subsection{In the GUI (Results tab)}
+In the GUI the same plots are on the Results tab, with an energy-window bar and PDF buttons
+per group (Section~\ref{sec:gui-results}); runs made elsewhere are opened with \emph{Open
+results folder} (Section~\ref{sec:open-results}).
 
-Select the project and open \textbf{Results}.  The plots are drawn from the outputs that
-exist when you open the tab --- nothing has to be run first --- and saved in
-\cmd{analysis/}; plots \cmd{analyze.sh} already made are shown as they are.
-\begin{itemize}
-  \item \textbf{Energy window}: each group (bands, DOS, LOBSTER) has a bar
-        \emph{Energy window (eV): min to max}; \textbf{Zoom} redraws the plots for that
-        range, \textbf{Reset} returns to the default.  The default band window is set on
-        the Setup tab (\emph{Energy window (eV, relative to EF)}, e.g.\ \cmd{-4 to 4}).
-  \item \textbf{Download}: the \textbf{PDF} buttons under each plot give the vector file
-        (for the zoomed range, if you zoomed).
-  \item \textbf{Convergence plots} appear on the Workflow tab under the convergence step.
-  \item \textbf{Runs made elsewhere} (a cluster job, a high-throughput run, a collected
-        tarball): \textbf{Open results folder} (Section~\ref{sec:open-results}), then
-        Results as usual.
-\end{itemize}
-
-\subsection{On the command line (\texttt{analyze.sh})}
+\subsection{On the command line (\texttt{makeplots.sh})}
 
 Every project made by \cmd{vasp-agent.py} or \cmd{vasp-agent-slurm.py} has an
-\cmd{analyze.sh}.  Run it in the project folder once the steps have finished --- on a
+\cmd{makeplots.sh}.  Run it in the project folder once the steps have finished --- on a
 cluster, on the login node after the jobs:
 \begin{lstlisting}[language=bash]
 cd GaAs_example
-./analyze.sh               # prints relax energy, E-fermi; writes the plots into analysis/
-./analyze_convergence.sh   # the convergence-test plots (if there were tests)
+./makeplots.sh               # prints relax energy, E-fermi; writes the plots into plots/
+./makeplots_convergence.sh   # the convergence-test plots (if there were tests)
 \end{lstlisting}
 It needs a \cmd{python3} with numpy and matplotlib (\cmd{pip install numpy matplotlib});
 \cmd{sumo} is used when installed but is not required.  It skips plots whose outputs are
 missing and can be rerun at any time (e.g.\ after a step was redone).
 
-\paragraph{Another energy window or style.}  \cmd{analyze.sh} is a short script that calls
-the plotters in \cmd{analysis/}; edit its \cmd{--ymin -4 --ymax 4}, or call a plotter
+\paragraph{Another energy window or style.}  \cmd{makeplots.sh} is a short script that calls
+the plotters in \cmd{plots/}; edit its \cmd{--ymin -4 --ymax 4}, or call a plotter
 directly:
 \begin{lstlisting}[language=bash]
-cd analysis
+cd plots
 python3 plot_band_eigenval.py ../03_bands --out GaAs_wide --ymin -8 --ymax 6
 python3 plot_dos.py ../04_dos --out GaAs --proj ../dos_proj.json
 cd ../03_bands && sumo-bandplot --ymin -4 --ymax 4      # sumo's own band plot
 \end{lstlisting}
 
 \paragraph{High-throughput runs.}  In a run made by \cmd{ht_runs.py} every material's last
-job runs its \cmd{analyze.sh} automatically (results in \cmd{materials/<id>/analysis/},
-log in \cmd{analysis/analyze.log}).  If the cluster's \cmd{python3} lacks numpy or
-matplotlib, set \cmd{ANALYSIS_PYTHON} in \cmd{env.sh}; \cmd{./analyze_all.sh} (or
-\cmd{./analyze_all.sh mp-149}) redraws the plots for finished materials.  With
-\cmd{ht-mp-scf.py} each material folder has its own \cmd{analyze.sh}, run as above.
+job runs its \cmd{makeplots.sh} automatically (results in \cmd{materials/<id>/plots/},
+log in \cmd{plots/makeplots.log}).  If the cluster's \cmd{python3} lacks numpy or
+matplotlib, set \cmd{ANALYSIS_PYTHON} in \cmd{env.sh}; \cmd{./makeplots_all.sh} (or
+\cmd{./makeplots_all.sh mp-149}) redraws the plots for finished materials.  With
+\cmd{ht-mp-scf.py} each material folder has its own \cmd{makeplots.sh}, run as above.
+Runs made before v2.6 have \cmd{analyze.sh} and \cmd{analysis/} instead; the GUI and the
+\cmd{ht_tools} scripts read both.
 
 % ============================================================
 \section{Describing a calculation in \texttt{instructions.txt}: every keyword}
@@ -1208,11 +1572,17 @@ PBE POTCAR.
 \subsection{Spin-orbit coupling}
 
 \begin{lstlisting}
-Methods: SOC with magnetization in z-direction
+Methods: SOC                                   # non-magnetic material
+Methods: SOC with magnetization in z-direction # magnetic material, moments along z
 \end{lstlisting}
 
-Uses \texttt{vasp\_ncl}.  Sets \texttt{LSORBIT}, \texttt{LNONCOLLINEAR},
-and \texttt{SAXIS}.
+Both use \texttt{vasp\_ncl} and set \texttt{LSORBIT} and \texttt{LNONCOLLINEAR}.  A plain
+\cmd{SOC} (also \cmd{SOC, non-magnetic}) writes \texttt{MAGMOM = 3N*0}: the run starts and
+stays without moments.  This matters, because VASP's own default for a non-collinear run is
+1\,$\mu_{\mathrm{B}}$ per atom along $(1,1,1)$, which lowers the symmetry and slows the run.
+The magnetization direction (\texttt{SAXIS}, and the moments along it) only means something
+for a magnetic material (Section~\ref{sec:magnetic}); any mention of magnetization switches the
+moments on, so leave it out for a non-magnetic one.
 
 \subsection{Magnetic materials (collinear spin)}
 \label{sec:magnetic}
@@ -1325,11 +1695,54 @@ $4.1 \to 2.46$~eV, written in the INCAR comment); none is automatic under HSE06.
 \texttt{-{}-gga\_u auto|on|off}.
 
 % ============================================================
+\section{Convergence tests for ENCUT and k-points: syntax and outputs}
+\label{sec:conv}
+% ============================================================
+
+\begin{lstlisting}
+# Range (auto-steps)
+Convergence: Test k-points from 6x6x1 to 18x18x1    # 2D material
+             Test k-points from 6x6x6 to 12x12x12   # 3D material
+             ENCUT 400-600 eV
+
+# Explicit mesh list
+Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9
+
+# ENCUT: all of these are equivalent (step defaults to 50 eV)
+Test ENCUT 350-650      Test ENCUT 350 650     Test ENCUT 350 to 650
+Test ENCUT 350,650      Test ENCUT 350:50:650  # start:step:stop
+\end{lstlisting}
+
+The \texttt{start:step:stop} form is the only one that sets the step; the
+others sweep in 50~eV increments.  A convergence line that cannot be parsed
+now emits a \texttt{[warn]} on stderr rather than silently generating no
+tests at all.
+
+Convergence INCARs are trimmed to what the test actually reads --- the total
+energy in \texttt{OUTCAR}.  \texttt{LWAVE}, \texttt{LCHARG}, \texttt{LORBIT}
+and \texttt{LELF} are dropped, which avoids writing a full WAVECAR per point
+and, because \texttt{LELF} pins KPAR to 1, restores k-point parallelism for
+the sweep.
+
+Results in \texttt{00\_convergence/kpoints/} and
+\texttt{00\_convergence/encut/}.
+
+\begin{lstlisting}[language=bash]
+./run_convergence.sh          # workstation
+./submit_convergence.sh       # SLURM
+./makeplots_convergence.sh      # plots: energy / pressure / forces
+\end{lstlisting}
+
+After the runs the smallest ENCUT and k-mesh that meet the force and stress criteria are written to \cmd{00_convergence/converged_params.txt} and offered as defaults for phase~2 (Appendix~\ref{app:conv}).
+
+% ============================================================
 \section{Choosing the k-point mesh: densities, fixed meshes, DOS and LOBSTER}
 \label{sec:kmesh}
 % ============================================================
 
 All Gamma-centred meshes are generated automatically from the POSCAR geometry.
+\textbf{Leave them automatic unless} a convergence test (Section~\ref{sec:conv}) shows
+the energy or forces still changing, or you must match the mesh of another calculation.
 Two density tiers are available via the \texttt{KMESH\_DENSITY} key
 (Section~\ref{sec:keywords}):
 
@@ -1364,6 +1777,9 @@ overrides everything for the step it names.
 \label{sec:incar}
 % ============================================================
 
+\textbf{Leave the generated INCARs alone unless} you need a tag VASP-Flow does not set,
+or a different value than it chose (smearing, EDIFF, your own U); the overrides are written
+under a comment in the INCAR, so they stay visible.
 \textbf{Any VASP keyword can be specified explicitly} --- nothing is
 hard-wired.  Three routes, in increasing precedence:
 (1)~an \texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in the
@@ -1518,8 +1934,9 @@ How the SCF starts from the relaxation (which files are copied, \cmd{ISTART}/\cm
 
 \subsubsection{Auto-detection (recommended)}
 
-Omit the path in \texttt{instructions.txt} or leave the field blank in
-the GUI:
+Omit the path in \texttt{instructions.txt}; the GUI fills its \emph{K-path} field with the
+same spglib path as soon as a POSCAR is pasted or loaded (and ticks \emph{Hexagonal BZ} for a
+hexagonal cell), so there is nothing to choose:
 
 \begin{lstlisting}
 Tasks: band structure        # no "along ..." -> auto-detect from POSCAR
@@ -1543,8 +1960,13 @@ Line-mode KPOINTS  [FCC -- auto-detected]          # geometric fallback
 \subsubsection{Manual override}
 
 \begin{lstlisting}
-Tasks: band structure along G-X-W-K-G-L
+Tasks: band structure along G-X-W-K-G-L       # '-' joins points
+Tasks: band structure along G-X-W-K-G-L|U-X   # '|' starts a new segment
 \end{lstlisting}
+
+The labels get their coordinates from spglib's points for this cell (KPOINTS comment
+\texttt{[spglib FCC points, path as given]}) when spglib knows all of them; otherwise from the
+generic table below, which is right only for the simple cells it names:
 
 \begin{tabularx}{\linewidth}{@{}lllX@{}}
 \thead
@@ -1576,7 +1998,7 @@ DOS with projection on Fe-d and O-p
 
 Orbital channels: \texttt{s}, \texttt{p}, \texttt{d}, \texttt{f}.
 Separator is either \texttt{-} or \texttt{:}.
-Sumo generates an orbital-resolved PDF in \texttt{analysis/}.
+Sumo generates an orbital-resolved PDF in \texttt{plots/}.
 
 \subsection{ELF bond profiles}
 
@@ -1596,7 +2018,7 @@ non-equivalent ones, and interpolates ELF along each bond with periodic
 boundary conditions.  Output is \texttt{FORMULA\_elf\_bonds.png/pdf} (the prefix
 defaults to the reduced formula, e.g.\ \texttt{MoSe2\_elf\_bonds.pdf}; override
 with \texttt{--out}) showing ELF vs.\ distance along the bond, with the
-ELF~$=0.5$ homogeneous-electron-gas reference marked.  \texttt{analyze.sh}
+ELF~$=0.5$ homogeneous-electron-gas reference marked.  \texttt{makeplots.sh}
 runs it automatically when \texttt{02\_scf/ELFCAR} is present, and the GUI
 Results tab shows the same plot whenever the SCF wrote an \texttt{ELFCAR}.
 
@@ -1622,45 +2044,156 @@ ELF.
 \paragraph{ELF without slowing down the SCF.}  \texttt{LELF} needs KPAR${}={}$1.  With \cmd{ELF: separate} (or \cmd{ELF: two-step}) in \cmd{instructions.txt} the SCF runs at full KPAR and a short KPAR${}={}$1 restart in \cmd{02_scf/elf/} writes the ELFCAR (Appendix~\ref{sec:elf-separate}); \cmd{ht-mp-scf.py} does this by default.
 
 % ============================================================
-\section{Convergence tests for ENCUT and k-points: syntax and outputs}
-\label{sec:conv}
+\section{LOBSTER bonding analysis (COHP, COBI, COOP)}
+\label{sec:lobster}
+% ============================================================
+
+
+Adding \texttt{LOBSTER COHP/COBI analysis} (keywords: \texttt{lobster},
+\texttt{cohp}, \texttt{cobi}, \texttt{coop}, \texttt{bonding}) to the
+task list creates \texttt{08\_lobster}: a symmetry-off NSCF that reads
+\texttt{02\_scf/CHGCAR}, followed by a run of the \texttt{lobster}
+binary.
+
+\begin{itemize}
+  \item \textbf{ISYM=0 is required} --- a symmetrised k-mesh gives
+        unusable COHP/ICOHP values (wrong sign, errors above 100\%).
+        The generated INCAR sets it automatically.
+        With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
+        coupling breaks time-reversal symmetry, which ISYM=0 would still
+        assume.
+  \item The k-mesh is the SCF mesh, reduced automatically above 10000 points or when
+        the symmetry-off run would not fit in memory (\cmd{LOBSTER_MAX_KPTS},
+        \cmd{LOBSTER_MAX_KPW}, Appendix~\ref{app:lobster-mem}).
+  \item \texttt{NBANDS} is auto-set to at least the LOBSTER
+        basis-function count; \texttt{LMAXMIX} is chosen from the
+        elements (6 for $f$, 4 for $d$, 2 for $sp$).
+  \item The \textbf{charge spilling} (in \cmd{lobsterout}) measures how well LOBSTER's atomic
+        basis represents the bands; when it is above 5\,\% the step reruns LOBSTER with the other
+        tabulated bases and keeps the best (\cmd{LOBSTER_BASIS}; Appendix~\ref{app:spilling}).
+  \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
+        \texttt{default\_paths} (default \texttt{lobster-5.1.0-OSX}); it can
+        be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
+\end{itemize}
+
+\begin{lstlisting}
+Project: NaCl
+Methods: PBE functional
+Tasks: SCF, LOBSTER COHP/COBI analysis
+MPI: 16
+\end{lstlisting}
+
+Run with \texttt{./vasp-agent.py} (builds and runs \texttt{02\_scf} +
+\texttt{08\_lobster}); the GUI shows COHP/COBI/COOP plots on the
+Results tab.  To aggregate averaged COHP/COBI over many projects into
+\texttt{lobster\_acohp\_acobi.csv}, run
+\texttt{python3 lobster\_postprocess.py}.
+
+Why the LOBSTER projected DOS and the VASP DOS differ is explained in Appendix~\ref{app:lobster-dos}.
+
+% ============================================================
+\section{Dielectric constant and Born charges (DFPT)}
+\label{sec:dfpt}
+% ============================================================
+
+
+The \texttt{DFPT} task creates \texttt{06\_dfpt}, which computes Born
+effective charges $Z^{*}$, the macroscopic dielectric tensor, and the
+piezoelectric stress tensor from the converged SCF charge density.
+
+Two routes are generated automatically depending on the method:
+
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\thead
+Method & Route \\ \midrule
+PBE, PBEsol, LDA, AM05 (no SOC) &
+  Linear response: \texttt{IBRION=8}, \texttt{LEPSILON=.TRUE.} \\
+SOC, HSE06, or R2SCAN &
+  Finite field (PEAD): \texttt{IBRION=6}, \texttt{LCALCEPS=.TRUE.}
+  --- VASP's DFPT is not implemented for noncollinear magnetism,
+  hybrids, or meta-GGAs.  Requires an insulating system. \\
+\bottomrule
+\end{tabularx}
+
+KPAR, NCORE and ISYM are fixed for this step (Appendix~\ref{app:dfpt}).
+
+\texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
+writes:
+
+\begin{itemize}
+  \item \texttt{BORN} --- phonopy NAC format: electronic
+        $\varepsilon_{\infty}$ + $Z^{*}$ per atom.
+  \item \texttt{born\_charges.txt} --- human-readable summary shown in
+        the GUI Results tab: electronic (ion-clamped)
+        $\varepsilon_{\infty}$, ionic contribution, total static
+        $\varepsilon_{0}=\varepsilon_{\infty}+\varepsilon_{\mathrm{ion}}$;
+        $Z^{*}$ tensors labelled by element; an acoustic-sum-rule check
+        ($\sum_{\mathrm{ions}} Z^{*}$ should vanish --- a large residual
+        indicates an under-converged k-mesh or EDIFF); and the
+        piezoelectric stress tensors $e$ (C/m$^2$, clamped-ion, ionic,
+        and relaxed-ion total; meaningful only for non-centrosymmetric
+        crystals).
+\end{itemize}
+
+\texttt{DFPT\_EDIFF} in \texttt{instructions.txt} tightens the
+electronic convergence (default \texttt{1E-8}).
+
+\subsection{Example}
+
+\begin{lstlisting}
+Project: GaAs
+Methods: PBE functional
+Tasks: relaxation, SCF, DFPT Born charges and dielectric
+DFPT_EDIFF: 1E-8
+MPI: 16
+\end{lstlisting}
+
+In the GUI, tick \textbf{Born Charges \& Dielectric Constant (DFPT)} on
+the Setup tab (the DFPT EDIFF field is optional); after running
+\texttt{06\_dfpt} from the Workflow tab, the full summary appears in
+the \textbf{Born charges} panel of the Results tab.  With SOC, HSE06
+or R2SCAN selected under Methods, the finite-field INCAR is generated
+automatically --- no extra input is needed.  For LO-TO splitting in
+phonon spectra, combine with the phonon task as in the GaAs worked
+example (Section~\ref{sec:example-gaas-nac}).
+
+% ============================================================
+\section{Wannier functions (Wannier90)}
+\label{sec:wannier}
+% ============================================================
+
+
+\begin{lstlisting}
+Tasks: Wannier90 wannierization
+
+WANNIER_NUM_WANN: 8
+WANNIER_PROJ: Ga:s;As:p
+WANNIER_EWIN: -5.0 to 15.0
+\end{lstlisting}
+
+The agent generates \texttt{05\_wannier/wannier90.win} with the NSCF
+k-mesh and projection block.  After the NSCF run, execute
+\texttt{wannier90.x} from the \texttt{05\_wannier/} directory.
+
+% ============================================================
+\section{Phonons (phonopy)}
+\label{sec:phonons}
 % ============================================================
 
 \begin{lstlisting}
-# Range (auto-steps)
-Convergence: Test k-points from 6x6x1 to 18x18x1    # 2D material
-             Test k-points from 6x6x6 to 12x12x12   # 3D material
-             ENCUT 400-600 eV
+Tasks: phonons lattice dynamics
 
-# Explicit mesh list
-Convergence: Test k-points 6x6x3, 12x12x6, 18x18x9
-
-# ENCUT: all of these are equivalent (step defaults to 50 eV)
-Test ENCUT 350-650      Test ENCUT 350 650     Test ENCUT 350 to 650
-Test ENCUT 350,650      Test ENCUT 350:50:650  # start:step:stop
+PHONONS_DIM: 2 2 2
+PHONONS_MESH: 20 20 20
+PHONONS_DISP: 0.01
+PHONONS_BAND: G M K G A
+PHONONS_NAC: FALSE      # disable non-analytic correction
 \end{lstlisting}
 
-The \texttt{start:step:stop} form is the only one that sets the step; the
-others sweep in 50~eV increments.  A convergence line that cannot be parsed
-now emits a \texttt{[warn]} on stderr rather than silently generating no
-tests at all.
-
-Convergence INCARs are trimmed to what the test actually reads --- the total
-energy in \texttt{OUTCAR}.  \texttt{LWAVE}, \texttt{LCHARG}, \texttt{LORBIT}
-and \texttt{LELF} are dropped, which avoids writing a full WAVECAR per point
-and, because \texttt{LELF} pins KPAR to 1, restores k-point parallelism for
-the sweep.
-
-Results in \texttt{00\_convergence/kpoints/} and
-\texttt{00\_convergence/encut/}.
-
-\begin{lstlisting}[language=bash]
-./run_convergence.sh          # workstation
-./submit_convergence.sh       # SLURM
-./analyze_convergence.sh      # plots: energy / pressure / forces
-\end{lstlisting}
-
-After the runs the smallest ENCUT and k-mesh that meet the force and stress criteria are written to \cmd{00_convergence/converged_params.txt} and offered as defaults for phase~2 (Appendix~\ref{app:conv}).
+\begin{notebox}
+For the non-analytic correction (important for polar materials), include
+\texttt{DFPT} in your task list so Born effective charges are computed.
+\end{notebox}
 
 % ============================================================
 \section{Cores, nodes, KPAR/NCORE and walltimes}
@@ -1669,7 +2202,7 @@ After the runs the smallest ENCUT and k-mesh that meet the force and stress crit
 
 \subsection{KPAR and NCORE}
 
-KPAR and NCORE are set automatically per step from the number of MPI ranks and the step's k-points (rule in Appendix~\ref{app:kpar}).  To set them yourself:
+KPAR and NCORE are set automatically per step from the number of MPI ranks and the step's k-points (rule in Appendix~\ref{app:kpar}).  \textbf{Leave them automatic unless} a step runs out of memory (lower KPAR) or you have timed a faster pair on your machine.  To set them yourself:
 
 \begin{lstlisting}
 MPI: 128        KPAR: 4        NCORE: 8
@@ -1718,151 +2251,6 @@ them --- the per-material \texttt{instructions.txt} carry no walltime.
 A step that reaches its limit is stopped cleanly 15~minutes before and continued automatically in a requeued job (Appendix~\ref{sec:slurm-continue}).
 
 % ============================================================
-\section{Wannier90, DFPT, phonons and LOBSTER}
-\label{sec:extras}
-% ============================================================
-
-\subsection{Wannier90}
-\label{sec:wannier}
-
-\begin{lstlisting}
-Tasks: Wannier90 wannierization
-
-WANNIER_NUM_WANN: 8
-WANNIER_PROJ: Ga:s;As:p
-WANNIER_EWIN: -5.0 to 15.0
-\end{lstlisting}
-
-The agent generates \texttt{05\_wannier/wannier90.win} with the NSCF
-k-mesh and projection block.  After the NSCF run, execute
-\texttt{wannier90.x} from the \texttt{05\_wannier/} directory.
-
-\subsection{Born charges, dielectric and piezoelectric tensors (DFPT)}
-\label{sec:dfpt}
-
-The \texttt{DFPT} task creates \texttt{06\_dfpt}, which computes Born
-effective charges $Z^{*}$, the macroscopic dielectric tensor, and the
-piezoelectric stress tensor from the converged SCF charge density.
-
-Two routes are generated automatically depending on the method:
-
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\thead
-Method & Route \\ \midrule
-PBE, PBEsol, LDA, AM05 (no SOC) &
-  Linear response: \texttt{IBRION=8}, \texttt{LEPSILON=.TRUE.} \\
-SOC, HSE06, or R2SCAN &
-  Finite field (PEAD): \texttt{IBRION=6}, \texttt{LCALCEPS=.TRUE.}
-  --- VASP's DFPT is not implemented for noncollinear magnetism,
-  hybrids, or meta-GGAs.  Requires an insulating system. \\
-\bottomrule
-\end{tabularx}
-
-KPAR, NCORE and ISYM are fixed for this step (Appendix~\ref{app:dfpt}).
-
-\texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
-writes:
-
-\begin{itemize}
-  \item \texttt{BORN} --- phonopy NAC format: electronic
-        $\varepsilon_{\infty}$ + $Z^{*}$ per atom.
-  \item \texttt{born\_charges.txt} --- human-readable summary shown in
-        the GUI Results tab: electronic (ion-clamped)
-        $\varepsilon_{\infty}$, ionic contribution, total static
-        $\varepsilon_{0}=\varepsilon_{\infty}+\varepsilon_{\mathrm{ion}}$;
-        $Z^{*}$ tensors labelled by element; an acoustic-sum-rule check
-        ($\sum_{\mathrm{ions}} Z^{*}$ should vanish --- a large residual
-        indicates an under-converged k-mesh or EDIFF); and the
-        piezoelectric stress tensors $e$ (C/m$^2$, clamped-ion, ionic,
-        and relaxed-ion total; meaningful only for non-centrosymmetric
-        crystals).
-\end{itemize}
-
-\texttt{DFPT\_EDIFF} in \texttt{instructions.txt} tightens the
-electronic convergence (default \texttt{1E-8}).
-
-\subsubsection{Example}
-
-\begin{lstlisting}
-Project: GaAs
-Methods: PBE functional
-Tasks: relaxation, SCF, DFPT Born charges and dielectric
-DFPT_EDIFF: 1E-8
-MPI: 16
-\end{lstlisting}
-
-In the GUI, tick \textbf{Born Charges \& Dielectric Constant (DFPT)} on
-the Setup tab (the DFPT EDIFF field is optional); after running
-\texttt{06\_dfpt} from the Workflow tab, the full summary appears in
-the \textbf{Born charges} panel of the Results tab.  With SOC, HSE06
-or R2SCAN selected under Methods, the finite-field INCAR is generated
-automatically --- no extra input is needed.  For LO-TO splitting in
-phonon spectra, combine with the phonon task as in the GaAs worked
-example (Section~\ref{sec:example-gaas-nac}).
-
-\subsection{Phonons (phonopy)}
-
-\begin{lstlisting}
-Tasks: phonons lattice dynamics
-
-PHONONS_DIM: 2 2 2
-PHONONS_MESH: 20 20 20
-PHONONS_DISP: 0.01
-PHONONS_BAND: G M K G A
-PHONONS_NAC: FALSE      # disable non-analytic correction
-\end{lstlisting}
-
-\begin{notebox}
-For the non-analytic correction (important for polar materials), include
-\texttt{DFPT} in your task list so Born effective charges are computed.
-\end{notebox}
-
-\subsection{LOBSTER bonding analysis (COHP / COBI / COOP)}
-\label{sec:lobster}
-
-Adding \texttt{LOBSTER COHP/COBI analysis} (keywords: \texttt{lobster},
-\texttt{cohp}, \texttt{cobi}, \texttt{coop}, \texttt{bonding}) to the
-task list creates \texttt{08\_lobster}: a symmetry-off NSCF that reads
-\texttt{02\_scf/CHGCAR}, followed by a run of the \texttt{lobster}
-binary.
-
-\begin{itemize}
-  \item \textbf{ISYM=0 is required} --- a symmetrised k-mesh gives
-        unusable COHP/ICOHP values (wrong sign, errors above 100\%).
-        The generated INCAR sets it automatically.
-        With SOC enabled, \textbf{ISYM=$-$1} is used instead: spin-orbit
-        coupling breaks time-reversal symmetry, which ISYM=0 would still
-        assume.
-  \item The k-mesh is the SCF mesh, reduced automatically above 10000 points or when
-        the symmetry-off run would not fit in memory (\cmd{LOBSTER_MAX_KPTS},
-        \cmd{LOBSTER_MAX_KPW}, Appendix~\ref{app:lobster-mem}).
-  \item \texttt{NBANDS} is auto-set to at least the LOBSTER
-        basis-function count; \texttt{LMAXMIX} is chosen from the
-        elements (6 for $f$, 4 for $d$, 2 for $sp$).
-  \item The \textbf{charge spilling} (in \cmd{lobsterout}) measures how well LOBSTER's atomic
-        basis represents the bands; when it is above 5\,\% the step reruns LOBSTER with the other
-        tabulated bases and keeps the best (\cmd{LOBSTER_BASIS}; Appendix~\ref{app:spilling}).
-  \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
-        \texttt{default\_paths} (default \texttt{lobster-5.1.0-OSX}); it can
-        be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
-\end{itemize}
-
-\begin{lstlisting}
-Project: NaCl
-Methods: PBE functional
-Tasks: SCF, LOBSTER COHP/COBI analysis
-MPI: 16
-\end{lstlisting}
-
-Run with \texttt{./vasp-agent.py} (builds and runs \texttt{02\_scf} +
-\texttt{08\_lobster}); the GUI shows COHP/COBI/COOP plots on the
-Results tab.  To aggregate averaged COHP/COBI over many projects into
-\texttt{lobster\_acohp\_acobi.csv}, run
-\texttt{python3 lobster\_postprocess.py}.
-
-Why the LOBSTER projected DOS and the VASP DOS differ is explained in Appendix~\ref{app:lobster-dos}.
-
-% ============================================================
 \section{More \texttt{instructions.txt} examples: SOC, magnetism, phonons, pressure}
 \label{sec:examples}
 % ============================================================
@@ -1873,7 +2261,7 @@ Why the LOBSTER projected DOS and the VASP DOS differ is explained in Appendix~\
 Project: MoS2 monolayer
 
 Methods: PBEsol functional
-         SOC with magnetization in z-direction
+         SOC                 # non-magnetic: MAGMOM = 3N*0
 
 Tasks: structure relaxation
        SCF calculation
@@ -1978,7 +2366,7 @@ The \texttt{01\_relax/INCAR} is generated with \texttt{ISIF=3},
 Project: Bi2Se3 topological
 
 Methods: PBEsol functional
-         SOC with magnetization in z-direction
+         SOC                 # non-magnetic: MAGMOM = 3N*0
 
 Tasks: structure relaxation
        SCF calculation
@@ -2021,7 +2409,7 @@ Walltime & per step (Section~\ref{sec:slurm-time}) & per step, \texttt{TIME\_*}
 Resources & one setting for all materials & ENCUT ($1.3\times$ max ENMAX)
   and job size per material \\
 Extras & element/$Z$ table & throttled, resumable \texttt{submit\_all.sh};
-  \texttt{status.sh}, \texttt{retune.sh}, \texttt{analyze\_all.sh},
+  \texttt{status.sh}, \texttt{retune.sh}, \texttt{makeplots\_all.sh},
   \texttt{collect\_results.sh}; POTCAR manifest \\
 Use for & structures to relax and characterise (ELF, bonding) &
   any list of materials (metals, semimetals, insulators) for bands and bonding; repaired
@@ -2037,7 +2425,7 @@ drivers download from MP, so run them on the login node (internet access).
 
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow && git pull
-source ~/vaspenv/bin/activate    # made once, Section 2 (step 2)
+source ~/vaspenv/bin/activate    # made once at installation
 export MP_API_KEY=your_key       # materialsproject.org/api
 export VASP_POTCAR_DIR=/path/to/PAW_PBE
 \end{lstlisting}
@@ -2133,7 +2521,7 @@ Script (in the directory) & Purpose \\ \midrule
   \texttt{-{}-time-lobster}, or \texttt{-{}-time} for all) or
   partition/account in every job script. \\
 \texttt{make\_potcars.sh} & Build and verify the POTCARs (run automatically). \\
-\texttt{analyze\_all.sh [id]} & Redo the plots (each job already runs \texttt{analyze.sh}). \\
+\texttt{makeplots\_all.sh [id]} & Redo the plots (each job already runs \texttt{makeplots.sh}). \\
 \texttt{postprocess\_all.sh} & Per-material and combined LOBSTER bond tables. \\
 \texttt{collect\_results.sh} & Small \texttt{screen\_results.tar.gz} with the
   per-step layout (trimmed OUTCARs; \texttt{FULL\_OUTCAR=1} for full). \\
@@ -2141,9 +2529,22 @@ Script (in the directory) & Purpose \\ \midrule
 \end{tabularx}
 
 % ============================================================
-\part{Checking and repairing runs}
+\part{Diagnosis and repair of failed runs}
 \label{part:check}
 % ============================================================
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.22\linewidth}@{}}
+\thead
+I want to \ldots & Go to \\ \midrule
+find out why runs failed and repair them, round by round & Section~\ref{sec:next-round} \\
+read the report and its certainty numbers & Section~\ref{sec:certainty} \\
+set my own parameters for some materials of a run & Section~\ref{sec:set-params} \\
+check one material or one job quickly & Section~\ref{sec:lookup} \\
+try a different INCAR setting on one material first & Section~\ref{sec:testfix} \\
+look up a symptom and its remedy & Section~\ref{sec:trouble} \\
+lower a high LOBSTER charge spilling & Appendix~\ref{app:spilling} \\
+\bottomrule
+\end{tabularx}
 
 % ============================================================
 \section{Repairing failed runs, round by round}
@@ -2161,6 +2562,62 @@ with the same cause, or has been repaired five times, is held back for you.
 
 \subsection{The repair cycle in one command}
 \label{sec:next-round}
+
+Figure~\ref{fig:repair-flow} shows the whole cycle with its commands.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=1mm, y=1mm, font=\footnotesize,
+    stp/.style={draw=mainblue, fill=lightblue, rounded corners=2pt, align=center,
+                text width=56mm, minimum height=9mm, inner sep=2pt,
+                execute at begin node={\hyphenpenalty=10000\relax}},
+    tool/.style={draw=black!40, fill=codebg, rounded corners=2pt, align=left,
+                 text width=38mm, inner sep=3pt, font=\scriptsize,
+                 execute at begin node={\hyphenpenalty=10000\relax}},
+    dec/.style={draw=mainblue, fill=white, diamond, aspect=2.4, align=center, inner sep=1pt},
+    arr/.style={-{Stealth[length=2.5mm, width=2mm]}, mainblue, thick},
+    lnk/.style={densely dashed, black!50, -{Stealth[length=2mm]}}]
+  \node[stp] (wait) at (0,0)   {the jobs of the run have finished\\ (\cmd{squeue -u $USER} is empty)};
+  \node[stp] (nr)   at (0,-15) {\cmd{bash ht_tools/next_round.sh}\\
+        diagnoses every material (\cmd{vasp_diagnose.py})};
+  \node[stp, fill=white, align=left, font=\scriptsize] (out) at (0,-34)
+        {writes \cmd{diagnosis_round<N>/}: \cmd{report.txt} (cause, evidence, certainty,
+         changes), \cmd{diagnosis.tsv}, \cmd{fix/<material>.sh}, \cmd{submit_all_fixes.sh},
+         \cmd{review_list.txt} (held materials)};
+  \node[dec] (any) at (0,-55) {anything to\\ submit?};
+  \node[stp] (look) at (0,-74) {read the summary it prints;\\ details:
+        \cmd{less diagnosis_round<N>/report.txt}};
+  \node[stp] (sub)  at (0,-97) {answer \cmd{y}: \cmd{submit_all_fixes.sh} saves each failed
+        run in \cmd{round_<i>_<date>/}, repairs it in place, submits what must be redone};
+  \node[stp, text width=34mm] (aud) at (52,-55) {\cmd{audit_run.sh}:\\ every material ok?};
+  \node[stp, text width=34mm] (col) at (52,-74) {\cmd{collect_lobster.sh},\\ \cmd{collect_results.sh}};
+  \node[tool] (par)  at (-54,-15) {\textbf{your own settings}\\ \cmd{set_params.sh <id> <step> "TAG=..."}:
+        for held materials, used by the next round};
+  \node[tool] (insp) at (-54,-72) {\textbf{look closer}\\ \cmd{show_material_status.sh}: how far
+        each step got\\ \cmd{show_job_history.sh}, \cmd{show_job_log.sh}: what SLURM and the
+        logs say};
+  \node[tool] (adj)  at (-54,-99) {\textbf{change the round}\\ \cmd{skip_fixes.sh}: leave a
+        material out\\ \cmd{test_step.sh}, \cmd{test_relax.sh}: try a fix on one material first};
+  \draw[arr] (wait) -- (nr);
+  \draw[arr] (nr) -- (out);
+  \draw[arr] (out) -- (any);
+  \draw[arr] (any) -- node[right] {yes} (look);
+  \draw[arr] (look) -- (sub);
+  \draw[arr] (any) -- node[above] {no} (aud);
+  \draw[arr] (aud) -- (col);
+  \draw[arr] (sub.south) -- ++(0,-5) -| (-80,0) node[pos=0.75, right, align=left] {wait for\\ the jobs} -- (wait.west);
+  \draw[lnk] (par) -- (nr);
+  \draw[lnk] (insp) -- (look);
+  \draw[lnk] (adj) -- (sub);
+\end{tikzpicture}
+\caption{One repair round after another (\cmd{ht_tools/} is in the VASP-Flow folder, run
+from the high-throughput folder).  Start at the top when the jobs have finished; stop
+when \cmd{next_round.sh} prints \cmd{Nothing to submit.}  The diagnosis never changes or
+submits anything: only the repair scripts do, and only after your \cmd{y}.  The dashed boxes
+are optional tools (Sections~\ref{sec:set-params}, \ref{sec:lookup}, \ref{sec:testfix} and
+\ref{sec:ht-tools}).}
+\label{fig:repair-flow}
+\end{figure}
 
 Run it from the high-throughput folder (the one with \cmd{materials/} and
 \cmd{material_list.txt}) once the queue is empty:
@@ -2715,7 +3172,7 @@ grep -A3 "BORN EFFECTIVE CHARGES"  OUTCAR | head -20
 \end{lstlisting}
 
 % ============================================================
-\addpart{Appendices: how it works}
+\addpart{Appendices: how the inputs are chosen}
 \appendix
 % ============================================================
 
@@ -2997,7 +3454,7 @@ the ELF is produced in two steps inside \texttt{02\_scf}, in the same job:
   so the WAVECAR is read as is.  Starting from converged wavefunctions, this
   restart needs only a few electronic steps.
 \item \texttt{ELFCAR} is copied back to \texttt{02\_scf/ELFCAR}, where
-  \texttt{analyze.sh}, \texttt{elf\_bonds.py} and the GUI look for it; the
+  \texttt{makeplots.sh}, \texttt{elf\_bonds.py} and the GUI look for it; the
   copied WAVECAR/CHGCAR in \texttt{elf/} are deleted.
 \end{enumerate}
 If the SCF left no WAVECAR/CHGCAR, the ELF pass is skipped with a message.
@@ -3022,7 +3479,7 @@ unshifted} positions.
 \subsubsection{Automatic parameter selection}
 
 After the runs, \texttt{00\_convergence/choose\_params.py} (invoked by
-\texttt{run\_convergence.sh}, \texttt{analyze\_convergence.sh}, and the
+\texttt{run\_convergence.sh}, \texttt{makeplots\_convergence.sh}, and the
 phase-2 scripts) selects the smallest ENCUT and k-mesh from which every
 subsequent change stays below
 \[
@@ -3072,7 +3529,7 @@ from a symmetry-off SCF and a symmetric SCF should be re-run first.
 \label{app:lobster-dos}
 
 The LOBSTER card also carries a projected-DOS plot
-(\texttt{analysis/*\_lobster\_dos.\{png,pdf\}}, generated by every interface
+(\texttt{plots/*\_lobster\_dos.\{png,pdf\}}, generated by every interface
 but displayed only in the GUI), drawn in the same cumulative-stacked layout as
 the \texttt{04\_dos} projected DOS.  It answers a question the two DOS files
 raise on their own.
@@ -3191,7 +3648,7 @@ Option & Meaning \\ \midrule
 \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}X@{}}
 \thead
 Output & Location \\ \midrule
-Material folders & \texttt{<mp-id>/01\_relax, 02\_scf, 08\_lobster, analysis} \\
+Material folders & \texttt{<mp-id>/01\_relax, 02\_scf, 08\_lobster, plots} \\
 ELFCAR & \texttt{<mp-id>/02\_scf/ELFCAR} (ELF pass in \texttt{02\_scf/elf/}) \\
 Staged inputs & \texttt{\_ht\_inputs/<mp-id>/} \\
 Element / $Z$ table & \texttt{\_ht\_inputs/elements\_Z.txt} \\
@@ -3217,8 +3674,8 @@ of \texttt{env.sh}, and steps that reach their limit continue automatically
 (\texttt{01\_relax}, IBRION = 1, ISIF = 3, same k-density as the SCF; if the
 first pass does not reach the force criterion it is restarted once from its
 CONTCAR), the SCF from the relaxed structure, bands and the LOBSTER NSCF +
-LOBSTER (finished steps are skipped on resubmission); the LOBSTER job ends and ends with \texttt{analyze.sh} (plots and
-\texttt{lobster\_summary.csv} in \texttt{analysis/}).  ENCUT and the LOBSTER
+LOBSTER (finished steps are skipped on resubmission); the LOBSTER job ends and ends with \texttt{makeplots.sh} (plots and
+\texttt{lobster\_summary.csv} in \texttt{plots/}).  ENCUT and the LOBSTER
 NBANDS come from the POTCARs at generation time and are checked against
 \texttt{potcar\_manifest.json} when the POTCARs are built on the cluster.
 POTCAR variants follow the Materials Project choices by default
@@ -3788,10 +4245,33 @@ as commented-out lines.
     times the tabulated PBE value.  LDA now sets \texttt{GGA = CA} and uses the LDA POTCARs
     (\texttt{VASP\_POTCAR\_DIR\_LDA}, default: the PBE folder with PBE $\to$ LDA); before,
     it ran with the PBE POTCARs, i.e.\ as PBE.
-    Manual reorganised for new users: requirements per use and one installation procedure
-    (the Python environment with pymatgen for the high-throughput drivers), then five step-by-step examples (GUI,
+    \texttt{check\_setup.py} / \texttt{make check}: is this computer ready (Python and packages,
+    POTCARs, VASP/MPI, \texttt{profiles/slurm.json}, high-throughput packages)?
+    Manual reorganised for new users: what the tools are for (preparing and submitting,
+    diagnosis and repair, analysis, above all in high-throughput runs), a route chooser,
+    requirements per use and one installation procedure (the Python environment with pymatgen
+    for the high-throughput drivers), one table of where each setting comes from, a task card
+    per example; then five step-by-step examples (GUI,
     workstation, cluster, high throughput on a workstation and on a cluster with repair
-    rounds), then how each part works and how to change it by hand.
+    rounds), then how each part works and how to change it by hand; convergence tests before
+    the k-mesh and the steps they set, and separate sections for LOBSTER, the dielectric
+    constant and Born charges, Wannier90 and phonons; parts renamed (Getting started, Worked examples, Reference, Diagnosis and repair);
+    Example~1 is also the GUI reference, with screenshots of the Setup and Results tabs
+    (\texttt{figures/make\_gui\_figures.py}); folder drawings of one calculation and of both
+    high-throughput drivers in Examples~2, 4 and 5; a flowchart of the repair rounds;
+    \texttt{make check} described after the installation steps.
+    SOC without magnetism: \texttt{Methods: SOC} (GUI: \emph{SOC, non-magnetic}) writes
+    \texttt{MAGMOM = 3N*0} instead of leaving VASP's default of 1\,$\mu_{\mathrm{B}}$ per atom
+    along $(1,1,1)$; ``non-magnetic'' in the instructions no longer switches magnetism on; the
+    MoS\textsubscript{2} and Bi\textsubscript{2}Se\textsubscript{3} examples are non-magnetic.
+    The plotting script \texttt{analyze.sh} is now \texttt{makeplots.sh} and writes to
+    \texttt{plots/} (was \texttt{analysis/}); likewise \texttt{makeplots\_all.sh},
+    \texttt{makeplots\_convergence.sh} and \texttt{plots/makeplots.log}.  The GUI,
+    \texttt{collect\_lobster.sh} and \texttt{fix\_spilling.sh} still read older runs.
+    GUI defaults from the POSCAR: the \emph{K-path} field is filled with the spglib path and
+    \emph{Hexagonal BZ} is ticked only for a hexagonal cell (was: always ticked, G-M-K-G);
+    \cmd{|} starts a new k-path segment; hand-typed labels take spglib's coordinates for the
+    cell; the GUI's LOBSTER help says the SCF mesh (not twice it).
 \end{description}
 
 \vfill

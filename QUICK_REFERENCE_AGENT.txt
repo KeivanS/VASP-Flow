@@ -18,7 +18,7 @@
 │   cd ProjectName                                                              │
 │   ./run_all.sh               workstation: runs every step in sequence        │
 │   ./submit_all.sh            SLURM: submits jobs with dependency chaining    │
-│   ./analyze.sh               post-processing plots (run after all jobs done) │
+│   ./makeplots.sh             plots: bands, DOS, ELF, COHP (after all)         │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ INSTRUCTIONS.TXT FORMAT ─────────────────────────────────────────────────────┐
@@ -147,8 +147,8 @@
 │   Antiferromagnets: use the per-atom list, e.g. MAGMOM: 4.0 -4.0 4.0 -4.0    │
 │                                                                               │
 │ Spin-orbit coupling (non-collinear, uses vasp_ncl):                          │
-│   Methods: SOC with magnetization in z-direction                              │
-│   Methods: SOC with magnetization in x-direction                              │
+│   Methods: SOC                    non-magnetic (MAGMOM = 3N*0)               │
+│   Methods: SOC with magnetization in z-direction     magnetic, moments ∥ z   │
 │   MAGMOM as above is rotated onto that direction (x y z per atom); a list of │
 │   3N numbers is taken as the raw components.                                  │
 │                                                                               │
@@ -223,16 +223,16 @@
 │   s  p  d  f             orbital channel                                      │
 │   Ni:d   Mo-d   C-2s     all equivalent                                      │
 │                                                                               │
-│ Results: sumo-dosplot generates orbital-resolved PDF in analysis/             │
+│ Results: sumo-dosplot generates orbital-resolved PDF in plots/                │
 │   Spin-polarized: spin-up positive, spin-down mirrored (automatic)           │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ BAND PLOTS & FAT BANDS ──────────────────────────────────────────────────────┐
-│ analyze.sh plots bands from EIGENVAL (band_plot.py — survives a truncated    │
+│ makeplots.sh plots bands from EIGENVAL (band_plot.py — survives a truncated  │
 │ vasprun.xml). 03_bands always sets LORBIT=11, so a PROCAR is written and     │
 │ the orbital-weighted FAT BANDS are generated automatically alongside:         │
-│   analysis/<formula>_band.{png,pdf}                                           │
-│   analysis/<formula>_fatbands.{png,pdf}   marker size ∝ orbital weight,      │
+│   plots/<formula>_band.{png,pdf}                                              │
+│   plots/<formula>_fatbands.{png,pdf}   marker size ∝ orbital weight,         │
 │                                           colored per element + l-channel    │
 │ Standalone:  ./band_plot.py 03_bands --out X [--ymin -4 --ymax 4]            │
 │              [--no-fatbands]   (fat bands need 03_bands/PROCAR)              │
@@ -255,7 +255,7 @@
 │ Output: PREFIX_elf_bonds.png/pdf  (PREFIX defaults to reduced formula,        │
 │ e.g. MoSe2_elf_bonds.pdf).  ELF=0.5 electron-gas reference marked.            │
 │                                                                               │
-│ analyze.sh runs it when 02_scf/ELFCAR exists; GUI Results shows it too.       │
+│ makeplots.sh runs it when 02_scf/ELFCAR exists; GUI Results shows it too.     │
 │ Note: VASP writes an all-zero ELFCAR for SOC / non-collinear runs;            │
 │   the tool reports this instead of a blank plot — drop SOC for ELF.           │
 └───────────────────────────────────────────────────────────────────────────────┘
@@ -281,7 +281,7 @@
 │ Generated directories: 00_convergence/kpoints/  and  00_convergence/encut/   │
 │ Run:  ./run_convergence.sh   (workstation)                                    │
 │       ./submit_convergence.sh (SLURM)                                        │
-│ Plot: ./analyze_convergence.sh                                                │
+│ Plot: ./makeplots_convergence.sh                                              │
 │                                                                               │
 │ The convergence POSCAR has atom 1 shifted by (0.01 0.02 0.03) Ang CARTESIAN  │
 │ so the force on it is non-zero and its convergence is meaningful; all         │
@@ -417,7 +417,7 @@
 │ and keeps the lowest (08_lobster/basis_scan.tsv).  NBANDS >= largest basis    │
 │ x LOBSTER_NBANDS_FACTOR.  Older HT runs: ht_tools/fix_spilling.sh --submit.   │
 │ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX; ~ in site.env is expanded). │
-│ analyze.sh also writes analysis/*_lobster_dos.{png,pdf}: LOBSTER projected    │
+│ makeplots.sh also writes plots/*_lobster_dos.{png,pdf}: LOBSTER projected     │
 │ DOS stacked as in 04_dos, with the projection-free 04_dos total overlaid in   │
 │ solid black (the gap is the charge spilling). Only the GUI displays it.       │
 │ lobsterin cohp/cobiGenerator range is structure-aware: it reaches every       │
@@ -444,9 +444,9 @@
 │ ├── 03_bands/             INCAR  KPOINTS         POTCAR  run.sh             │
 │ ├── 04_dos/               INCAR  KPOINTS         POTCAR  run.sh             │
 │ ├── 08_lobster/            INCAR  KPOINTS  POTCAR  copy_from_scf.sh  run.sh   │
-│ ├── analysis/             plots and output files                              │
+│ ├── plots/                plots and the plot_*.py helpers                     │
 │ ├── run_all.sh            run every step in order (workstation)              │
-│ └── analyze.sh            generate plots after all steps complete            │
+│ └── makeplots.sh          generate plots after all steps complete             │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ COMMON OUTCAR CHECKS ─────────────────────────────────────────────────────────┐
@@ -480,7 +480,7 @@
 │ Project: MoS2 monolayer                                                       │
 │                                                                               │
 │ Methods: PBEsol functional                                                    │
-│          SOC with magnetization in z-direction                                │
+│          SOC                                                                  │
 │          2D monolayer                                                         │
 │                                                                               │
 │ Tasks: structure relaxation                                                   │

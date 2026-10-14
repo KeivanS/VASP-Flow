@@ -12,7 +12,7 @@ MPI_LAUNCH  ?= mpirun -np
 MPI_NP      ?= 1
 WANNIER90_X ?= wannier90.x
 
-.PHONY: run snaps setup clean help
+.PHONY: run snaps setup check clean help
 
 run:
 	$(PYTHON) vasp-gui.py
@@ -28,6 +28,9 @@ setup:
 		echo "Created default_paths — edit it for your system, then run: make run"; \
 	fi
 
+check:
+	$(PYTHON) check_setup.py $(FOR)
+
 clean:
 	@rm -f instructions.txt POSCAR potcar_choices.json
 	@find . -name "*.pyc" -delete
@@ -36,6 +39,7 @@ clean:
 
 help:
 	@echo "make setup  — create default_paths from template (first-time setup)"
+	@echo "make check  — is this computer ready? (FOR=\"gui local slurm ht\" to choose)"
 	@echo "make run    — start the VASP Workflow GUI  (port 5001)"
 	@echo "make snaps  — start the SC-Snaps GUI       (port 5050)"
 	@echo "make clean  — remove generated temp files"

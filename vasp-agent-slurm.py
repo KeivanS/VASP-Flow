@@ -409,11 +409,11 @@ fi'''
             self._gen_convergence(conv, potcar_path)
             self._gen_convergence_analysis()
             print(f"  00_convergence/  run.sh (SLURM, loops internally)")
-            print(f"  analyze_convergence.sh  (plot energy/pressure/forces after jobs finish)")
+            print(f"  makeplots_convergence.sh  (plot energy/pressure/forces after jobs finish)")
 
         # ── analysis scripts (same as workstation version) ────────────────
         self._gen_analysis(calc_dirs)
-        print(f"  analyze.sh   (run locally after jobs complete)")
+        print(f"  makeplots.sh   (plots: bands, DOS, ELF, COHP/COBI/COOP; run after the jobs finish)")
 
         # ── submission scripts ────────────────────────────────────────────
         if has_convergence:
@@ -453,7 +453,7 @@ fi'''
     (prompts for ENCUT and k-mesh, then submits chained jobs)
 
   After all jobs complete:
-    ./analyze.sh
+    ./makeplots.sh
 """)
         else:
             print(f"""
@@ -466,7 +466,7 @@ fi'''
     squeue -u $USER
 
   After completion:
-    ./analyze.sh
+    ./makeplots.sh
 """)
 
     # ── convergence SLURM scripts ─────────────────────────────────────────
@@ -639,7 +639,7 @@ fi'''
                 f.write(f'submit_step "{dirname}" "$HERE/{dirname}/run.sh"\n')
             f.write('\necho ""\n')
             f.write('echo "All jobs submitted. Monitor with:  squeue -u $USER"\n')
-            f.write('echo "After completion run:  ./analyze.sh"\n')
+            f.write('echo "After completion run:  ./makeplots.sh"\n')
         chmod_x(path)
 
     def _gen_submit_convergence(self):
@@ -802,13 +802,13 @@ fi'''
                 f.write(f'submit_step "{dirname}" "$HERE/{dirname}/run.sh"\n')
             f.write('\necho ""\n')
             f.write('echo "All jobs submitted. Monitor with:  squeue -u $USER"\n')
-            f.write('echo "After completion run:  ./analyze.sh"\n')
+            f.write('echo "After completion run:  ./makeplots.sh"\n')
         chmod_x(path)
 
     # ── convergence analysis ──────────────────────────────────────────────
 
     def _gen_convergence_analysis(self):
-        """Generate 00_convergence/plot_convergence.py and analyze_convergence.sh."""
+        """Generate 00_convergence/plot_convergence.py and makeplots_convergence.sh."""
         pd       = self.project_dir
         conv_dir = os.path.join(pd, '00_convergence')
         modules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules')
@@ -921,7 +921,7 @@ fi'''
             f.write('    print("\\nDone. PNG files saved in 00_convergence/")\n')
         chmod_x(py)
 
-        sh = os.path.join(pd, 'analyze_convergence.sh')
+        sh = os.path.join(pd, 'makeplots_convergence.sh')
         conv_dir_rel = os.path.relpath(conv_dir, pd)
         with open(sh, 'w') as f:
             f.write('#!/bin/bash\n')
@@ -961,7 +961,7 @@ fi'''
             'Each filled band = summed contribution of one element.',
             'Top of the topmost band = total DOS.',
             '',
-            f'Output: analysis/{slug}_cumulative_dos.png',
+            f'Output: plots/{slug}_cumulative_dos.png',
             '"""',
             'import sys, os',
             'import matplotlib',
@@ -971,7 +971,7 @@ fi'''
             'import numpy as np',
             '',
             'HERE = os.path.dirname(os.path.abspath(__file__))',
-            'ANA  = os.path.normpath(os.path.join(HERE, "..", "analysis"))',
+            'ANA  = os.path.normpath(os.path.join(HERE, "..", "plots"))',
             'os.makedirs(ANA, exist_ok=True)',
             '',
             '# ── read POSCAR to map ions → elements ───────────────────────',
@@ -1081,7 +1081,7 @@ fi'''
 
     # ── spin-resolved band plot script ──────────────────────────────────────
     def _gen_spin_bands_script(self, bands_dir, ana_dir):
-        """Write analysis/plot_spin_bands.py — standalone spin-resolved band plot."""
+        """Write plots/plot_spin_bands.py — standalone spin-resolved band plot."""
         slug  = slugify(self.project_label)
         label = self.project_label
         pd    = self.project_dir
@@ -1092,7 +1092,7 @@ fi'''
             '',
             'Reads 03_bands/vasprun.xml directly (no pymatgen needed).',
             'Spin-up: blue solid   Spin-down: red dashed',
-            f'Output: analysis/{slug}_band.png  and  analysis/{slug}_band.pdf',
+            f'Output: plots/{slug}_band.png  and  plots/{slug}_band.pdf',
             '"""',
             'import sys, os, re',
             'import xml.etree.ElementTree as ET',
@@ -1237,7 +1237,7 @@ fi'''
     # ── analysis (identical to workstation version) ───────────────────────
 
     def _copy_util(self, ana_dir, src_name, dst_name):
-        """Copy a standalone utility from modules/ into analysis/. True on success."""
+        """Copy a standalone utility from modules/ into plots/. True on success."""
         src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules', src_name)
         if not os.path.exists(src):
             return False
@@ -1248,31 +1248,31 @@ fi'''
         return True
 
     def _gen_elf_bonds_script(self, ana_dir):
-        """Copy modules/elf_bonds.py -> analysis/plot_elf_bonds.py."""
+        """Copy modules/elf_bonds.py -> plots/plot_elf_bonds.py."""
         return self._copy_util(ana_dir, 'elf_bonds.py', 'plot_elf_bonds.py')
 
     def _gen_band_eigenval_script(self, ana_dir):
-        """Copy modules/band_plot.py -> analysis/plot_band_eigenval.py."""
+        """Copy modules/band_plot.py -> plots/plot_band_eigenval.py."""
         return self._copy_util(ana_dir, 'band_plot.py', 'plot_band_eigenval.py')
 
     def _gen_dos_script(self, ana_dir):
-        """Copy modules/dos_plot.py -> analysis/plot_dos.py."""
+        """Copy modules/dos_plot.py -> plots/plot_dos.py."""
         return self._copy_util(ana_dir, 'dos_plot.py', 'plot_dos.py')
 
     def _gen_cohp_plot_script(self, ana_dir):
-        """Copy modules/cohp_plot.py -> analysis/plot_cohp.py."""
+        """Copy modules/cohp_plot.py -> plots/plot_cohp.py."""
         return self._copy_util(ana_dir, 'cohp_plot.py', 'plot_cohp.py')
 
     def _gen_lobster_dos_script(self, ana_dir):
-        """Copy modules/lobster_dos_plot.py -> analysis/plot_lobster_dos.py."""
+        """Copy modules/lobster_dos_plot.py -> plots/plot_lobster_dos.py."""
         return self._copy_util(ana_dir, 'lobster_dos_plot.py',
                                'plot_lobster_dos.py')
 
     def _gen_analysis(self, calc_dirs):
-        """Generate analyze.sh and analysis/plot_results.py.
+        """Generate makeplots.sh and the plot_*.py helpers in plots/.
         These run locally after the cluster jobs complete."""
         pd  = self.project_dir
-        ana = os.path.join(pd, 'analysis')
+        ana = os.path.join(pd, 'plots')
         os.makedirs(ana, exist_ok=True)
 
         has_relax = 'relax' in calc_dirs
@@ -1294,14 +1294,14 @@ fi'''
             with open(os.path.join(pd, 'dos_proj.json'), 'w') as f:
                 f.write(_json.dumps(proj))
 
-        sh = os.path.join(pd, 'analyze.sh')
+        sh = os.path.join(pd, 'makeplots.sh')
         with open(sh, 'w') as f:
             f.write("#!/bin/bash\n")
             f.write(f"# Post-processing for: {self.project_label}\n")
             f.write("# Run this locally after all SLURM jobs complete.\n\n")
             f.write('HERE="$(cd "$(dirname "$0")" && pwd)"\n')
             f.write('BASE="$(basename $HERE)"\n')
-            f.write('mkdir -p "$HERE/analysis"\n\n')
+            f.write('mkdir -p "$HERE/plots"\n\n')
 
             if has_relax:
                 f.write('echo "=== Relaxation ==="\n')
@@ -1318,21 +1318,21 @@ fi'''
                 f.write('echo "=== Band structure ==="\n')
                 # Default: EIGENVAL plotter (survives a truncated vasprun.xml); sumo fallback.
                 f.write('BASE="$(basename $HERE)"\n')
-                f.write('if [ -f "$HERE/analysis/plot_band_eigenval.py" ] && [ -f "$HERE/03_bands/EIGENVAL" ]; then\n')
-                f.write('    ( cd "$HERE/analysis" && python3 plot_band_eigenval.py "$HERE/03_bands" '
+                f.write('if [ -f "$HERE/plots/plot_band_eigenval.py" ] && [ -f "$HERE/03_bands/EIGENVAL" ]; then\n')
+                f.write('    ( cd "$HERE/plots" && python3 plot_band_eigenval.py "$HERE/03_bands" '
                         '--out "$BASE" --ymin -4 --ymax 4 ) 2>&1\n')
                 f.write('fi\n')
-                f.write('if [ ! -f "$HERE/analysis/${BASE}_band.png" ] && command -v sumo-bandplot &>/dev/null '
+                f.write('if [ ! -f "$HERE/plots/${BASE}_band.png" ] && command -v sumo-bandplot &>/dev/null '
                         '&& grep -q "</modeling>" "$HERE/03_bands/vasprun.xml" 2>/dev/null; then\n')
                 f.write('    echo "  EIGENVAL plot unavailable — trying sumo-bandplot"\n')
                 f.write('    ( cd "$HERE/03_bands" && sumo-bandplot --prefix "$BASE" --ymin -4 --ymax 4 2>&1 '
-                        '&& mv *_band.* "$HERE/analysis/" 2>/dev/null || true )\n')
+                        '&& mv *_band.* "$HERE/plots/" 2>/dev/null || true )\n')
                 f.write('fi\n')
-                f.write('if [ ! -f "$HERE/analysis/${BASE}_band.png" ]; then\n')
+                f.write('if [ ! -f "$HERE/plots/${BASE}_band.png" ]; then\n')
                 f.write('    echo "  falling back to vasprun spin plotter"\n')
-                f.write('    python3 "$HERE/analysis/plot_spin_bands.py" 2>&1 || true\n')
+                f.write('    python3 "$HERE/plots/plot_spin_bands.py" 2>&1 || true\n')
                 f.write('fi\n')
-                f.write('echo "  Saved: analysis/*_band.*"\n\n')
+                f.write('echo "  Saved: plots/*_band.*"\n\n')
 
             if has_dos:
                 self._gen_dos_script(ana)
@@ -1340,22 +1340,22 @@ fi'''
                 # Total + projected DOS: both cumulative, sharing one energy
                 # window (full eigenvalue range), from DOSCAR — no sumo needed.
                 f.write('echo "  Cumulative total + projected DOS (from DOSCAR)..."\n')
-                f.write('if [ -f "$HERE/analysis/plot_dos.py" ] && [ -f "$HERE/04_dos/DOSCAR" ]; then\n')
+                f.write('if [ -f "$HERE/plots/plot_dos.py" ] && [ -f "$HERE/04_dos/DOSCAR" ]; then\n')
                 f.write('    PROJ=""; [ -f "$HERE/dos_proj.json" ] && PROJ="--proj $HERE/dos_proj.json"\n')
-                f.write('    ( cd "$HERE/analysis" && python3 plot_dos.py "$HERE/04_dos" '
+                f.write('    ( cd "$HERE/plots" && python3 plot_dos.py "$HERE/04_dos" '
                         '--out "$BASE" $PROJ ) 2>&1\n')
-                f.write('    echo "  Saved: analysis/*_dos.*"\n')
+                f.write('    echo "  Saved: plots/*_dos.*"\n')
                 f.write('else\n')
                 f.write('    echo "  (plot_dos.py or DOSCAR missing — regenerate the project)"\n')
                 f.write('fi\n\n')
 
             # ── ELF along nearest-neighbour bonds + 2D plane (if ELFCAR present) ─
             if has_scf and self._gen_elf_bonds_script(ana):
-                f.write('if [ -f "$HERE/02_scf/ELFCAR" ] && [ -f "$HERE/analysis/plot_elf_bonds.py" ]; then\n')
+                f.write('if [ -f "$HERE/02_scf/ELFCAR" ] && [ -f "$HERE/plots/plot_elf_bonds.py" ]; then\n')
                 f.write('    echo "=== ELF (bonds + 2D plane) ==="\n')
-                f.write('    ( cd "$HERE/analysis" && python3 plot_elf_bonds.py '
+                f.write('    ( cd "$HERE/plots" && python3 plot_elf_bonds.py '
                         '"$HERE/02_scf/ELFCAR" ) 2>&1\n')
-                f.write('    echo "  Saved: analysis/*_elf_bonds.* and *_elf_plane.*"\n')
+                f.write('    echo "  Saved: plots/*_elf_bonds.* and *_elf_plane.*"\n')
                 f.write('fi\n\n')
 
             # ── LOBSTER bonding: aggregate ICOHP/ICOBI/ICOOP + antibonding ──
@@ -1366,19 +1366,19 @@ fi'''
                 f.write('    echo "=== LOBSTER bonding (ICOHP/ICOBI/ICOOP + antibonding) ==="\n')
                 f.write(f'    python3 "{pp}" --dir "$HERE/08_lobster" '
                         '--out "$HERE/08_lobster/lobster_summary.csv" 2>&1\n')
-                f.write('    cp "$HERE/08_lobster/lobster_summary.csv" "$HERE/analysis/" 2>/dev/null || true\n')
+                f.write('    cp "$HERE/08_lobster/lobster_summary.csv" "$HERE/plots/" 2>/dev/null || true\n')
                 f.write('    echo "  Saved: 08_lobster/lobster_summary.csv"\n')
                 f.write('    echo "=== LOBSTER COHP / COBI / COOP plots ==="\n')
                 f.write('    for WHICH in cohp cobi coop; do\n')
                 f.write('        UPPER=$(echo "$WHICH" | tr "[:lower:]" "[:upper:]")\n')
                 f.write('        if [ -f "$HERE/08_lobster/${UPPER}CAR.lobster" ]; then\n')
-                f.write('            ( cd "$HERE/analysis" && python3 plot_cohp.py \\\n')
+                f.write('            ( cd "$HERE/plots" && python3 plot_cohp.py \\\n')
                 f.write('                "$HERE/08_lobster" \\\n')
-                f.write('                "$HERE/analysis/${BASE}_${WHICH}" \\\n')
+                f.write('                "$HERE/plots/${BASE}_${WHICH}" \\\n')
                 f.write('                "$BASE" --which "$WHICH" ) 2>&1\n')
                 f.write('        fi\n')
                 f.write('    done\n')
-                f.write('    echo "  Saved: analysis/*_cohp.* *_cobi.* *_coop.*"\n')
+                f.write('    echo "  Saved: plots/*_cohp.* *_cobi.* *_coop.*"\n')
                 f.write('fi\n\n')
 
             # ── LOBSTER projected DOS, with the 04_dos total overlaid ────────
@@ -1387,14 +1387,14 @@ fi'''
                 f.write('    echo "=== LOBSTER projected DOS (04_dos total overlaid) ==="\n')
                 # --dos-dir is passed unconditionally; the module falls back to
                 # the LOBSTER NSCF's own DOSCAR when 04_dos was not run.
-                f.write('    ( cd "$HERE/analysis" && python3 plot_lobster_dos.py \\\n')
+                f.write('    ( cd "$HERE/plots" && python3 plot_lobster_dos.py \\\n')
                 f.write('        "$HERE/08_lobster" \\\n')
-                f.write('        "$HERE/analysis/${BASE}_lobster_dos" \\\n')
+                f.write('        "$HERE/plots/${BASE}_lobster_dos" \\\n')
                 f.write('        "$BASE" --dos-dir "$HERE/04_dos" ) 2>&1\n')
-                f.write('    echo "  Saved: analysis/*_lobster_dos.*"\n')
+                f.write('    echo "  Saved: plots/*_lobster_dos.*"\n')
                 f.write('fi\n\n')
 
-            f.write('echo "Done. Results in analysis/"\n')
+            f.write('echo "Done. Results in plots/"\n')
         chmod_x(sh)
 
 
