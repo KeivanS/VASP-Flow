@@ -10,7 +10,7 @@
 #
 # -> diagnosis_round<N>/  report.txt (details per material), diagnosis.tsv (table),
 #    failed_list.txt, review_list.txt, fix/<material>.sh, submit_all_fixes.sh(.log)
-# Extra arguments go to vasp_diagnose.py (e.g. --max-rounds 4, --since 2026-10-01).
+# Extra arguments go to vasp_diagnose.py (e.g. --max-rounds 8 to cap the repairs, --since 2026-10-01).
 set -u
 HERE="$(cd "${HT_DIR:-$PWD}" && pwd)"
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

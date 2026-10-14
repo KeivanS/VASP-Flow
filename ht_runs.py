@@ -272,7 +272,7 @@ def robust_nbands(nelect, struct):
 def write_instructions(path, mp_id, struct, mesh, encut, nodes,
                        ntasks_per_node, partition, account,
                        functional='PBE', kpra=None, kpar=None, ncore=None,
-                       relax=True, gga_u='auto', nbands=None):
+                       relax=True, gga_u='auto', nbands=None, reduce_cell=True):
     """Write the instructions.txt consumed by vasp-agent-slurm.py.
 
     Task keywords are matched as substrings over the whole file by
@@ -308,6 +308,7 @@ def write_instructions(path, mp_id, struct, mesh, encut, nodes,
            "# constant across the three axes (fixed k-spacing, --kspacing).",
            f"KMESH: {nx} {ny} {nz}"]),
         f"ENCUT: {encut}",
+        *([] if reduce_cell else ["REDUCE_CELL: off   # --no-reduce-cell: the cell as downloaded"]),
         "",
         "# ELF is on by default in this repo, and LELF forces KPAR = 1 -- which",
         "# would serialise the k-point parallelism the SCF depends on here.",
@@ -1344,6 +1345,9 @@ def main():
                     help='first relax cell + ions (01_relax, IBRION=1, ISIF=3); default on')
     ap.add_argument('--no-relax', dest='relax', action='store_false',
                     help='skip the relaxation; SCF on the MP structure as downloaded')
+    ap.add_argument('--no-reduce-cell', dest='reduce_cell', action='store_false', default=True,
+                    help='keep a skewed cell as downloaded (default: Niggli-reduce it first, '
+                         'original kept as POSCAR.input; LOBSTER spilling is large in skewed cells)')
     ap.add_argument('--kpar', type=int, default=None,
                     help='force KPAR in the SCF/bands/LOBSTER INCARs (default: auto)')
     ap.add_argument('--ncore', type=int, default=None,
@@ -1463,7 +1467,16 @@ def main():
         """Returns (status, message, extra) with status ok | skip | fail."""
         stage = os.path.join(stage_root, mp_id)
         poscar = os.path.join(stage, 'POSCAR')
+        cell_note = ''
         try:
+            if args.reduce_cell:     # skewed cell -> Niggli-reduced in place (POSCAR.input kept)
+                from cell_reduce import reduced_poscar
+                red, cell = reduced_poscar(poscar)
+                if red is not None:
+                    shutil.copy(poscar, poscar + '.input')
+                    with open(poscar, 'w') as fh:
+                        fh.write(red)
+                    cell_note = '  [Niggli-reduced: %s]' % cell
             struct = read_poscar(poscar)
         except Exception as e:
             return 'fail', f"[{n}/{len(ids)}] {mp_id}: bad POSCAR ({e})", None
@@ -1494,7 +1507,8 @@ def main():
                            struct, mesh, pinfo['encut'], nodes, ntpn,
                            partition, args.account, args.functional, kpra=args.kpra,
                            kpar=args.kpar, ncore=args.ncore, relax=args.relax,
-                           gga_u=args.gga_u, nbands=robust_nbands(pinfo['nelect'], struct))
+                           gga_u=args.gga_u, nbands=robust_nbands(pinfo['nelect'], struct),
+                           reduce_cell=args.reduce_cell)
 
         # Build INCAR/KPOINTS/POTCAR/run.sh via the existing SLURM agent.
         env = dict(os.environ, VASP_POTCAR_DIR=potcar_dir, VASP_POTCAR_DIR_LDA=potcar_dir)
@@ -1531,6 +1545,8 @@ def main():
             os.remove(_sa)
         # Local copies so the cluster side is self-describing.
         shutil.copy(os.path.join(stage, 'instructions.txt'), proj)
+        if os.path.isfile(poscar + '.input'):
+            shutil.copy(poscar + '.input', proj)
         meta = {'formula': formula, 'natoms': struct['natoms'],
                 'nelect': pinfo['nelect'], 'encut': pinfo['encut'],
                 'mesh': mesh, 'nk_full': nk_full, 'W': W, 'nodes': nodes,
@@ -1540,7 +1556,7 @@ def main():
         write_job_script(proj, mp_id, meta, partition, args.account)
         msg = (f"[{n}/{len(ids)}] {mp_id:<12} {formula:<12} "
                f"{struct['natoms']:>3} at  {'x'.join(str(x) for x in mesh):>10}  "
-               f"ENCUT={pinfo['encut']:<4} W={W:7.1f}  {nodes}n x {ntpn}")
+               f"ENCUT={pinfo['encut']:<4} W={W:7.1f}  {nodes}n x {ntpn}{cell_note}")
         return 'ok', msg, (meta, man)
 
     from concurrent.futures import ThreadPoolExecutor

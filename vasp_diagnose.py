@@ -65,7 +65,7 @@ the report of that repair; <folder>/repair_history.tsv gets one line per repaire
 
 A material is held for review (its script is written, not submitted) when the cause is
 unknown, the fix for its cause is already in the INCAR, the previous repair of the step had
-the same cause, or it was repaired --max-rounds (5) times already.
+the same cause, or (with --max-rounds N) it was repaired N times already; no limit by default.
 
 Your own settings: ht_tools/set_params.sh writes <folder>/user_params.txt
 ("<step> TAG = value", plus KMESH = n1 n2 n3, TIME = HH:MM:SS, NODES = n).  They are applied
@@ -94,7 +94,7 @@ Usage (a highthroughput run: ht_tools/next_round.sh does all three):
   less diagnosis_round1/report.txt                     review
   nohup bash diagnosis_round1/submit_all_fixes.sh > diagnosis_round1/submit_all_fixes.log 2>&1 &
 Options: --out DIR  --root DIR (more places to look up IDs)  --since YYYY-MM-DD (sacct
-         window, default 14 days)  --kpar-max 8  --spill-max 5  --max-rounds 5  --retry-unknown
+         window, default 14 days)  --kpar-max 8  --spill-max 5  --max-rounds N (default 0 = no limit)  --retry-unknown
          --max-queued 200
 """
 import argparse
@@ -123,7 +123,7 @@ HT_TIME_KEY = {'relax': 'TIME_RELAX', 'scf': 'TIME_SCF', 'bands': 'TIME_BANDS',
                'lobster': 'TIME_LOBSTER'}
 HT_STEPS = ('relax', 'scf', 'bands', 'lobster')
 INCAR_FIX = ('scf_nelm', 'nscf_diverged', 'nscf_unconv', 'edddav', 'zbrent', 'symmetry')     # what job.sbatch understands
-MAX_ROUNDS = 5             # repairs per material before it is held for review
+MAX_ROUNDS = 0             # repairs per material before it is held for review (0 = no limit)
 HISTORY = 'repair_history.tsv'      # per material: one line per repaired step (written by the fix scripts)
 USER_PARAMS = 'user_params.txt'     # per material: your own settings (ht_tools/set_params.sh)
 # a one-node resubmission cannot go to a partition that needs >= 2 nodes (Rivanna: parallel)
@@ -1267,7 +1267,7 @@ def fix_certainty(key, cause, tally):
 def report_block(r, tally, max_rounds):
     """Text block of one material for report.txt (also the WHY.txt of its backup)."""
     L = ['=' * 100,
-         '%s   repair round %d of at most %d' % (r['label'], r['round'], max_rounds),
+         '%s   repair round %d%s' % (r['label'], r['round'], ' of at most %d' % max_rounds if max_rounds else ''),
          '  folder : %s' % r['path']]
     for s, cls, cc, ev, errs in r['steps']:
         L.append('  %-8s problem : %s   (certainty %.2f)' % (s, cls, cc))
@@ -1309,7 +1309,8 @@ def main():
     ap.add_argument('--kpar-max', type=int, default=8)
     ap.add_argument('--spill-max', type=float, default=5.0)
     ap.add_argument('--max-rounds', type=int, default=MAX_ROUNDS,
-                    help='repairs per material before it is held for review (default %d)' % MAX_ROUNDS)
+                    help='repairs per material before it is held for review (default %d = no limit; '
+                         'a repeated cause or a fix already in the INCAR still holds it)' % MAX_ROUNDS)
     ap.add_argument('--retry-unknown', action='store_true')
     ap.add_argument('--max-queued', type=int, default=200)
     args = ap.parse_args()
@@ -1416,7 +1417,7 @@ def main():
             fkeys += [(s, fk.get(s, cls_of[s]), cls_of[s]) for s in bad if s in fk]
             steps_txt = ' '.join(['%s:%s' % kv for kv in status.items()] + notes)
         rnd = rounds_done(m) + 1
-        if rnd > args.max_rounds:
+        if args.max_rounds and rnd > args.max_rounds:
             holds.append('already repaired %d times (--max-rounds %d)' % (rnd - 1, args.max_rounds))
         if any(c == 'unknown' for c in cls_of.values()) and not args.retry_unknown:
             holds.append('unknown cause (read the log lines; --retry-unknown submits it anyway)')

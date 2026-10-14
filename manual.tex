@@ -1375,6 +1375,10 @@ and write PNG and PDF files into the project's \cmd{plots/} folder.
 \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.25\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.3\linewidth}@{}}
 \thead
 Plot & Made from & File in \cmd{plots/} \\ \midrule
+Relaxation: total energy per ionic step; with a volume relaxation (ISIF = 3, 6, 7, 8) also
+  the pressure, with its target (PSTRESS or 0) & \cmd{01_relax/OUTCAR}, restarts included
+  (\cmd{OUTCAR.timeout*}, \cmd{OUTCAR.pass*}; a dotted line marks each) &
+  \cmd{*_relax_energy.*}, \cmd{*_relax_pressure.*} \\
 Band structure & \cmd{03_bands/EIGENVAL} (sumo or \cmd{vasprun.xml} as fallback);
   spin up/down in two colours & \cmd{<project>_band.png/pdf} \\
 Total and projected DOS & \cmd{04_dos/DOSCAR}; projections as asked in
@@ -1535,6 +1539,9 @@ Keyword (continued) & Meaning \\ \midrule
   \cmd{standard}, \cmd{max}, \cmd{scan}, \cmd{off} (Appendix~\ref{app:spilling}). \\
 \texttt{LOBSTER\_SCAN\_ABOVE:} & Charge spilling (\%) above which \cmd{auto} scans the bases (default 5). \\
 \texttt{LOBSTER\_NBANDS\_FACTOR:} & NBANDS of the LOBSTER NSCF = factor $\times$ the largest basis (default 1). \\
+\texttt{REDUCE\_CELL:} & \cmd{auto} (default: Niggli-reduce a skewed cell before the first step when
+  LOBSTER runs), \cmd{on} (also without LOBSTER), \cmd{off} (keep the cell as given); alias
+  \texttt{NIGGLI:} (Section~\ref{sec:lobster}). \\
 \bottomrule
 \end{tabularx}
 
@@ -2071,6 +2078,18 @@ binary.
   \item The \textbf{charge spilling} (in \cmd{lobsterout}) measures how well LOBSTER's atomic
         basis represents the bands; when it is above 5\,\% the step reruns LOBSTER with the other
         tabulated bases and keeps the best (\cmd{LOBSTER_BASIS}; Appendix~\ref{app:spilling}).
+  \item \textbf{Skewed cells are reduced first.}  In a long, thin, skewed cell LOBSTER's
+        projection breaks down: the Materials Project primitive cell of 15R-SiC (mp-11713, three
+        12.7\,\AA\ vectors 13.9$^\circ$ apart) gave 18--58\,\% charge spilling with every basis,
+        and its Niggli-reduced cell (3.08, 3.08, 12.71\,\AA; the same crystal) 1.5\,\%.  When
+        LOBSTER is requested, the agents therefore replace such a cell by its Niggli-reduced
+        cell before the relaxation, so every step runs on it; the original is kept as
+        \cmd{POSCAR.input}, and the agent prints both cells.  A cell that is already reduced is
+        left exactly as given (axis order included).  \cmd{REDUCE_CELL: off} (GUI: untick
+        \emph{Niggli-reduce a skewed cell}) keeps a skewed cell, with a warning; the cell is
+        also kept, with the same warning, when \cmd{KMESH:} or a \cmd{KPOINTS} block is given
+        for it, or for a 2-D slab.  \cmd{ht_runs.py} reduces at staging
+        (\opt{no-reduce-cell} to keep the cell as downloaded).
   \item The LOBSTER binary is set with \texttt{LOBSTER\_X} in
         \texttt{default\_paths} (default \texttt{lobster-5.1.0-OSX}); it can
         be overridden at runtime via \texttt{\$LOBSTER\_BIN}.
@@ -2642,7 +2661,7 @@ When those jobs have finished, run \cmd{next_round.sh} again.  Stop when it prin
 \cmd{Nothing to submit.}  Then audit and collect the results
 (Section~\ref{sec:ht-tools}).  \cmd{next_round.sh -y} submits without asking,
 \cmd{-n} only diagnoses; other arguments go to \cmd{vasp_diagnose.py} (e.g.\
-\opt{max-rounds 4}).
+\opt{max-rounds 8} to cap the number of repairs, which is not limited by default).
 
 \begin{tipbox}
 The diagnosis itself never changes or submits anything.  Your runs are touched
@@ -2797,7 +2816,9 @@ A material's repair script is written but \emph{not} submitted when
         \cmd{(fix already in INCAR)}), so it did not help;
   \item the previous repair of the same step had the same cause (a relaxation that
         continues from its CONTCAR is an exception: that is progress);
-  \item it has been repaired \opt{max-rounds} times already (default 5).
+  \item it has been repaired $N$ times already, when \opt{max-rounds N} is given (by default the
+        number of rounds is not limited: the two rules above already stop a repair that does
+        not help).
 \end{itemize}
 
 The reason is at the end of its block in \cmd{report.txt} (\cmd{HELD - ...}), and the
@@ -3060,8 +3081,9 @@ Script & Purpose \\ \midrule
 \cmd{fix_spilling.sh [--above 5] [--submit] [ID ...]} & Redo the LOBSTER step of materials whose
   charge spilling is above the limit: twice the bands, then a LOBSTER basis scan that keeps the
   lowest spilling (Appendix~\ref{app:spilling}); a dry run without \opt{submit}. \\
-\cmd{reduce_cell.py IN OUT} & The same crystal on its shortest lattice vectors (numpy only), for a
-  skewed primitive cell; stage the result with \cmd{ht_runs.py --poscar-dir}. \\
+\cmd{reduce_cell.py IN [OUT]} & The Niggli-reduced cell of a POSCAR (the same crystal on its
+  shortest lattice vectors; numpy only; \cmd{modules/cell_reduce.py}).  The agents and
+  \cmd{ht_runs.py} already do this when LOBSTER runs; use it for runs staged before v2.6. \\
 \bottomrule
 \end{tabularx}
 
@@ -3376,6 +3398,21 @@ smaller minimal basis is adequate), \cmd{basisSet koga}, or a custom STO set wit
 or additional orbitals.  Compare materials of the same chemistry: in the October 2026 run the
 2-atom SiC (mp-8062) had 1.5\,\% with the same basis as the 10-atom polytype mp-11713 (18.3\,\%),
 which points to the run rather than the basis.
+
+\paragraph{Skewed cells.}  For mp-11713 it was the cell: its Materials Project primitive cell
+has three 12.7\,\AA\ vectors 13.9$^\circ$ apart, and the basis scan on it made things worse
+(58\,\% at best).  The same crystal in its Niggli-reduced cell (3.08, 3.08, 12.71\,\AA) gave
+1.52\,\% with the default basis.  Since v2.6 the agents reduce such a cell before the first
+step when LOBSTER runs (\cmd{REDUCE_CELL}, Section~\ref{sec:lobster}); for an older run, reduce
+the POSCAR with \cmd{ht_tools/reduce_cell.py} and run the material again.
+
+\paragraph{What the October 2026 rescan gave.}  \cmd{fix_spilling.sh} on the 52 HT\_1-500
+materials above 5\,\%: 46 are now below 4\,\%, almost all with the larger basis (the
+semicore $p$ of the transition metal, e.g.\ Hf--Be 27.3 $\to$ 1.6\,\%, Ti--Se 21.7 $\to$
+2.1\,\%, Zr--Be 21.2 $\to$ 1.4\,\%); Cs\textsubscript{2}O (one basis per element) fell from
+11.7 to 4.7\,\% with the doubled bands alone.  LiGe (9.9\,\%) and Re (5.4\,\%) did not
+change; for plain Li and Mg LOBSTER printed \cmd{-nan} with every basis, so these are rerun
+with the semicore POTCARs \cmd{Li_sv} and \cmd{Mg_pv}.
 
 \subsection{Relaxation $\to$ SCF hand-off}
 \label{sec:handoff}
@@ -3709,6 +3746,7 @@ Option & Meaning \\ \midrule
 \texttt{-{}-lobster-max-kpts N} & largest $N_1N_2N_3$ of the LOBSTER mesh (default 10000, 0 = no cap). \\
 \texttt{-{}-lobster-max-kpw X} & LOBSTER memory budget, k-points $\times$ plane waves (default $6\times10^6$, 0 = no cap). \\
 \texttt{-{}-relax} / \texttt{-{}-no-relax} & Relaxation first (default on). \\
+\texttt{-{}-no-reduce-cell} & keep a skewed cell as downloaded (default: Niggli-reduced at staging, original in \cmd{POSCAR.input}). \\
 \texttt{-{}-gga\_u auto|on|off} & GGA+U flag written into every
   \texttt{instructions.txt} (default \texttt{auto}: only chalcogenides/halides). \\
 \texttt{-{}-potcar-set mp|minimal} & POTCAR variants: Materials Project choices
@@ -3753,7 +3791,7 @@ python3 vasp_diagnose.py LIST [options]
                                     must reach back to the jobs being diagnosed \\
 \opt{kpar-max N}    & 8 & largest KPAR written by the out-of-memory repair \\
 \opt{spill-max X}   & 5 & LOBSTER charge spilling (\%) above which a material is flagged \\
-\opt{max-rounds N}  & 5 & repairs of one material before it is held for review \\
+\opt{max-rounds N}  & 0 & repairs of one material before it is held for review (0 = no limit) \\
 \opt{retry-unknown} & off & also submit the materials whose failure was not recognised \\
 \opt{max-queued N}  & 200 & default queue limit of \cmd{submit_all_fixes.sh}
                             (override later with \cmd{MAX_QUEUED=}) \\
@@ -3892,7 +3930,7 @@ user\_params & you changed the step's settings with \cmd{set_params.sh} after it
 unknown & none of the above & script written but held back for review \\
 \emph{(any)} \dots\ \cmd{(fix already in INCAR)} & the repair for this cause is already in the INCAR, so it did not help &
   script written but held back for review \\
-\emph{(any)}, twice & the previous repair of the step had the same cause, or \opt{max-rounds} repairs done &
+\emph{(any)}, twice & the previous repair of the step had the same cause, or \opt{max-rounds N} repairs done (if given) &
   script written but held back for review \\
 \midrule
 spilling\_high & LOBSTER finished, spilling $>$ \opt{spill-max} & not by the round; run \cmd{ht_tools/fix_spilling.sh} (Appendix~\ref{app:spilling}) \\
@@ -4272,6 +4310,15 @@ as commented-out lines.
     \emph{Hexagonal BZ} is ticked only for a hexagonal cell (was: always ticked, G-M-K-G);
     \cmd{|} starts a new k-path segment; hand-typed labels take spglib's coordinates for the
     cell; the GUI's LOBSTER help says the SCF mesh (not twice it).
+    Relaxation plots: total energy per ionic step and, for a volume relaxation, the pressure
+    (\texttt{modules/relax\_plot.py}; \texttt{makeplots.sh} of both agents and a
+    \emph{Relaxation} card on the GUI Results tab).
+    A skewed cell is Niggli-reduced before the first step when LOBSTER runs
+    (\texttt{modules/cell\_reduce.py}; \texttt{REDUCE\_CELL: auto|on|off}, GUI checkbox with a
+    note of both cells, \texttt{ht\_runs.py -{}-no-reduce-cell}; original kept as
+    \texttt{POSCAR.input}): the 15R-SiC primitive cell went from 18\,\% to 1.5\,\% charge
+    spilling.  \texttt{vasp\_diagnose.py} no longer limits the number of repair rounds
+    (\texttt{-{}-max-rounds N} sets a limit).
 \end{description}
 
 \vfill

@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
+from cell_reduce import prepare_poscar
 from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for,
                                   merge_cli_incar, STEP_WALLTIME, RESUME_SBATCH,
                                   RESUME_LIB)
@@ -175,13 +176,14 @@ class SLURMVASPAgent:
         print(f"    KPAR             : {kpar_note}")
         print(f"    NCORE            : {ncore_note}")
 
-        self.poscar_file = os.path.abspath(poscar_file)
         self.inst_file   = os.path.abspath(instructions_file)
-        self.generator   = VASPInputGenerator(self.poscar_file, inst, profile=self.profile)
-
         os.makedirs(self.project_dir, exist_ok=True)
         shutil.copy(self.inst_file,   self.project_dir)
-        shutil.copy(self.poscar_file, os.path.join(self.project_dir, 'POSCAR'))
+        # The project's POSCAR is the cell every step runs; Niggli-reduced first when LOBSTER
+        # runs and the cell is skewed (original kept as POSCAR.input) -- cell_reduce.py
+        prepare_poscar(os.path.abspath(poscar_file), os.path.join(self.project_dir, 'POSCAR'), inst)
+        self.poscar_file = os.path.join(self.project_dir, 'POSCAR')
+        self.generator   = VASPInputGenerator(self.poscar_file, inst, profile=self.profile)
 
     # ── SLURM script builders ─────────────────────────────────────────────
 
@@ -413,7 +415,7 @@ fi'''
 
         # ── analysis scripts (same as workstation version) ────────────────
         self._gen_analysis(calc_dirs)
-        print(f"  makeplots.sh   (plots: bands, DOS, ELF, COHP/COBI/COOP; run after the jobs finish)")
+        print(f"  makeplots.sh   (plots: relaxation, bands, DOS, ELF, COHP/COBI/COOP; run after the jobs finish)")
 
         # ── submission scripts ────────────────────────────────────────────
         if has_convergence:
@@ -1307,7 +1309,12 @@ fi'''
                 f.write('echo "=== Relaxation ==="\n')
                 f.write('grep "energy  without" "$HERE/01_relax/OUTCAR" | tail -1\n')
                 f.write('grep "reached required accuracy" "$HERE/01_relax/OUTCAR" '
-                        '&& echo "  Converged" || echo "  WARNING: check NSW"\n\n')
+                        '&& echo "  Converged" || echo "  WARNING: check NSW"\n')
+                # energy (and, with a volume relaxation, pressure) per ionic step
+                if self._copy_util(ana, 'relax_plot.py', 'plot_relax.py'):
+                    f.write('( cd "$HERE/plots" && python3 plot_relax.py "$HERE/01_relax" '
+                            '"$HERE/plots/$BASE" "$BASE" ) 2>&1\n')
+                f.write('\n')
             if has_scf:
                 f.write('echo "=== SCF ==="\n')
                 f.write('grep "E-fermi" "$HERE/02_scf/OUTCAR" | tail -1\n\n')

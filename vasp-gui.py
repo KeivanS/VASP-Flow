@@ -266,17 +266,23 @@ def api_kpath():
     txt = (request.json or {}).get('poscar', '').strip()
     if not txt:
         return jsonify(error='No POSCAR content provided.'), 400
+    from cell_reduce import reduced_poscar
     with tempfile.TemporaryDirectory() as tmp:
         f = os.path.join(tmp, 'POSCAR')
         Path(f).write_text(txt + '\n')
+        try:                    # skewed cell: Niggli-reduced before the steps when LOBSTER runs
+            red, cell = reduced_poscar(f)
+            skew = dict(skewed=red is not None, cell=cell)
+        except Exception:
+            skew = dict(skewed=False, cell='')
         try:
             res = VASPInputGenerator(f, {}).spglib_kpath_string()
         except Exception as exc:
-            return jsonify(error=f'k-path detection failed: {exc}'), 500
+            return jsonify(error=f'k-path detection failed: {exc}', **skew), 500
     if not res:
-        return jsonify(error='spglib/pymatgen could not find a k-path for this POSCAR'), 500
+        return jsonify(error='spglib/pymatgen could not find a k-path for this POSCAR', **skew), 500
     path, name, hexa = res
-    return jsonify(kpath=path, lattice=name, hexagonal=bool(hexa))
+    return jsonify(kpath=path, lattice=name, hexagonal=bool(hexa), **skew)
 
 
 @app.route('/api/visualize_poscar', methods=['POST'])
@@ -447,6 +453,8 @@ def api_generate():
         lines.append(f'LOBSTER_SIGMA: {lobster_sigma}')
     if d.get('lobster') and lobster_isym:
         lines.append(f'LOBSTER_ISYM: {lobster_isym}')
+    if d.get('lobster') and d.get('reduce_cell') is False:
+        lines.append('REDUCE_CELL: off')      # default auto: a skewed cell is Niggli-reduced
 
     # Phonons parameters
     if d.get('phonons'):
@@ -488,7 +496,7 @@ def api_generate():
     run_dir = CONFIG['projects_dir']
     os.makedirs(run_dir, exist_ok=True)
     Path(os.path.join(run_dir,'instructions.txt')).write_text('\n'.join(lines))
-    Path(os.path.join(run_dir,'POSCAR')).write_text(poscar)
+    Path(os.path.join(run_dir,'POSCAR')).write_text(poscar + '\n')
 
     # Write POTCAR choices for the agent; clear if none
     choices_file = os.path.join(run_dir, 'potcar_choices.json')
@@ -590,8 +598,11 @@ def api_save_project():
     pd_  = _pd(slug)
     os.makedirs(pd_, exist_ok=True)
     poscar = d.get('poscar', '').strip()
-    if poscar:
-        Path(os.path.join(pd_, 'POSCAR')).write_text(poscar)
+    orig = os.path.join(pd_, 'POSCAR.input')      # the agent Niggli-reduced this cell
+    if poscar and not (os.path.isfile(orig) and Path(orig).read_text().strip() == poscar):
+        Path(os.path.join(pd_, 'POSCAR')).write_text(poscar + '\n')
+        if os.path.isfile(orig):
+            os.remove(orig)
     Path(os.path.join(pd_, 'project.json')).write_text(json.dumps(d))
     return jsonify(ok=True, project=slug)
 
@@ -1440,6 +1451,23 @@ def _ewin_args():
             out.append(None)
     return tuple(out)
 
+@_plot_locked
+def _relax_plot(pd_, ana, base, which):
+    """plots/<base>_relax_{energy,pressure}.png from 01_relax (modules/relax_plot.py);
+    (path, None) or (None, reason)."""
+    import relax_plot
+    d = os.path.join(pd_, '01_relax')
+    r = relax_plot.read_relax(d) if os.path.isdir(d) else None
+    if r is None:
+        return None, 'No relaxation history — run 01_relax first'
+    out = os.path.join(ana, f'{base}_relax_{which}.png')
+    if which == 'energy':
+        return relax_plot.plot_energy(r, out, base), None
+    if not r['volume_relax']:
+        return None, f'Fixed cell volume (ISIF={r["isif"]}): no pressure plot'
+    return relax_plot.plot_pressure(r, out, base), 'No pressure in OUTCAR'
+
+
 @app.route('/api/plot/<slug>/<ptype>')
 def api_plot(slug, ptype):
     """Serve plot image. Normalise ptype, run sumo if needed, return png.
@@ -1453,6 +1481,13 @@ def api_plot(slug, ptype):
 
     # Normalise: bare 'dos' → prefer projected
     if ptype == 'dos': ptype = 'dos_proj'
+
+    # ── relaxation: energy / pressure per ionic step (from 01_relax/OUTCAR*) ─
+    if ptype in ('relax_energy', 'relax_pressure'):
+        out, why = _relax_plot(pd_, ana, base, ptype.split('_')[1])
+        if out and os.path.exists(out):
+            return send_file(out, mimetype='image/png')
+        return jsonify(error=why), 404
 
     # ── ELF along nearest-neighbour bonds (from 02_scf/ELFCAR) ───────────────
     if ptype == 'elf':
@@ -1731,6 +1766,14 @@ def api_plot_pdf(slug, ptype):
     base = _slug_base(slug)
     zmin, zmax = _ewin_args()
     zoomed = zmin is not None or zmax is not None
+    if ptype in ('relax_energy', 'relax_pressure'):
+        os.makedirs(ana, exist_ok=True)
+        out, why = _relax_plot(pd_, ana, base, ptype.split('_')[1])
+        pdf = os.path.splitext(out)[0] + '.pdf' if out else None
+        if pdf and os.path.exists(pdf):
+            return send_file(pdf, mimetype='application/pdf', as_attachment=True,
+                             download_name=os.path.basename(pdf))
+        return jsonify(error=why), 404
     if ptype in ('elf', 'elf_plane'):
         import glob
         _elf_bond_plot(pd_, ana)
@@ -2896,8 +2939,10 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
         <div class="f"><label>ISYM (NSCF, 0 or -1 only; forced to -1 with SOC)</label>
           <input id="lobster_isym" placeholder="0"></div>
       </div>
+      <label class="ck" style="margin-top:6px;"><input type="checkbox" id="reduce_cell" checked onchange="showCellNote()"> Niggli-reduce a skewed cell before the first step (recommended)</label>
+      <span id="cell-note" style="display:block;font-size:11px;margin-top:2px;"></span>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
-        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. The NSCF uses the SCF k-mesh (reduced in the same ratios if the symmetry-off mesh would exceed the memory limits, LOBSTER_MAX_KPTS / LOBSTER_MAX_KPW); edit <code>08_lobster/KPOINTS</code> on the Workflow page to override. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
+        Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. The NSCF uses the SCF k-mesh (reduced in the same ratios if the symmetry-off mesh would exceed the memory limits, LOBSTER_MAX_KPTS / LOBSTER_MAX_KPW); edit <code>08_lobster/KPOINTS</code> on the Workflow page to override. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. In a long, thin, skewed cell LOBSTER's projection breaks down (charge spilling of tens of %, whatever the basis), so such a cell is replaced by its Niggli-reduced cell (same crystal, shortest lattice vectors) before the relaxation; the original is kept as <code>POSCAR.input</code>. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
       </div>
     </div>
   </div>
@@ -3380,6 +3425,7 @@ async function loadProjectSettings(){
     s('dfpt_ediff', settings.dfpt_ediff);
     s('lobster_sigma', settings.lobster_sigma);
     s('lobster_isym', settings.lobster_isym);
+    c('reduce_cell', settings.reduce_cell !== false);
 
     // Phonons params
     s('phonons_dim',  settings.phonons_dim);
@@ -3462,14 +3508,31 @@ async function fetchKpath(){
     const res = await fetch('/api/kpath',{method:'POST', headers:{'Content-Type':'application/json'},
                                           body:JSON.stringify({poscar})});
     const j = await res.json();
-    if(!res.ok) throw new Error(j.error||'no k-path');
+    if(!res.ok) { const er = new Error(j.error||'no k-path'); er.skew = j; throw er; }
     if(kp.dataset.user!=='1') kp.value = j.kpath;
     const hx = document.getElementById('hexagonal');
     if(hx) hx.checked = !!j.hexagonal;
+    _cellInfo = j; showCellNote();
     if(st) st.textContent = 'spglib path for the '+j.lattice+' lattice'+(kp.dataset.user==='1'?' (your path kept): '+j.kpath:'');
   }catch(e){
+    if(e.skew) { _cellInfo = e.skew; showCellNote(); }
     if(kp.dataset.user!=='1' && !kp.value) kp.value = v('cfg_kpath');
     if(st) st.textContent = 'no spglib path ('+e.message+'): blank = the agent\'s own choice';
+  }
+}
+// LOBSTER block: say whether this POSCAR is skewed and what will happen to it
+let _cellInfo = null;
+function showCellNote(){
+  const el = document.getElementById('cell-note');
+  if(!el) return;
+  if(!_cellInfo || !_cellInfo.skewed){ el.textContent = _cellInfo&&_cellInfo.cell ? 'Cell already reduced: '+_cellInfo.cell : ''; el.style.color='var(--sub)'; return; }
+  const [a, b] = _cellInfo.cell.split(' -> ');
+  if(chk('reduce_cell')){
+    el.textContent = 'Skewed cell '+a+': it will be Niggli-reduced to '+b+' (original kept as POSCAR.input).';
+    el.style.color = 'var(--sub)';
+  } else {
+    el.textContent = 'WARNING: skewed cell '+a+' kept as given: LOBSTER charge spilling may be large (reduced cell: '+b+').';
+    el.style.color = 'var(--warn, #b45309)';
   }
 }
 function loadFile(inp){
@@ -3684,6 +3747,7 @@ async function saveProjectSettings(){
     dfpt:   chk('t_dfpt'),  phonons:chk('t_phonons'),
     wannier:chk('t_wannier'), lobster:chk('t_lobster'),
     lobster_sigma: v('lobster_sigma'), lobster_isym: v('lobster_isym'),
+    reduce_cell:  chk('reduce_cell'),
     relax_type:   v('relax_type'),
     nsw:          parseInt(v('nsw'))||100,
     ediffg:       parseFloat(v('ediffg'))||-0.01,
@@ -3777,6 +3841,7 @@ async function generate(){
     lobster:       chk('t_lobster'),
     lobster_sigma: v('lobster_sigma'),
     lobster_isym:  v('lobster_isym'),
+    reduce_cell:   chk('reduce_cell'),
     // phonons
     phonons:       chk('t_phonons'),
     phonons_dim:   v('phonons_dim')||'2 2 2',
@@ -4159,6 +4224,29 @@ async function buildResults(){
       <thead><tr><th>Step</th><th>Final energy (eV)</th><th>E-Fermi (eV)</th><th>Mag. moment</th><th>Converged</th><th></th></tr></thead>
       <tbody id="sumtb"></tbody>
     </table>
+  </div>`;
+
+  // ── relaxation: energy and (volume relaxation) pressure per ionic step ──
+  h+=`<div class="card">
+    <div class="card-title">Relaxation</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <a href="/api/plot_pdf/${PROJECT}/relax_energy" class="btn btn-ghost btn-sm" download title="Download energy PDF">⬇ Energy PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/relax_pressure" class="btn btn-ghost btn-sm" download title="Download pressure PDF">⬇ Pressure PDF</a>
+    </div>
+    <div class="plot-grid">
+      <div class="plot-card">
+        <h4>Total energy vs ionic step</h4>
+        <img id="img-relax_energy" src="/api/plot/${PROJECT}/relax_energy?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Total energy vs ionic step</h4><div class=no-plot>Not available — run 01_relax</div>'">
+      </div>
+      <div class="plot-card">
+        <h4>Pressure vs ionic step</h4>
+        <img id="img-relax_pressure" src="/api/plot/${PROJECT}/relax_pressure?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Pressure vs ionic step</h4><div class=no-plot>Not available — needs a volume relaxation (ISIF = 3, 6, 7 or 8) in 01_relax</div>'">
+      </div>
+    </div>
   </div>`;
 
   // ── band structure (raw + orbital-weighted fat bands) ──────────────────

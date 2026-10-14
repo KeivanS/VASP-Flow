@@ -115,7 +115,7 @@ In the **Setup** tab:
 | fine | 5000 | SCF, DOS, DFPT, spectroscopic steps (default) |
 | any integer | as given | custom target |
 
-Subdivisions Nᵢ are proportional to the reciprocal lattice vector magnitudes (Nᵢ ∝ |**b**ᵢ\*|), all **even**, and picked so that N₁N₂N₃·N_atoms lands as close to the target as possible (axes of equal length — cubic, tetragonal, hexagonal — always get equal Nᵢ). Hexagonal lattices (a = b, γ = 120°, detected from the POSCAR) get an in-plane mesh that is a **multiple of 6** (6×6, 12×12, 18×18, …) so K and M lie on the mesh. This applies to every cell type, 2-D (Nz = 1) included. The KPOINTS comment line reports the mesh and the kpra reached. The DOS and LOBSTER meshes are 2× the SCF mesh; DFPT and Wannier use the SCF mesh; relaxation uses its own density. `KMESH: N1 N2 N3` overrides the automatic mesh for all steps, and a `KPOINTS <step>:` block (below) overrides everything for that step.
+Subdivisions Nᵢ are proportional to the reciprocal lattice vector magnitudes (Nᵢ ∝ |**b**ᵢ\*|), all **even**, and picked so that N₁N₂N₃·N_atoms lands as close to the target as possible (axes of equal length — cubic, tetragonal, hexagonal — always get equal Nᵢ). Hexagonal lattices (a = b, γ = 120°, detected from the POSCAR) get an in-plane mesh that is a **multiple of 6** (6×6, 12×12, 18×18, …) so K and M lie on the mesh. This applies to every cell type, 2-D (Nz = 1) included. The KPOINTS comment line reports the mesh and the kpra reached. The DOS mesh is 2× the SCF mesh; LOBSTER, DFPT and Wannier use the SCF mesh; relaxation uses its own density. `KMESH: N1 N2 N3` overrides the automatic mesh for all steps, and a `KPOINTS <step>:` block (below) overrides everything for that step.
 
 **Initial magnetic moments** — `MAGMOM: 4.0` (uniform, negative allowed), `MAGMOM: Fe=4.0, O=0.6` (per element; unlisted elements get 0) or `MAGMOM: 2*4.0 2*-4.0` (per atom in POSCAR order). Any `MAGMOM` line switches spin polarisation on. With SOC the moments are oriented along the chosen x/y/z direction (3N components are written).
 
@@ -132,7 +132,7 @@ Subdivisions Nᵢ are proportional to the reciprocal lattice vector magnitudes (
 | ☐ DFPT | Born effective charges and dielectric tensor |
 | ☐ Phonons | Lattice dynamics via phonopy |
 | ☐ Wannier90 | Maximally-localised Wannier functions |
-| ☐ LOBSTER | COHP / COBI / COOP chemical-bonding analysis (`08_lobster`): a symmetry-off (ISYM=0, or −1 with SOC) NSCF from the SCF charge density, then the LOBSTER run. The bond range automatically covers 1st **and** 2nd neighbour shells. Needs the LOBSTER binary |
+| ☐ LOBSTER | COHP / COBI / COOP chemical-bonding analysis (`08_lobster`): a symmetry-off (ISYM=0, or −1 with SOC) NSCF from the SCF charge density, then the LOBSTER run. The bond range automatically covers 1st **and** 2nd neighbour shells. A skewed cell is Niggli-reduced first (same crystal; LOBSTER's charge spilling is large in a skewed cell; original kept as `POSCAR.input`; untick *Niggli-reduce a skewed cell* or `REDUCE_CELL: off` to keep it). Needs the LOBSTER binary |
 
 **POTCAR** — the directory is pre-filled from System Setup. If your element has multiple PAW variants (e.g. `Ga` vs `Ga_d`), the GUI will let you choose.
 
@@ -157,6 +157,7 @@ Switch to the **Results** tab:
 - **Fat bands** (orbital-weighted band structure) render next to the raw bands from `03_bands/PROCAR` (LORBIT=11 is always set): colored markers per element and orbital channel, marker size ∝ projection weight.
 - Click **Run sumo-bandplot** or **Run sumo-dosplot** to regenerate a plot after editing settings.
 - **ELF plots** (from the SCF's ELFCAR): 1D profiles along the non-equivalent 1st- and 2nd-shell bonds, plus a 2D ELF map on the plane through an atom and its 1st/2nd neighbours.
+- **Relaxation plots**: total energy vs ionic step and, when the volume relaxes (ISIF = 3, 6, 7, 8), the pressure vs ionic step with its target (PSTRESS or 0); restarts of the relaxation are joined. `makeplots.sh` writes the same plots to `plots/*_relax_energy.*` and `*_relax_pressure.*`.
 - **LOBSTER plots**: −COHP, COBI and COOP vs energy — total over all bonds plus per-pair 1st/2nd-shell overlays, annotated with the integral to E_F (ICOHP/ICOBI/ICOOP), the antibonding integral, the antibonding fraction f_AB, and the bonding→antibonding crossing energy.
 - Born effective charges and phonon spectra appear if you ran DFPT / phonons.
 - Bands, DOS and LOBSTER cards have an **Energy window** bar — enter min/max (eV) and click Zoom to re-render the plot (and its PDF download) on that window.
@@ -192,7 +193,7 @@ KPOINTS scf:            # also KPOINTS_SCF:  — steps: relax/scf/bands/dos/wann
 END_KPOINTS
 ```
 
-Explicit blocks override every other setting (keywords, `KMESH`, the density tier, automatic KPAR/NCORE). DOS/LOBSTER (2×) and DFPT/Wannier (1×) follow an explicit SCF mesh. In the GUI both kinds of block are entered under *Setup → Advanced — explicit INCAR / KPOINTS*.
+Explicit blocks override every other setting (keywords, `KMESH`, the density tier, automatic KPAR/NCORE). DOS (2×) and LOBSTER/DFPT/Wannier (1×) follow an explicit SCF mesh. In the GUI both kinds of block are entered under *Setup → Advanced — explicit INCAR / KPOINTS*.
 
 **2. Agent command line** — the repeatable `--incar` option (both `vasp-agent.py` and `vasp-agent-slurm.py`):
 

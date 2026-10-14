@@ -79,10 +79,21 @@ Direct
 0.158 0.342 0.658
 0.658 0.158 0.342
 """
+POSCAR_SKEW = """NaCl in a skewed primitive cell (fcc rows x [[1,0,0],[1,1,0],[2,1,1]])
+1.0
+ 0.0 2.1 2.1
+ 2.1 2.1 4.2
+ 4.2 6.3 6.3
+Na Cl
+1 1
+Direct
+ 0.0 0.0 0.0
+ 0.5 -0.5 0.5
+"""
 
 STEP_KEYS = {'01_relax': 'relax', '02_scf': 'scf', '03_bands': 'bands',
              '04_dos': 'dos', '06_dfpt': 'dfpt', '08_lobster': 'lobster'}
-COMPARE = ('INCAR', 'KPOINTS', 'copy_from_relax.sh', 'copy_from_scf.sh',
+COMPARE = ('INCAR', 'KPOINTS', 'POSCAR', 'copy_from_relax.sh', 'copy_from_scf.sh',
            '.explicit_kpoints', 'elf/INCAR', 'run_elf.sh')
 
 
@@ -206,6 +217,15 @@ def cases():
              expect=dict(u_everywhere=True, u_value='2.46', metagga=True)),   # 0.6 x 4.1
         dict(name='gui-u-mode-on', poscar=POSCAR_FESI,
              form=form(u_mode='on'), expect=dict(u_everywhere=True)),
+        dict(name='lobster-niggli', poscar=POSCAR_SKEW,
+             form=form(lobster=True, bands=False, dos=False),
+             expect=dict(reduced=True)),
+        dict(name='lobster-niggli-off', poscar=POSCAR_SKEW,
+             form=form(lobster=True, bands=False, dos=False, reduce_cell=False),
+             expect=dict(reduced=False)),
+        dict(name='skewed-plain', poscar=POSCAR_SKEW,
+             form=form(bands=False, dos=False),
+             expect=dict(reduced=False)),
         dict(name='text-elf-separate', poscar=POSCAR_AFM, form=None,
              text=("Project: elf2\nMethods: PBE functional\n"
                    "Tasks: SCF calculation\nMPI: 16\nELF: separate\n"),
@@ -437,6 +457,16 @@ def check_semantics(case, out_dir, instr):
                     bad.append(f"02_scf/elf/INCAR: {k} differs from the SCF")
             if 'run_elf.sh' not in (steps['02_scf'] / 'run.sh').read_text():
                 bad.append("02_scf/run.sh never calls run_elf.sh")
+
+    if 'reduced' in ex:
+        import numpy as np
+        from cell_reduce import read_poscar
+        lens = sorted(np.linalg.norm(read_poscar(str(out_dir / '02_scf' / 'POSCAR'))['A'], axis=1))
+        short = all(abs(x - 2.1 * 2 ** 0.5) < 1e-6 for x in lens)
+        if ex['reduced'] != short:
+            bad.append(f"Niggli: 02_scf/POSCAR |a| {np.round(lens, 3)} (reduced expected {ex['reduced']})")
+        if ex['reduced'] != (out_dir / 'POSCAR.input').exists():
+            bad.append(f"Niggli: POSCAR.input {'missing' if ex['reduced'] else 'should not exist'}")
 
     if ex.get('blocks'):
         r, s_, b, dd = (incar_tags(steps[k] / 'INCAR') for k in ('01_relax', '02_scf', '03_bands', '04_dos'))

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser
+from cell_reduce import prepare_poscar
 from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for,
                                   merge_cli_incar)
 
@@ -111,14 +112,15 @@ class VASPWorkflowAgent:
         print(f"  MPI ranks : {inst.get('mpi_np', 1)}")
         print(f"  Tasks     : {', '.join(inst.get('tasks', []))}")
 
-        self.poscar_file = os.path.abspath(poscar_file)
         self.inst_file   = os.path.abspath(instructions_file)
         self.profile     = profile or {}
-        self.generator   = VASPInputGenerator(self.poscar_file, inst, profile=self.profile)
-
         os.makedirs(self.project_dir, exist_ok=True)
         shutil.copy(self.inst_file,   self.project_dir)
-        shutil.copy(self.poscar_file, os.path.join(self.project_dir, 'POSCAR'))
+        # The project's POSCAR is the cell every step runs; Niggli-reduced first when LOBSTER
+        # runs and the cell is skewed (original kept as POSCAR.input) -- cell_reduce.py
+        prepare_poscar(os.path.abspath(poscar_file), os.path.join(self.project_dir, 'POSCAR'), inst)
+        self.poscar_file = os.path.join(self.project_dir, 'POSCAR')
+        self.generator   = VASPInputGenerator(self.poscar_file, inst, profile=self.profile)
 
     def run(self):
         inst  = self.parser.instructions
@@ -235,7 +237,7 @@ class VASPWorkflowAgent:
             self._gen_run_all(calc_dirs)
             print(f"  run_all.sh   (runs every step in order)")
 
-        print(f"  makeplots.sh   (plots: bands, DOS, ELF, COHP/COBI/COOP, after all calculations)")
+        print(f"  makeplots.sh   (plots: relaxation, bands, DOS, ELF, COHP/COBI/COOP, after all calculations)")
 
         # ── terminal summary ──────────────────────────────────────────────
         proj_rel = os.path.relpath(self.project_dir, self.cwd)
@@ -1142,7 +1144,12 @@ class VASPWorkflowAgent:
                 f.write('echo "=== Relaxation ==="\n')
                 f.write('grep "energy  without" "$HERE/01_relax/OUTCAR" | tail -1\n')
                 f.write('grep "reached required accuracy" "$HERE/01_relax/OUTCAR" '
-                        '&& echo "  Converged" || echo "  WARNING: check NSW"\n\n')
+                        '&& echo "  Converged" || echo "  WARNING: check NSW"\n')
+                # energy (and, with a volume relaxation, pressure) per ionic step
+                if self._copy_util(ana, 'relax_plot.py', 'plot_relax.py'):
+                    f.write('( cd "$HERE/plots" && python3 plot_relax.py "$HERE/01_relax" '
+                            '"$HERE/plots/$BASE" "$BASE" ) 2>&1\n')
+                f.write('\n')
             if has_scf:
                 f.write('echo "=== SCF ==="\n')
                 f.write('grep "E-fermi" "$HERE/02_scf/OUTCAR" | tail -1\n\n')

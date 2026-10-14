@@ -135,6 +135,8 @@ class InstructionParser:
             # ELF (ELFCAR): on by default; disable with "ELF: off" / "no ELF"
             'elf':            self._extract_elf(content),
             'elf_mode':       self._extract_elf_mode(content),
+            # Niggli-reduce the cell before every step: auto (= when LOBSTER runs) | on | off
+            'reduce_cell':    self._extract_reduce_cell(content),
             # Geometry hints
             'is_2d':          self._extract_bool_key(content, r'\b2[Dd]\b|\bmonolayer\b|\bslab\b'),
             'is_hex':         self._extract_bool_key(content, r'\bhex\w*\b|\btrigonal\b|\bhexagonal\b'),
@@ -184,6 +186,15 @@ class InstructionParser:
     def _extract_bool_key(self, content: str, pattern: str) -> bool:
         """Return True if pattern is found anywhere in content."""
         return bool(re.search(pattern, content, re.IGNORECASE))
+
+    def _extract_reduce_cell(self, content: str) -> str:
+        """REDUCE_CELL / NIGGLI: auto | on | off (yes/true = on, no/false = off)."""
+        m = re.search(r'\b(?:REDUCE_CELL|NIGGLI)\s*[:=]\s*(auto|on|off|true|false|yes|no)\b',
+                      content, re.IGNORECASE)
+        if not m:
+            return 'auto'
+        v = m.group(1).lower()
+        return {'true': 'on', 'yes': 'on', 'false': 'off', 'no': 'off'}.get(v, v)
 
     def _extract_elf(self, content: str) -> bool:
         """ELFCAR computation flag. Default ON; disabled by an explicit
