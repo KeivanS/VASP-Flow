@@ -18,6 +18,33 @@ import sys
 import numpy as np
 
 
+def noncollinear(dos_dir, ncols):
+    """True for a non-collinear (SOC) DOSCAR: every lm column comes as total, mx, my, mz.
+    INCAR/OUTCAR LSORBIT or LNONCOLLINEAR decides; else the site-block width
+    (1 + 4x9 or 1 + 4x16 for LORBIT=11, 1 + 4x3 for LORBIT=10)."""
+    import re as _re
+    for f in ('INCAR', 'OUTCAR'):
+        try:
+            with open(os.path.join(dos_dir, f), errors='replace') as fh:
+                txt = fh.read(2000000)
+        except OSError:
+            continue
+        m = _re.search(r'^\s*(?:LSORBIT|LNONCOLLINEAR)\s*=\s*\.?([TF])', txt, _re.M | _re.I)
+        if m:
+            return m.group(1).upper() == 'T'
+    return ncols - 1 in (12, 36, 64)
+
+
+def site_columns(ncols, spin_pol, ncl):
+    """(up, down) column lists of a site block's lm channels (down empty unless ISPIN=2);
+    the SOC magnetisation columns mx, my, mz are skipped."""
+    if ncl:
+        return list(range(1, ncols, 4)), []
+    if spin_pol:
+        return list(range(1, ncols, 2)), list(range(2, ncols, 2))
+    return list(range(1, ncols)), []
+
+
 def _read_doscar(dos_dir):
     ion_elements = []
     for fname in ('CONTCAR', 'POSCAR'):
@@ -37,8 +64,9 @@ def _read_doscar(dos_dir):
     tot = np.array([[float(x) for x in l.split()] for l in raw[6:6 + nedos]])
     energies = tot[:, 0] - efermi
     spin_pol = tot.shape[1] == 5
+    ncl = noncollinear(dos_dir, len(raw[7 + nedos].split())) if nions else False
     return dict(raw=raw, nions=nions, nedos=nedos, tot=tot, energies=energies,
-                spin_pol=spin_pol, ion_elements=ion_elements)
+                spin_pol=spin_pol, ncl=ncl, ion_elements=ion_elements)
 
 
 def _window(energies, dos_total):
@@ -83,10 +111,10 @@ def total_dos(D, prefix):
         start = offset + i * (nedos + 1) + 1
         d = np.array([[float(x) for x in l.split()] for l in raw[start:start + nedos]])
         el = ions[i] if i < len(ions) else f'ion{i}'
-        if spin_pol:
-            el_up[el] += d[:, 1::2].sum(axis=1); el_dn[el] += d[:, 2::2].sum(axis=1)
-        else:
-            el_up[el] += d[:, 1:].sum(axis=1)
+        cu, cd = site_columns(d.shape[1], spin_pol, D['ncl'])
+        el_up[el] += d[:, cu].sum(axis=1)
+        if cd:
+            el_dn[el] += d[:, cd].sum(axis=1)
     xmin, xmax = _window(energies, tot[:, 1] + (tot[:, 2] if spin_pol else 0.0))
     m = (energies >= xmin) & (energies <= xmax); en = energies[m]
     order = list(dict.fromkeys(ions))
@@ -133,6 +161,8 @@ def proj_dos(D, prefix, proj_list):
 
     def cols(orb):
         lo, hi = LM[orb]
+        if D['ncl']:                       # SOC: total, mx, my, mz per lm
+            return [1 + 4 * j for j in range(lo, hi)], []
         if spin_pol:
             return [1 + 2 * j for j in range(lo, hi)], [2 + 2 * j for j in range(lo, hi)]
         return [1 + j for j in range(lo, hi)], []

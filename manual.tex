@@ -4313,6 +4313,9 @@ as commented-out lines.
     Relaxation plots: total energy per ionic step and, for a volume relaxation, the pressure
     (\texttt{modules/relax\_plot.py}; \texttt{makeplots.sh} of both agents and a
     \emph{Relaxation} card on the GUI Results tab).
+    Projected DOS with spin--orbit coupling: the DOSCAR of a non-collinear run carries four
+    columns per orbital (total, $m_x$, $m_y$, $m_z$); the orbital plots had read the
+    magnetisation columns as $p$ and $d$ and showed them far too small (now only the totals).
     A skewed cell is Niggli-reduced before the first step when LOBSTER runs
     (\texttt{modules/cell\_reduce.py}; \texttt{REDUCE\_CELL: auto|on|off}, GUI checkbox with a
     note of both cells, \texttt{ht\_runs.py -{}-no-reduce-cell}; original kept as

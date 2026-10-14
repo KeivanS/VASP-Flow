@@ -905,6 +905,8 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
     tot      = np.array([[float(x) for x in l.split()] for l in raw[6:6+nedos]])
     energies = tot[:,0] - efermi
     spin_pol = tot.shape[1] == 5  # ISPIN=2: E dos_up dos_down idos_up idos_down
+    from dos_plot import noncollinear, site_columns
+    ncl = noncollinear(dos_dir, len(raw[7 + nedos].split())) if nions else False
 
     # Accumulate per-element DOS (up and down separately)
     el_dos_up   = defaultdict(lambda: np.zeros(nedos))
@@ -914,11 +916,10 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
         start = offset + i * (nedos + 1) + 1
         d  = np.array([[float(x) for x in l.split()] for l in raw[start:start+nedos]])
         el = ion_elements[i] if i < len(ion_elements) else f'ion{i}'
-        if spin_pol:
-            el_dos_up[el]   += d[:, 1::2].sum(axis=1)   # cols 1,3,5,… = spin-up
-            el_dos_down[el] += d[:, 2::2].sum(axis=1)   # cols 2,4,6,… = spin-down
-        else:
-            el_dos_up[el] += d[:, 1:].sum(axis=1)
+        cu, cd = site_columns(d.shape[1], spin_pol, ncl)   # SOC: mx, my, mz skipped
+        el_dos_up[el] += d[:, cu].sum(axis=1)
+        if cd:
+            el_dos_down[el] += d[:, cd].sum(axis=1)
 
     dos_tot = tot[:, 1] + (tot[:, 2] if spin_pol else 0.0)
     xmin, xmax = _dos_window(energies, dos_tot)
@@ -1030,11 +1031,15 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
     tot = np.array([[float(x) for x in l.split()] for l in raw[6:6 + nedos]])
     energies = tot[:, 0] - efermi
     spin_pol = tot.shape[1] == 5
+    from dos_plot import noncollinear
+    ncl = noncollinear(dos_dir, len(raw[7 + nedos].split())) if nions else False
 
     # lm-index ranges [start, end) within a per-ion block (s=1,p=3,d=5,f=7)
     LM = {'s': (0, 1), 'p': (1, 4), 'd': (4, 9), 'f': (9, 16)}
     def orb_cols(orb):
         lo, hi = LM[orb]
+        if ncl:                            # SOC: cols total, mx, my, mz per lm
+            return [1 + 4 * j for j in range(lo, hi)], []
         if spin_pol:                       # cols: E, then (up,dn) per lm
             return [1 + 2 * j for j in range(lo, hi)], [2 + 2 * j for j in range(lo, hi)]
         return [1 + j for j in range(lo, hi)], []
@@ -1432,9 +1437,10 @@ def _default_proj_list(dos_dir):
         dl = open(os.path.join(dos_dir, 'DOSCAR')).readlines()
         nedos = int(dl[5].split()[2])
         # first data line of the first site block; LORBIT=11 column counts:
-        # 10 (spd) / 17 (spdf) non-spin, 19 (spd) / 33 (spdf) spin-polarised
+        # 10 (spd) / 17 (spdf) non-spin, 19 (spd) / 33 (spdf) spin-polarised,
+        # 37 (spd) / 65 (spdf) non-collinear (SOC)
         ncols = len(dl[7 + nedos].split())
-        if ncols in (17, 33):
+        if ncols in (17, 33, 65):
             orbs.append('f')
     except Exception:
         pass
