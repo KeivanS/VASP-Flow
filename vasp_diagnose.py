@@ -312,6 +312,28 @@ def run(cmd):
         return ''
 
 
+_NODE_MEM = {}
+
+
+def mem_option(part, tpn):
+    """'--mem=<M>M': the memory of the smallest node (sinfo) that has >= tpn cores, in the
+    partition if sinfo knows it, else on any partition.  --mem=0 ('the whole node') on a
+    partition that mixes node types (Rivanna standard: 40 cores/384 GB and 96 cores/768 GB)
+    is resolved for the smaller node, and 96 tasks then never start (BadConstraints)."""
+    key = (part, tpn)
+    if key not in _NODE_MEM:
+        fit = []
+        for cmd in ([['sinfo', '-h', '-p', part, '-o', '%c %m']] if part else []) + [['sinfo', '-h', '-o', '%c %m']]:
+            for ln in run(cmd).splitlines():
+                r = re.match(r'\s*(\d+)\D*\s+(\d+)', ln)
+                if r and (not tpn or int(r.group(1)) >= tpn):
+                    fit.append(int(r.group(2)))
+            if fit:
+                break
+        _NODE_MEM[key] = '--mem=%dM' % min(fit) if fit else '--mem=0'
+    return _NODE_MEM[key]
+
+
 # ── one material / project folder ────────────────────────────────────────────
 class Material(object):
     def __init__(self, path):
@@ -655,7 +677,8 @@ def conv_plan(m, bad, recs, args):
                 if k < kp:
                     lines.append('set_tag %s/INCAR KPAR %d' % (d, k))
                     say('KPAR %d -> %d (%d ranks)' % (kp, k, n))
-            extra.append('--mem=0')
+            part_, _, tpn_ = m.batch()
+            extra.append(mem_option(part_, tpn_))
         elif cls == 'timeout':
             rec = recs.get(m.jobname(key))
             try:
@@ -742,7 +765,8 @@ def plan(m, status, cls_of, recs, args, user=None):
                     lines.append('set_tag %s/INCAR KPAR %d' % (STEP_DIR[s], k))
                     say('%s: KPAR %d -> %d (%d ranks)' % (s, kp, k, n))
             if m.layout != 'local':
-                extra[s].append('--mem=0')
+                part_, _, tpn_ = m.batch()
+                extra[s].append(mem_option(part_, tpn_))
         # LOBSTER NSCF (ISYM=0): memory grows with the full k-mesh -> halve it
         if 'lobster' in redo and cls_of.get('lobster') == 'oom':
             kp = read(m.f('lobster', 'KPOINTS')).split('\n')
@@ -890,7 +914,9 @@ def plan(m, status, cls_of, recs, args, user=None):
         extra[s] = [x for x in extra[s] if not x.startswith(('--nodes', '--ntasks', '--partition'))]
         extra[s] += ['--nodes=%d' % n, '--ntasks-per-node=%d' % tpn]
         if n == 1 and part in ONE_NODE_PARTITION:
-            extra[s].append('--partition=%s' % ONE_NODE_PARTITION[part])
+            new = ONE_NODE_PARTITION[part]
+            extra[s] = [x for x in extra[s] if not x.startswith('--mem')]
+            extra[s] += ['--partition=%s' % new, mem_option(new, tpn)]
         d = STEP_DIR[s]
         kp = None
         for ln in lines:

@@ -3902,7 +3902,7 @@ shown in the script header but never taken as the cause.
 \midrule
 oom & out of memory (\cmd{insufficient virtual memory}, \cmd{Cannot allocate memory},
   killed by the OOM handler, MPI time-outs between nodes) &
-  KPAR lowered to at most \opt{kpar-max} (a divisor of the MPI ranks); all node memory requested;
+  KPAR lowered to at most \opt{kpar-max} (a divisor of the MPI ranks); the memory of the smallest node with enough cores requested (\cmd{sinfo});
   for the LOBSTER NSCF also its k-mesh halved per axis \\
 timeout & the job hit its time limit & walltime doubled; a relax continues from its last structure \\
 hang & an SCF/fixed-density run converged, then stalled until the time limit & rerun on one node, with the
@@ -4316,6 +4316,10 @@ as commented-out lines.
     Projected DOS with spin--orbit coupling: the DOSCAR of a non-collinear run carries four
     columns per orbital (total, $m_x$, $m_y$, $m_z$); the orbital plots had read the
     magnetisation columns as $p$ and $d$ and showed them far too small (now only the totals).
+    A resubmission on another partition or after running out of memory asks for an explicit
+    \texttt{-{}-mem} (smallest node with enough cores, from \cmd{sinfo}): \texttt{-{}-mem=0} on
+    Rivanna's mixed \texttt{standard} partition (40 and 96 cores) left 96-task jobs pending
+    with \texttt{BadConstraints}.
     A skewed cell is Niggli-reduced before the first step when LOBSTER runs
     (\texttt{modules/cell\_reduce.py}; \texttt{REDUCE\_CELL: auto|on|off}, GUI checkbox with a
     note of both cells, \texttt{ht\_runs.py -{}-no-reduce-cell}; original kept as
