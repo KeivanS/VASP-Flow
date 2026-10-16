@@ -145,6 +145,18 @@ def orient(B, F, types):
             sg = ds['international'] if isinstance(ds, dict) else ds.international
             if abs(np.linalg.det(R) - 1) < 1e-6:
                 Bs, how = B @ R.T, 'axes along the conventional cell of %s (spglib)' % sg
+                # a primitive conventional cell (P lattice) with the reduced lengths is used as
+                # it is: its axes along x, y, z (e.g. monoclinic P: (a,0,0),(0,b,0),c)
+                P = np.array(ds['transformation_matrix'] if isinstance(ds, dict) else ds.transformation_matrix)
+                Ni = np.linalg.inv(P).T
+                if round(abs(np.linalg.det(P))) == 1 and np.allclose(Ni, np.rint(Ni), atol=1e-6):
+                    Ni = np.rint(Ni).astype(int)
+                    Cv = Ni @ Bs
+                    if np.allclose(sorted(np.linalg.norm(Cv, axis=1)), sorted(np.linalg.norm(B, axis=1)),
+                                   rtol=1e-6) and np.linalg.det(Cv) > 0:
+                        Cv[np.abs(Cv) < 1e-10] = 0.0
+                        return Cv, Ni, how + ', primitive conventional cell'
+
     except Exception:
         pass
     if Bs is None:
