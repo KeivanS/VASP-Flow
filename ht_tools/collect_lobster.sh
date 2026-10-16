@@ -26,6 +26,7 @@
 #
 # Usage (run from the HT root, e.g. cd ~/VASP-Flow/HT_1-500):
 #   bash ../ht_tools/collect_lobster.sh [ROOT] [MAX_FILE_SIZE]
+#   -> ~/lobster_collect_<date>_<time>_<run>.tar.gz
 #   ROOT           default: ./materials
 #   MAX_FILE_SIZE  default: 50M
 #   ALL=1                     repack everything finished (ignore .vf_collected)
@@ -36,7 +37,9 @@
 set -u
 ROOT=${1:-$PWD/materials}
 MAX=${2:-50M}
-STAMP=$(date +%Y%m%d_%H%M)
+# run name in the file name: several runs collected in the same minute do not overwrite each other
+RUN=$(basename "$(dirname "$(cd "$ROOT" 2>/dev/null && pwd)")")
+STAMP=$(date +%Y%m%d_%H%M%S)_${RUN:-run}
 OUT=$HOME/lobster_collect_$STAMP.tar.gz
 WORK=$(mktemp -d)
 STAGE="$WORK/lobster_collect_$STAMP"
