@@ -224,8 +224,11 @@ def cases():
              form=form(lobster=True, bands=False, dos=False, reduce_cell=False),
              expect=dict(reduced=False)),
         dict(name='skewed-plain', poscar=POSCAR_SKEW,
-             form=form(bands=False, dos=False),
+             form=form(relax=False, bands=False, dos=False),
              expect=dict(reduced=False)),
+        dict(name='skewed-relax', poscar=POSCAR_SKEW,
+             form=form(bands=False, dos=False),
+             expect=dict(reduced=True, relax_fixed=True)),
         dict(name='text-elf-separate', poscar=POSCAR_AFM, form=None,
              text=("Project: elf2\nMethods: PBE functional\n"
                    "Tasks: SCF calculation\nMPI: 16\nELF: separate\n"),
@@ -467,6 +470,19 @@ def check_semantics(case, out_dir, instr):
             bad.append(f"Niggli: 02_scf/POSCAR |a| {np.round(lens, 3)} (reduced expected {ex['reduced']})")
         if ex['reduced'] != (out_dir / 'POSCAR.input').exists():
             bad.append(f"Niggli: POSCAR.input {'missing' if ex['reduced'] else 'should not exist'}")
+
+    if ex.get('relax_fixed'):          # relaxation: atom 1 F F F, the others T T T
+        L = (steps['01_relax'] / 'POSCAR').read_text().splitlines()
+        if L[7].strip().lower() != 'selective dynamics':
+            bad.append("01_relax/POSCAR: no 'Selective dynamics' line")
+        else:
+            n = sum(int(x) for x in L[6].split())
+            flags = [' '.join(l.split()[3:6]) for l in L[9:9 + n]]
+            if flags != ['F F F'] + ['T T T'] * (n - 1):
+                bad.append(f"01_relax/POSCAR flags {flags}")
+        if '--after-relax' not in (steps['02_scf'] / 'copy_from_relax.sh').read_text() or \
+                not (steps['02_scf'] / 'cell_reduce.py').is_file():
+            bad.append("02_scf: copy_from_relax.sh does not run cell_reduce.py --after-relax")
 
     if ex.get('blocks'):
         r, s_, b, dd = (incar_tags(steps[k] / 'INCAR') for k in ('01_relax', '02_scf', '03_bands', '04_dos'))

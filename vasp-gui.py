@@ -300,19 +300,34 @@ def api_visualize_poscar():
             'No visualizer set. Add a path under System Setup → Structure visualizer '
             'and click Save Settings.')), 400
 
-    try:
-        from poscar2xyz import poscar_text_to_xyz
-        xyz_txt = poscar_text_to_xyz(poscar_txt, source_name='POSCAR')
-    except Exception as exc:
-        return jsonify(error=f'POSCAR→XYZ conversion failed: {exc}'), 500
+    vis = os.path.basename(os.path.expanduser(visualizer)).lower()
+    if 'vesta' in vis:
+        # VESTA reads the POSCAR itself and draws the unit-cell box and bonds
+        tmp = tempfile.NamedTemporaryFile(suffix='.vasp', delete=False, mode='w')
+        tmp.write(poscar_txt + '\n')
+        tmp.close()
+        target = tmp.name
+    else:
+        # XYZ with atom 1 repeated at the 7 other cell corners; for Jmol a script that
+        # loads it and bonds the corners along the 12 cell edges (XYZ has no bonds)
+        try:
+            from poscar2xyz import poscar_text_to_xyz, jmol_cell_script
+            xyz_txt = poscar_text_to_xyz(poscar_txt, source_name='POSCAR', cell_images=True)
+        except Exception as exc:
+            return jsonify(error=f'POSCAR→XYZ conversion failed: {exc}'), 500
+        tmp = tempfile.NamedTemporaryFile(suffix='.xyz', delete=False, mode='w')
+        tmp.write(xyz_txt)
+        tmp.close()
+        target = tmp.name
+        if 'jmol' in vis:
+            n = int(xyz_txt.split('\n', 1)[0]) - 7
+            spt = tempfile.NamedTemporaryFile(suffix='.spt', delete=False, mode='w')
+            spt.write(jmol_cell_script(tmp.name, n))
+            spt.close()
+            target = spt.name
 
-    # Write XYZ to a temp file that persists until the visualizer reads it.
-    tmp = tempfile.NamedTemporaryFile(suffix='.xyz', delete=False, mode='w')
-    tmp.write(xyz_txt)
-    tmp.close()
-
     try:
-        _launch_visualizer(visualizer, tmp.name)
+        _launch_visualizer(visualizer, target)
     except Exception as exc:
         return jsonify(error=f'Could not launch visualizer: {exc}'), 500
 
@@ -453,7 +468,7 @@ def api_generate():
         lines.append(f'LOBSTER_SIGMA: {lobster_sigma}')
     if d.get('lobster') and lobster_isym:
         lines.append(f'LOBSTER_ISYM: {lobster_isym}')
-    if d.get('lobster') and d.get('reduce_cell') is False:
+    if (d.get('lobster') or d.get('relax')) and d.get('reduce_cell') is False:
         lines.append('REDUCE_CELL: off')      # default auto: a skewed cell is Niggli-reduced
 
     # Phonons parameters
@@ -1044,7 +1059,9 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
             return [1 + 2 * j for j in range(lo, hi)], [2 + 2 * j for j in range(lo, hi)]
         return [1 + j for j in range(lo, hi)], []
 
-    requested = [(p['element'], orb) for p in proj_list for orb in p.get('orbitals', [])]
+    # each (element, orbital) once: two rows for the same element must not count it twice
+    requested = list(dict.fromkeys((p['element'], orb) for p in proj_list
+                                   for orb in p.get('orbitals', [])))
     up = defaultdict(lambda: np.zeros(nedos))
     dn = defaultdict(lambda: np.zeros(nedos))
     offset = 6 + nedos
@@ -1459,7 +1476,7 @@ def _ewin_args():
 
 @_plot_locked
 def _relax_plot(pd_, ana, base, which):
-    """plots/<base>_relax_{energy,pressure}.png from 01_relax (modules/relax_plot.py);
+    """plots/<base>_relax_{energy,pressure,forces}.png from 01_relax (modules/relax_plot.py);
     (path, None) or (None, reason)."""
     import relax_plot
     d = os.path.join(pd_, '01_relax')
@@ -1469,6 +1486,8 @@ def _relax_plot(pd_, ana, base, which):
     out = os.path.join(ana, f'{base}_relax_{which}.png')
     if which == 'energy':
         return relax_plot.plot_energy(r, out, base), None
+    if which == 'forces':
+        return relax_plot.plot_forces(r, out, base), 'No forces in 01_relax/OUTCAR'
     if not r['volume_relax']:
         return None, f'Fixed cell volume (ISIF={r["isif"]}): no pressure plot'
     return relax_plot.plot_pressure(r, out, base), 'No pressure in OUTCAR'
@@ -1489,7 +1508,7 @@ def api_plot(slug, ptype):
     if ptype == 'dos': ptype = 'dos_proj'
 
     # ── relaxation: energy / pressure per ionic step (from 01_relax/OUTCAR*) ─
-    if ptype in ('relax_energy', 'relax_pressure'):
+    if ptype in ('relax_energy', 'relax_pressure', 'relax_forces'):
         out, why = _relax_plot(pd_, ana, base, ptype.split('_')[1])
         if out and os.path.exists(out):
             return send_file(out, mimetype='image/png')
@@ -1772,7 +1791,7 @@ def api_plot_pdf(slug, ptype):
     base = _slug_base(slug)
     zmin, zmax = _ewin_args()
     zoomed = zmin is not None or zmax is not None
-    if ptype in ('relax_energy', 'relax_pressure'):
+    if ptype in ('relax_energy', 'relax_pressure', 'relax_forces'):
         os.makedirs(ana, exist_ok=True)
         out, why = _relax_plot(pd_, ana, base, ptype.split('_')[1])
         pdf = os.path.splitext(out)[0] + '.pdf' if out else None
@@ -2731,6 +2750,11 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
     </button>
     <span id="poscar-elements" style="font-size:12px;color:var(--sub);"></span>
   </div>
+  <label class="ck" style="margin-top:8px;"><input type="checkbox" id="reduce_cell" checked onchange="showCellNote()"> Niggli-reduce a skewed cell (with a relaxation or LOBSTER; recommended)</label>
+  <span id="cell-note" style="display:block;font-size:11px;margin-top:2px;"></span>
+  <div style="font-size:11px;color:var(--sub);margin-top:4px;">
+    With a relaxation or LOBSTER step the cell is replaced by its Niggli-reduced cell (same crystal, shortest lattice vectors; original kept as <code>POSCAR.input</code>), and the relaxed cell is checked again before the SCF. The relaxation fixes atom 1 (selective dynamics <code>F F F</code>, all others <code>T T T</code>) so the crystal cannot drift; the cell still relaxes (ISIF=3).
+  </div>
 </div>
 
 <!-- POTCAR -->
@@ -2945,8 +2969,6 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
         <div class="f"><label>ISYM (NSCF, 0 or -1 only; forced to -1 with SOC)</label>
           <input id="lobster_isym" placeholder="0"></div>
       </div>
-      <label class="ck" style="margin-top:6px;"><input type="checkbox" id="reduce_cell" checked onchange="showCellNote()"> Niggli-reduce a skewed cell before the first step (recommended)</label>
-      <span id="cell-note" style="display:block;font-size:11px;margin-top:2px;"></span>
       <div style="font-size:11px;color:var(--sub);margin-top:6px;">
         Adds an <code>08_lobster</code> step: a symmetry-off NSCF (ISYM=0, or ISYM=-1 when SOC is on, since spin-orbit breaks time reversal) from the SCF charge density, then runs LOBSTER for COHP/COBI/COOP. The NSCF uses the SCF k-mesh (reduced in the same ratios if the symmetry-off mesh would exceed the memory limits, LOBSTER_MAX_KPTS / LOBSTER_MAX_KPW); edit <code>08_lobster/KPOINTS</code> on the Workflow page to override. Smearing sets <code>gaussianSmearingWidth</code> in <code>lobsterin</code> (default 0.10 eV if blank); you can also edit <code>lobsterin</code> directly on the Workflow page. In a long, thin, skewed cell LOBSTER's projection breaks down (charge spilling of tens of %, whatever the basis), so such a cell is replaced by its Niggli-reduced cell (same crystal, shortest lattice vectors) before the relaxation; the original is kept as <code>POSCAR.input</code>. Aggregate per-bond ICOHP/ICOBI with <code>lobster_postprocess.py</code>. Needs the lobster binary on PATH (override with <code>$LOBSTER_BIN</code>).
       </div>
@@ -3526,7 +3548,7 @@ async function fetchKpath(){
     if(st) st.textContent = 'no spglib path ('+e.message+'): blank = the agent\'s own choice';
   }
 }
-// LOBSTER block: say whether this POSCAR is skewed and what will happen to it
+// POSCAR card: say whether this POSCAR is skewed and what will happen to it
 let _cellInfo = null;
 function showCellNote(){
   const el = document.getElementById('cell-note');
@@ -3537,7 +3559,7 @@ function showCellNote(){
     el.textContent = 'Skewed cell '+a+': it will be Niggli-reduced to '+b+' (original kept as POSCAR.input).';
     el.style.color = 'var(--sub)';
   } else {
-    el.textContent = 'WARNING: skewed cell '+a+' kept as given: LOBSTER charge spilling may be large (reduced cell: '+b+').';
+    el.textContent = 'WARNING: skewed cell '+a+' kept as given (with LOBSTER the charge spilling may be large; reduced cell: '+b+').';
     el.style.color = 'var(--warn, #b45309)';
   }
 }
@@ -4238,6 +4260,7 @@ async function buildResults(){
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
       <a href="/api/plot_pdf/${PROJECT}/relax_energy" class="btn btn-ghost btn-sm" download title="Download energy PDF">⬇ Energy PDF</a>
       <a href="/api/plot_pdf/${PROJECT}/relax_pressure" class="btn btn-ghost btn-sm" download title="Download pressure PDF">⬇ Pressure PDF</a>
+      <a href="/api/plot_pdf/${PROJECT}/relax_forces" class="btn btn-ghost btn-sm" download title="Download forces PDF">⬇ Forces PDF</a>
     </div>
     <div class="plot-grid">
       <div class="plot-card">
@@ -4251,6 +4274,12 @@ async function buildResults(){
         <img id="img-relax_pressure" src="/api/plot/${PROJECT}/relax_pressure?t=${ts}" style="max-width:100%;cursor:pointer;"
              onclick="window.open(this.src)"
              onerror="this.parentElement.innerHTML='<h4>Pressure vs ionic step</h4><div class=no-plot>Not available — needs a volume relaxation (ISIF = 3, 6, 7 or 8) in 01_relax</div>'">
+      </div>
+      <div class="plot-card">
+        <h4>Force on atom 1 vs ionic step</h4>
+        <img id="img-relax_forces" src="/api/plot/${PROJECT}/relax_forces?t=${ts}" style="max-width:100%;cursor:pointer;"
+             onclick="window.open(this.src)"
+             onerror="this.parentElement.innerHTML='<h4>Force on atom 1 vs ionic step</h4><div class=no-plot>Not available — run 01_relax</div>'">
       </div>
     </div>
   </div>`;

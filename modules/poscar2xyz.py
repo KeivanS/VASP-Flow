@@ -26,9 +26,34 @@ from pathlib import Path
 
 # ── Core parser ───────────────────────────────────────────────────────────────
 
-def poscar_text_to_xyz(text: str, source_name: str = "POSCAR") -> str:
+# Images of atom 1 at the other seven corners of the cell (in lattice vectors), in the
+# order they are appended to the XYZ: atoms n+1 ... n+7 (Jmol atomno, 1-based).
+CELL_IMAGES = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (1, 0, 1), (0, 1, 1), (1, 1, 1)]
+
+
+def cell_edge_pairs(n_atoms: int):
+    """The 12 cell edges as (atomno, atomno) pairs between atom 1 and its 7 images."""
+    corner = {(0, 0, 0): 1}
+    corner.update({c: n_atoms + 1 + k for k, c in enumerate(CELL_IMAGES)})
+    return [(corner[a], corner[b]) for a in corner for b in corner
+            if a < b and sum(x != y for x, y in zip(a, b)) == 1]
+
+
+def jmol_cell_script(xyz_path: str, n_atoms: int) -> str:
+    """Jmol script: load the XYZ (with the 7 images of atom 1 appended) and bond the 8
+    corners along the 12 cell edges, so the unit cell is outlined."""
+    lines = ['load "%s";' % xyz_path]
+    lines += ['connect (atomno=%d) (atomno=%d);' % pq for pq in cell_edge_pairs(n_atoms)]
+    lines.append('echo "unit cell: atom 1 and its 7 images (atoms %d-%d) joined along the cell edges";'
+                 % (n_atoms + 1, n_atoms + 7))
+    return '\n'.join(lines) + '\n'
+
+
+def poscar_text_to_xyz(text: str, source_name: str = "POSCAR", cell_images: bool = False) -> str:
     """
     Convert the string content of a POSCAR file to XYZ format.
+    cell_images=True appends atom 1 translated by R1, R2, R3, R1+R2, R1+R3, R2+R3 and
+    R1+R2+R3 (CELL_IMAGES), so the 8 corners of the cell are drawn.
     Returns the XYZ string, or raises ValueError with a descriptive message.
     """
     lines = text.splitlines()
@@ -166,8 +191,13 @@ def poscar_text_to_xyz(text: str, source_name: str = "POSCAR") -> str:
     if comment_line:
         xyz_comment = f'{comment_line}  |  {xyz_comment}'
 
-    out_lines = [str(total_atoms), xyz_comment]
-    for elem, (cx, cy, cz) in zip(elements, cart_coords):
+    atoms = list(zip(elements, cart_coords))
+    if cell_images and atoms:
+        e1, r1 = atoms[0]
+        for c in CELL_IMAGES:
+            atoms.append((e1, tuple(r1[j] + sum(c[i] * lat[i][j] for i in range(3)) for j in range(3))))
+    out_lines = [str(len(atoms)), xyz_comment]
+    for elem, (cx, cy, cz) in atoms:
         out_lines.append(f"{elem:<4s}  {cx:16.10f}  {cy:16.10f}  {cz:16.10f}")
 
     return "\n".join(out_lines) + "\n"

@@ -8,6 +8,15 @@ import os, re, sys, shutil
 from typing import Dict, List, Any
 import numpy as np
 
+
+def _cell_reduce():
+    """modules/cell_reduce.py, whether this module is imported as modules.* or directly."""
+    try:
+        from modules import cell_reduce
+    except ImportError:
+        import cell_reduce
+    return cell_reduce
+
 # ── Platform settings ────────────────────────────────────────────────────────
 # Read from environment (set via site.env + Makefile export).
 # These can also be set as shell environment variables directly.
@@ -614,9 +623,14 @@ class VASPInputGenerator:
         # relaxation doesn't need a dense grid.  An explicit KPOINTS block wins.
         self._write_kpoints(output_dir, 'relax')
 
-        # Copy POSCAR
-        os.system(f"cp {self.poscar} {output_dir}/POSCAR")
-        
+        # POSCAR with atom 1 fixed (selective dynamics F F F, all others T T T): removes
+        # the rigid drift of the crystal; the cell itself still relaxes (ISIF=3)
+        selective_first_fixed = _cell_reduce().selective_first_fixed
+        with open(self.poscar) as fh:
+            txt = fh.read()
+        with open(f"{output_dir}/POSCAR", 'w') as fh:
+            fh.write(selective_first_fixed(txt))
+
         # Job script
         job_script = self._generate_job_script('relax', self._get_vasp_exec())
         with open(f"{output_dir}/run.sh", 'w') as f:
@@ -739,9 +753,13 @@ class VASPInputGenerator:
                 f.write("#!/bin/bash\n")
                 f.write(f'HERE="$(cd "$(dirname "$0")" && pwd)"\n')
                 f.write(f'RELAX_DIR="$HERE/{rel_relax}"\n')
-                self._write_copy_if_newer(f, '$RELAX_DIR', 'CONTCAR', 'POSCAR', '01_relax')
+                should_reduce = _cell_reduce().should_reduce
+                f.write(self._RELAXED_POSCAR_SH.replace(
+                    '@NO_REDUCE@', '' if should_reduce(self.instructions)[0] else ' --no-reduce'))
                 f.write(self._relax_restart_snippet())
             os.chmod(f"{output_dir}/copy_from_relax.sh", 0o755)
+            here = os.path.dirname(os.path.abspath(__file__))
+            shutil.copy2(os.path.join(here, 'cell_reduce.py'), os.path.join(output_dir, 'cell_reduce.py'))
         
         # Separate ELF pass (see _elf_mode): elf/INCAR + run_elf.sh
         elf_dir = os.path.join(output_dir, 'elf')
@@ -815,6 +833,35 @@ fi
 rm -f WAVECAR CHGCAR
 '''
 
+    # copy_from_relax.sh, first part: the relaxed structure.  cell_reduce.py (copied next to
+    # it, numpy only) drops the selective-dynamics flags of the relaxation and Niggli-reduces
+    # the relaxed cell; a new basis rewrites the later KPOINTS and sets .cell_reduced.
+    _RELAXED_POSCAR_SH = r'''
+# ── Relaxed structure ────────────────────────────────────────────────────────
+PY="${ANALYSIS_PYTHON:-python3}"
+if [ -s "$RELAX_DIR/CONTCAR" ] && [ "$RELAX_DIR/CONTCAR" -nt "$HERE/POSCAR" ]; then
+    cp "$RELAX_DIR/CONTCAR" "$HERE/POSCAR"
+    echo "  POSCAR updated from 01_relax (CONTCAR is newer)"
+    if "$PY" -c 'import numpy' 2>/dev/null; then
+        "$PY" "$HERE/cell_reduce.py" --after-relax "$HERE"@NO_REDUCE@ \
+            || echo "  WARNING: cell_reduce.py failed; the SCF uses the relaxed cell as written by VASP"
+    else
+        # no numpy: only drop the selective-dynamics flags (the cell is not checked)
+        awk 'NR==1{print; next} NR<=5{print; next}
+             NR==6{print; if ($1 ~ /^[0-9]+$/) {c=6; for(i=1;i<=NF;i++) n+=$i}; next}
+             NR==7 && !c {print; for(i=1;i<=NF;i++) n+=$i; c=7; next}
+             NR==c+1 && /^[ \t]*[Ss]/ {sel=1; next}
+             sel && k<n && NR>c+2 {print "  " $1, $2, $3; k++; next}
+             {print}' "$HERE/POSCAR" > "$HERE/POSCAR.tmp" && mv "$HERE/POSCAR.tmp" "$HERE/POSCAR"
+        echo "  WARNING: $PY has no numpy: selective-dynamics flags removed, the cell was not Niggli-checked"
+    fi
+elif [ -s "$RELAX_DIR/CONTCAR" ]; then
+    echo "  Keeping existing POSCAR (local copy is newer than 01_relax)"
+else
+    echo "  WARNING: 01_relax/CONTCAR not found; keeping existing POSCAR"
+fi
+'''
+
     # Bash appended to copy_from_relax.sh.  Decided at RUN time (not generation
     # time) so that k-meshes patched or edited after generation are honoured.
     _RELAX_RESTART_SH = r'''
@@ -840,6 +887,11 @@ set_incar_tag() { # file TAG value  (replace any existing line, then append)
 
 if [ "$USER_SET_START" = "1" ]; then
     echo "  ISTART/ICHARG set explicitly in the instructions: leaving them, nothing read from 01_relax"
+elif [ -f "$HERE/.cell_reduced" ]; then
+    rm -f "$HERE/CHGCAR" "$HERE/WAVECAR"
+    set_incar_tag "$HERE/INCAR" ISTART 0
+    set_incar_tag "$HERE/INCAR" ICHARG 2
+    echo "  new cell basis after the relaxation: SCF starts from atomic charges (ISTART=0, ICHARG=2)"
 elif [ ! -s "$RELAX_DIR/CHGCAR" ]; then
     echo "  WARNING: 01_relax/CHGCAR not found; SCF starts from scratch"
 else

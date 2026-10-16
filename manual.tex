@@ -479,7 +479,7 @@ Execution profile & \emph{Workstation} runs VASP on this computer; \emph{SLURM H
   \cmd{sbatch} scripts (set \cmd{profiles/slurm.json} first) \\
 MPI cores & cores per calculation \\
 POSCAR & paste the structure or \emph{Load file}; \emph{Visualize} opens it in the viewer of
-  System Setup (Jmol, VESTA, OVITO, \ldots) \\
+  System Setup, with the unit cell outlined \\
 POTCAR directory & blank = the library of System Setup; an element with several variants
   (\cmd{Ga}, \cmd{Ga_d}) gets a chooser \\
 \bottomrule
@@ -1376,9 +1376,9 @@ and write PNG and PDF files into the project's \cmd{plots/} folder.
 \thead
 Plot & Made from & File in \cmd{plots/} \\ \midrule
 Relaxation: total energy per ionic step; with a volume relaxation (ISIF = 3, 6, 7, 8) also
-  the pressure, with its target (PSTRESS or 0) & \cmd{01_relax/OUTCAR}, restarts included
+  the pressure, with its target (PSTRESS or 0); the force on atom 1 & \cmd{01_relax/OUTCAR}, restarts included
   (\cmd{OUTCAR.timeout*}, \cmd{OUTCAR.pass*}; a dotted line marks each) &
-  \cmd{*_relax_energy.*}, \cmd{*_relax_pressure.*} \\
+  \cmd{*_relax_energy.*}, \cmd{*_relax_pressure.*}, \cmd{*_relax_forces.*} \\
 Band structure & \cmd{03_bands/EIGENVAL} (sumo or \cmd{vasprun.xml} as fallback);
   spin up/down in two colours & \cmd{<project>_band.png/pdf} \\
 Total and projected DOS & \cmd{04_dos/DOSCAR}; projections as asked in
@@ -1539,9 +1539,10 @@ Keyword (continued) & Meaning \\ \midrule
   \cmd{standard}, \cmd{max}, \cmd{scan}, \cmd{off} (Appendix~\ref{app:spilling}). \\
 \texttt{LOBSTER\_SCAN\_ABOVE:} & Charge spilling (\%) above which \cmd{auto} scans the bases (default 5). \\
 \texttt{LOBSTER\_NBANDS\_FACTOR:} & NBANDS of the LOBSTER NSCF = factor $\times$ the largest basis (default 1). \\
-\texttt{REDUCE\_CELL:} & \cmd{auto} (default: Niggli-reduce a skewed cell before the first step when
-  LOBSTER runs), \cmd{on} (also without LOBSTER), \cmd{off} (keep the cell as given); alias
-  \texttt{NIGGLI:} (Section~\ref{sec:lobster}). \\
+\texttt{REDUCE\_CELL:} & \cmd{auto} (default: Niggli-reduce a skewed cell, axes along the
+  Cartesian axes, before and after a relaxation or before LOBSTER), \cmd{on} (also
+  without them), \cmd{off} (keep the cell as given); alias \texttt{NIGGLI:}
+  (Sections~\ref{sec:lobster}, \ref{sec:handoff}). \\
 \bottomrule
 \end{tabularx}
 
@@ -2082,8 +2083,8 @@ binary.
         projection breaks down: the Materials Project primitive cell of 15R-SiC (mp-11713, three
         12.7\,\AA\ vectors 13.9$^\circ$ apart) gave 18--58\,\% charge spilling with every basis,
         and its Niggli-reduced cell (3.08, 3.08, 12.71\,\AA; the same crystal) 1.5\,\%.  When
-        LOBSTER is requested, the agents therefore replace such a cell by its Niggli-reduced
-        cell before the relaxation, so every step runs on it; the original is kept as
+        LOBSTER or a relaxation is requested, the agents therefore replace such a cell by its
+        Niggli-reduced cell before the relaxation, so every step runs on it; the original is kept as
         \cmd{POSCAR.input}, and the agent prints both cells.  A cell that is already reduced is
         left exactly as given (axis order included).  \cmd{REDUCE_CELL: off} (GUI: untick
         \emph{Niggli-reduce a skewed cell}) keeps a skewed cell, with a warning; the cell is
@@ -3428,6 +3429,11 @@ so k-meshes edited or patched after generation are handled.  Putting
 \texttt{ISTART} or \texttt{ICHARG} in an \texttt{INCAR scf:} block disables the
 mechanism.
 
+\paragraph{Atom 1 fixed, relaxed cell reduced.}  The relaxation keeps atom~1 fixed (selective
+dynamics), so the crystal cannot drift; the cell still relaxes (ISIF~=~3).  Before the
+relaxation and again before the SCF the cell is Niggli-reduced and rotated so that its axes
+lie along the Cartesian axes of the conventional cell (\cmd{REDUCE_CELL}).
+
 \subsection{Band-path detection}
 \label{app:kpath}
 
@@ -4329,6 +4335,10 @@ as commented-out lines.
     \texttt{POSCAR.input}): the 15R-SiC primitive cell went from 18\,\% to 1.5\,\% charge
     spilling.  \texttt{vasp\_diagnose.py} no longer limits the number of repair rounds
     (\texttt{-{}-max-rounds N} sets a limit).
+    Relaxations fix atom~1; the cell is Niggli-reduced and rotated along the Cartesian axes
+    before and after the relaxation.  The force on atom~1 is plotted with the relaxation
+    (GUI and \texttt{makeplots.sh}).  \emph{Visualize} outlines the unit cell.  Projected DOS:
+    a duplicated projection row no longer counts an element twice.
 \end{description}
 
 \vfill

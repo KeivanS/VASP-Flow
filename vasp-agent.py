@@ -1132,7 +1132,8 @@ class VASPWorkflowAgent:
         orb_map = defaultdict(list)
         for dp in dos_proj:
             el, orb = dp.split(':') if ':' in dp else (dp, 's')
-            orb_map[el].append(orb)
+            if orb not in orb_map[el]:
+                orb_map[el].append(orb)
         # sumo format: "El orb1 orb2, El2 orb1"
         sumo_orb = ', '.join(f"{el} {' '.join(orbs)}" for el, orbs in orb_map.items())
 

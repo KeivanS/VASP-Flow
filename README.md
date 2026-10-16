@@ -125,7 +125,7 @@ Subdivisions Nᵢ are proportional to the reciprocal lattice vector magnitudes (
 
 | Task | When to use |
 |---|---|
-| ☑ Structure relaxation | Almost always — optimises atomic positions first |
+| ☑ Structure relaxation | Almost always — optimises atomic positions and the cell (ISIF=3) first. Atom 1 is fixed (selective dynamics `F F F`, the others `T T T`) so the crystal cannot drift; a skewed cell is Niggli-reduced (axes along the Cartesian axes) before it, and the relaxed cell again before the SCF (*Niggli-reduce a skewed cell* in the POSCAR card, `REDUCE_CELL`) |
 | ☑ SCF | Self-consistent charge density — needed before bands, DOS, or LOBSTER. The ELF checkbox inside it (on by default) also writes an ELFCAR for electron-localization plots |
 | ☑ Band structure | Electronic band dispersion along a k-path |
 | ☑ DOS | Density of states, optionally projected on orbitals |
@@ -157,7 +157,8 @@ Switch to the **Results** tab:
 - **Fat bands** (orbital-weighted band structure) render next to the raw bands from `03_bands/PROCAR` (LORBIT=11 is always set): colored markers per element and orbital channel, marker size ∝ projection weight.
 - Click **Run sumo-bandplot** or **Run sumo-dosplot** to regenerate a plot after editing settings.
 - **ELF plots** (from the SCF's ELFCAR): 1D profiles along the non-equivalent 1st- and 2nd-shell bonds, plus a 2D ELF map on the plane through an atom and its 1st/2nd neighbours.
-- **Relaxation plots**: total energy vs ionic step and, when the volume relaxes (ISIF = 3, 6, 7, 8), the pressure vs ionic step with its target (PSTRESS or 0); restarts of the relaxation are joined. `makeplots.sh` writes the same plots to `plots/*_relax_energy.*` and `*_relax_pressure.*`.
+- **Relaxation plots**: total energy vs ionic step and, when the volume relaxes (ISIF = 3, 6, 7, 8), the pressure vs ionic step with its target (PSTRESS or 0); and Fx, Fy, Fz on atom 1 (the fixed atom; EDIFFG dashed when it is a force criterion); restarts of the relaxation are joined. `makeplots.sh` writes the same plots to `plots/*_relax_energy.*`, `*_relax_pressure.*` and `*_relax_forces.*`.
+- **Visualize** (POSCAR card): Jmol gets atom 1 repeated at the 7 other cell corners, bonded along the 12 cell edges; VESTA opens the POSCAR itself (it draws the cell).
 - **LOBSTER plots**: −COHP, COBI and COOP vs energy — total over all bonds plus per-pair 1st/2nd-shell overlays, annotated with the integral to E_F (ICOHP/ICOBI/ICOOP), the antibonding integral, the antibonding fraction f_AB, and the bonding→antibonding crossing energy.
 - Born effective charges and phonon spectra appear if you ran DFPT / phonons.
 - Bands, DOS and LOBSTER cards have an **Energy window** bar — enter min/max (eV) and click Zoom to re-render the plot (and its PDF download) on that window.

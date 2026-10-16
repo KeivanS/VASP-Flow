@@ -1302,7 +1302,8 @@ fi'''
         orb_map = defaultdict(list)
         for dp in dos_proj:
             el, orb = dp.split(':') if ':' in dp else (dp, 's')
-            orb_map[el].append(orb)
+            if orb not in orb_map[el]:
+                orb_map[el].append(orb)
         sumo_orb = ', '.join(f"{el} {' '.join(orbs)}" for el, orbs in orb_map.items())
         if orb_map:
             import json as _json

@@ -231,6 +231,9 @@
 │ makeplots.sh plots the relaxation: total energy per ionic step, and with a   │
 │ volume relaxation (ISIF 3/6/7/8) the pressure vs its target (PSTRESS or 0);  │
 │ restarts (OUTCAR.timeout*/pass*) joined -> plots/*_relax_{energy,pressure}.* │
+│ and Fx, Fy, Fz on atom 1 per ionic step -> plots/*_relax_forces.*            │
+│ The relaxation fixes atom 1 (selective dynamics F F F, others T T T); the    │
+│ relaxed cell is Niggli-reduced again before the SCF (REDUCE_CELL).           │
 │ makeplots.sh plots bands from EIGENVAL (band_plot.py — survives a truncated  │
 │ vasprun.xml). 03_bands always sets LORBIT=11, so a PROCAR is written and     │
 │ the orbital-weighted FAT BANDS are generated automatically alongside:         │
@@ -419,8 +422,8 @@
 │ auto, spilling > LOBSTER_SCAN_ABOVE (5 %) reruns LOBSTER per tabulated basis  │
 │ and keeps the lowest (08_lobster/basis_scan.tsv).  NBANDS >= largest basis    │
 │ x LOBSTER_NBANDS_FACTOR.  Older HT runs: ht_tools/fix_spilling.sh --submit.   │
-│ Skewed cell + LOBSTER: Niggli-reduced before the first step (same crystal;    │
-│ 15R-SiC 18 % -> 1.5 % spilling); original kept as POSCAR.input.               │
+│ Skewed cell + LOBSTER/relax: Niggli-reduced before the first step (same       │
+│ crystal; 15R-SiC 18 % -> 1.5 % spilling); original kept as POSCAR.input.      │
 │ REDUCE_CELL: auto (default) | on | off;  ht_runs.py --no-reduce-cell.         │
 │ Binary: $LOBSTER_BIN  (default lobster-5.1.0-OSX; ~ in site.env is expanded). │
 │ makeplots.sh also writes plots/*_lobster_dos.{png,pdf}: LOBSTER projected     │

@@ -167,7 +167,8 @@ def proj_dos(D, prefix, proj_list):
             return [1 + 2 * j for j in range(lo, hi)], [2 + 2 * j for j in range(lo, hi)]
         return [1 + j for j in range(lo, hi)], []
 
-    req = [(p['element'], o) for p in proj_list for o in p.get('orbitals', [])]
+    # each (element, orbital) once: two rows for the same element must not count it twice
+    req = list(dict.fromkeys((p['element'], o) for p in proj_list for o in p.get('orbitals', [])))
     up = defaultdict(lambda: np.zeros(nedos)); dn = defaultdict(lambda: np.zeros(nedos))
     offset = 6 + nedos
     for i in range(D['nions']):
