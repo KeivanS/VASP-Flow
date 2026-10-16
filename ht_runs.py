@@ -811,7 +811,10 @@ LIMIT="${1:-0}"
 USER_NAME="${USER:-$(whoami)}"
 
 queued() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | wc -l | tr -d ' '; }
-in_queue() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | grep -q "^$1_"; }
+# a job of this material from THIS folder (another run of the same mp-ID does not count)
+in_queue() { local w; w="$(cd "$2" && pwd -P)"
+             squeue -h -u "$USER_NAME" -o '%j %Z' 2>/dev/null | grep -qxF -e "$1_relax $w" -e "$1_scf $w" \
+                 -e "$1_bands $w" -e "$1_lobster $w"; }
 step_done() {   # $1 = material dir, $2 = step
     local o
     case "$2" in
@@ -840,7 +843,7 @@ while read -r id; do
     d="$HERE/materials/$id"
     [ -d "$d" ] || continue
     [ -f "$d/.done" ] && continue
-    in_queue "$id" && continue
+    in_queue "$id" "$d" && continue
     if [ ! -f "$d/POTCAR" ]; then
         echo "SKIP $id -- no POTCAR (make_potcars.sh did not build one)"
         continue

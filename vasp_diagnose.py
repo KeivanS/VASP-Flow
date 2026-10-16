@@ -377,8 +377,27 @@ class Material(object):
             names += ['%s_%s' % (self.name, s) for s in ORDER]
         return set(names)
 
+    def mine(self, workdir):
+        """Can a job with this working directory be this folder's?  ht_runs.py submits every
+        job from materials/<id> (job names <id>_<step> repeat in every run of that mp-ID), so
+        there the directory must be the material's folder or the run's top folder; the agents'
+        submit_all.sh submits from wherever it is called, so their jobs match by name alone."""
+        if self.layout != 'ht' or not workdir:
+            return True
+        here = realdir(self.path)
+        return workdir == here or workdir.startswith(here + os.sep) or workdir == realdir(self.root)
+
     def queued(self, queue):
-        return bool(self.jobnames() & queue)
+        names = self.jobnames()
+        return any(n in names and self.mine(w) for n, w in queue)
+
+    def rec(self, recs, step):
+        """Newest sacct record of the step's job from this folder (None if none)."""
+        name, best = self.jobname(step), None
+        for (n, w), r in recs.items():
+            if n == name and self.mine(w) and (best is None or r['num'] > best['num']):
+                best = r
+        return best
 
     def _ht_env(self):
         env = {}
@@ -622,7 +641,7 @@ def conv_check(m, recs):
     bad = {}
     for t in m.conv:
         key = 'conv:' + t
-        rec = recs.get(m.jobname(key))
+        rec = m.rec(recs, key)
         broken, nelm = [], []
         for p in conv_points(m, t):
             out = os.path.join(m.conv_f(t), p, 'OUTCAR')
@@ -680,7 +699,7 @@ def conv_plan(m, bad, recs, args):
             part_, _, tpn_ = m.batch()
             extra.append(mem_option(part_, tpn_))
         elif cls == 'timeout':
-            rec = recs.get(m.jobname(key))
+            rec = m.rec(recs, key)
             try:
                 sec = to_sec(rec['limit'])
             except (TypeError, KeyError, ValueError):
@@ -1083,9 +1102,11 @@ def write_script(path, m, status, errs, redo_txt, fix, submit, out_dir, rnd=1, w
              'cd "$D" || exit 1',
              '# guard: nothing of this folder queued, outputs unchanged since the diagnosis']
     if m.layout != 'local':
-        names = ['^%s$' % ere(j) for j in sorted(m.jobnames())]
-        body.append('if squeue -h -u "${USER:-$(whoami)}" -o "%%j" 2>/dev/null | grep -qE %s; then '
-                    'echo "-- $LABEL: jobs queued, skipped"; exit 0; fi' % q('|'.join(names)))
+        jobs = '|'.join(ere(j) for j in sorted(m.jobnames()))
+        names = ['^(%s)\\|(%s(/.*)?|%s)$' % (jobs, ere(realdir(m.path)), ere(realdir(m.root))) if m.layout == 'ht'
+                 else '^(%s)\\|' % jobs]
+        body.append('if squeue -h -u "${USER:-$(whoami)}" -o "%%j|%%Z" 2>/dev/null | grep -qE %s; then '
+                    'echo "-- $LABEL: jobs queued, skipped"; exit 0; fi' % q(names[0]))
     files = fingerprint_files(m)
     body += ['FP=""; for f in %s; do FP="$FP $f:$(stat -c %%Y "$f" 2>/dev/null || echo none)"; done' % ' '.join(files),
              'if [ "${FP# }" != %s ]; then echo "-- $LABEL: outputs changed since the diagnosis - '
@@ -1193,18 +1214,36 @@ def read_list(path, roots):
 
 
 def sacct_records(since):
+    """{(job name, working directory): newest record}; the directory tells two runs of the
+    same material (same job names) apart."""
     recs = {}
-    txt = run(['sacct', '-u', os.environ.get('USER', ''), '-S', since, '-X', '-n', '-P',
-               '-o', 'JobID,JobName,State,Elapsed,Timelimit,NNodes'])
+    cmd = ['sacct', '-u', os.environ.get('USER', ''), '-S', since, '-X', '-n', '-P',
+           '-o', 'JobID,JobName,State,Elapsed,Timelimit,NNodes,WorkDir']
+    txt = run(cmd) or run(cmd[:-1] + ['JobID,JobName,State,Elapsed,Timelimit,NNodes'])   # old Slurm: no WorkDir
     for line in txt.splitlines():
         p = line.split('|')
         if len(p) < 5 or not p[0].split('_')[0].isdigit():
             continue
         jid = int(p[0].split('_')[0].split('.')[0])
-        if p[1] not in recs or jid >= recs[p[1]]['num']:
-            recs[p[1]] = {'num': jid, 'id': str(jid), 'state': p[2], 'elapsed': p[3], 'limit': p[4],
-                          'nodes': p[5] if len(p) > 5 else ''}
+        key = (p[1], realdir(p[6]) if len(p) > 6 else '')
+        if key not in recs or jid >= recs[key]['num']:
+            recs[key] = {'num': jid, 'id': str(jid), 'state': p[2], 'elapsed': p[3], 'limit': p[4],
+                         'nodes': p[5] if len(p) > 5 else ''}
     return recs
+
+
+def squeue_jobs():
+    """{(job name, working directory)} of our queued jobs."""
+    out = set()
+    for line in run(['squeue', '-h', '-u', os.environ.get('USER', ''), '-o', '%j|%Z']).splitlines():
+        if '|' in line:
+            n, w = line.split('|', 1)
+            out.add((n.strip(), realdir(w.strip())))
+    return out
+
+
+def realdir(path):
+    return os.path.realpath(path) if path else ''
 
 
 # ── repair history, your settings, certainty ─────────────────────────────────
@@ -1347,7 +1386,7 @@ def main():
     out_dir = os.path.abspath(args.out) if args.out else next_round_dir(os.getcwd())
     os.makedirs(os.path.join(out_dir, 'fix'), exist_ok=True)
     recs = sacct_records(args.since)
-    queue = set(run(['squeue', '-h', '-u', os.environ.get('USER', ''), '-o', '%j']).split())
+    queue = squeue_jobs()
     rows, todo, mats = [], [], []
     count = Counter()
     for mid in missing:
@@ -1371,7 +1410,7 @@ def main():
             else:
                 status[key] = 'ok'
         for s in m.steps:
-            mrecs[s] = recs.get(m.jobname(s))
+            mrecs[s] = m.rec(recs, s)
             st = step_ok(m, s)
             if st == 'ok':
                 status[s] = 'ok'

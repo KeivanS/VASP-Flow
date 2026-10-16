@@ -4320,6 +4320,9 @@ as commented-out lines.
     \texttt{-{}-mem} (smallest node with enough cores, from \cmd{sinfo}): \texttt{-{}-mem=0} on
     Rivanna's mixed \texttt{standard} partition (40 and 96 cores) left 96-task jobs pending
     with \texttt{BadConstraints}.
+    Two runs of the same material in different folders (e.g.\ two POTCAR choices) no longer
+    mix: \texttt{submit\_all.sh} and \texttt{vasp\_diagnose.py} match queued and finished jobs
+    by name \emph{and} working directory (before, the second folder was skipped as queued).
     A skewed cell is Niggli-reduced before the first step when LOBSTER runs
     (\texttt{modules/cell\_reduce.py}; \texttt{REDUCE\_CELL: auto|on|off}, GUI checkbox with a
     note of both cells, \texttt{ht\_runs.py -{}-no-reduce-cell}; original kept as
