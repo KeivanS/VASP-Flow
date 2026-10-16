@@ -82,13 +82,57 @@ def niggli(A, tol=1e-5):
     return M @ np.array(A, dtype=float), M
 
 
+TURNS = ((1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1))   # 180-degree turns about x, y, z
+
+
+def nice_basis(B):
+    """(B', N): the basis of the same lattice, with the same vector lengths (so still reduced)
+    and right-handed, that reads best in Cartesian coordinates, B' = N @ B (N integer).
+    Slot i prefers a vector along axis i (cost 0), else one perpendicular to axis i (cost 1),
+    else 2; a longer vector before a shorter one costs 1.5: a tetragonal cell gets (a,0,0),
+    (0,a,0), ...; an fcc one (0,a,a), (a,0,a), (a,a,0); a hexagonal one (a,0,0),
+    (a/2,a*sqrt(3)/2,0), c.  Ties: most positive components.  Returns (B', N, score)."""
+    import itertools
+    B = np.asarray(B, dtype=float)
+    lens = sorted(np.linalg.norm(B, axis=1))
+    tol = 1e-4 * lens[-1]
+    cand = []
+    for c in itertools.product(range(-2, 3), repeat=3):
+        v = np.array(c) @ B
+        if any(c) and any(abs(np.linalg.norm(v) - l) < tol for l in lens):
+            cand.append((np.array(c), v))
+
+    def cost(v, i):                 # along axis i: 0; off-axis and perpendicular to i: 1
+        z = np.abs(v) < tol
+        if z.sum() == 2:
+            return 0 if not z[i] else 2
+        return 1 if (z.sum() == 1 and z[i]) else 2
+    best = None
+    for (n1, v1), (n2, v2), (n3, v3) in itertools.permutations(cand, 3):
+        N = np.array([n1, n2, n3])
+        if round(np.linalg.det(N)) != 1:
+            continue
+        if any(abs(x - y) > tol for x, y in zip(sorted(np.linalg.norm([v1, v2, v3], axis=1)), lens)):
+            continue
+        V = np.array([v1, v2, v3])
+        L = np.linalg.norm(V, axis=1)
+        inv = sum(L[i] > L[j] + tol for i in range(3) for j in range(i + 1, 3))
+        score = (cost(v1, 0) + cost(v2, 1) + cost(v3, 2) + 1.5 * inv, -int(np.sum(V > tol)),
+                 tuple(-np.round(V, 6).ravel()))
+        if best is None or score < best[0]:
+            best = (score, N, V)
+    return (best[2], best[1], best[0][:2]) if best else (B, np.eye(3, dtype=int), (9, 0))
+
+
 def orient(B, F, types):
-    """Rotate the lattice rows B (Cartesian frame only; fractional coordinates unchanged) so
-    that the axes of the conventional cell lie along x, y, z: spglib's standardized
-    orientation, e.g. a body-centred tetragonal cell becomes (a/2, a/2, c/2)-type vectors and a
-    hexagonal one has a along x and c along z.  Without spglib (or no symmetry found):
-    a along x, b in the x-y plane.  Returns (rotated B, how)."""
+    """Rotate the lattice rows B (the crystal turns with them; fractional coordinates stay)
+    so that the axes of the conventional cell lie along x, y, z: spglib's standardized
+    orientation; without spglib (or no symmetry found) a along x, b in the x-y plane.  Then
+    the 180-degree turn about x, y or z and the basis of the same reduced cell that read best
+    (nice_basis).  Returns (B', N, how) with B' = N @ B rotated; new fractional coordinates
+    are F @ inv(N)."""
     B = np.array(B, dtype=float)
+    Bs, how = None, ''
     try:
         import spglib
         ds = None
@@ -100,20 +144,22 @@ def orient(B, F, types):
             R = np.array(ds['std_rotation_matrix'] if isinstance(ds, dict) else ds.std_rotation_matrix)
             sg = ds['international'] if isinstance(ds, dict) else ds.international
             if abs(np.linalg.det(R) - 1) < 1e-6:
-                Bs = B @ R.T
-                # of the 180-degree turns about x, y, z (axes stay aligned), the one with the
-                # most positive components; -0.0 printed as 0.0
-                Bs = max((Bs * d for d in ((1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1))),
-                         key=lambda X: (np.sum(X > 1e-8), X.sum()))
-                Bs[np.abs(Bs) < 1e-10] = 0.0
-                return Bs, 'axes along the conventional cell of %s (spglib)' % sg
+                Bs, how = B @ R.T, 'axes along the conventional cell of %s (spglib)' % sg
     except Exception:
         pass
-    Q, Rt = np.linalg.qr(B.T)                     # B.T = Q Rt -> rows of Rt.T: a along x, b in xy
-    D = np.diag(np.sign(np.diag(Rt)) + (np.diag(Rt) == 0))
-    Bt = (D @ Rt).T
-    Bt[np.abs(Bt) < 1e-10] = 0.0
-    return Bt, 'a along x, b in the x-y plane (no spglib)'
+    if Bs is None:
+        Q, Rt = np.linalg.qr(B.T)                 # B.T = Q Rt -> rows of Rt.T: a along x, b in xy
+        D = np.diag(np.sign(np.diag(Rt)) + (np.diag(Rt) == 0))
+        Bs, how = (D @ Rt).T, 'a along x, b in the x-y plane (no spglib)'
+    best = None
+    for t in TURNS:
+        V, N, score = nice_basis(Bs * np.array(t))
+        if best is None or score < best[0]:
+            best = (score, V, N)
+    V, N = best[1], best[2]
+    V = V.copy()
+    V[np.abs(V) < 1e-10] = 0.0
+    return V, N, how
 
 
 def _types(p):
@@ -164,8 +210,9 @@ def reduced_poscar(path):
     if is_reduced(p['A'], B):
         return None, describe(p['A'])
     F = (p['F'] @ np.linalg.inv(M)) % 1.0
+    B, N, how = orient(B, F, _types(p))
+    F = (F @ np.linalg.inv(N)) % 1.0
     F[np.isclose(F, 1.0, atol=1e-10)] = 0.0
-    B, how = orient(B, F, _types(p))
     out = [p['title'].rstrip() + ' (Niggli-reduced)', '1.0']
     out += ['  %.10f %.10f %.10f' % tuple(v) for v in B]
     out += [p['species'], p['counts']]
@@ -269,10 +316,12 @@ def after_relax(scf_dir, reduce=True, log=print):
     if not changed:
         B, M = p['A'], np.eye(3, dtype=int)
     F = (p['F'] @ np.linalg.inv(M)) % 1.0
-    F[np.isclose(F, 1.0, atol=1e-10)] = 0.0
     how = ''
     if changed:
-        B, how = orient(B, F, _types(p))
+        B, N, how = orient(B, F, _types(p))
+        F = (F @ np.linalg.inv(N)) % 1.0
+        M = N @ M                          # basis change for the KPOINTS (rotation-free)
+    F[np.isclose(F, 1.0, atol=1e-10)] = 0.0
     title = p['title'].rstrip() + (' (Niggli-reduced)' if changed and 'Niggli' not in p['title'] else '')
     out = [title, '1.0'] + ['  %.10f %.10f %.10f' % tuple(v) for v in B]
     out += [p['species'], p['counts'], 'Direct'] + ['  %.10f %.10f %.10f' % tuple(f) for f in F]
