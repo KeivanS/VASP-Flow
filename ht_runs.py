@@ -815,6 +815,10 @@ queued() { squeue -h -u "$USER_NAME" -o '%j' 2>/dev/null | wc -l | tr -d ' '; }
 in_queue() { local w; w="$(cd "$2" && pwd -P)"
              squeue -h -u "$USER_NAME" -o '%j %Z' 2>/dev/null | grep -qxF -e "$1_relax $w" -e "$1_scf $w" \
                  -e "$1_bands $w" -e "$1_lobster $w"; }
+# folders other than $2 with queued jobs of this material (another run of the same mp-ID)
+queued_elsewhere() { local w; w="$(cd "$2" && pwd -P)"
+             squeue -h -u "$USER_NAME" -o '%j %Z' 2>/dev/null | grep -E "^$1_(relax|scf|bands|lobster) " \
+                 | cut -d' ' -f2- | grep -vxF "$w" | sort -u | tr '\n' ' '; }
 step_done() {   # $1 = material dir, $2 = step
     local o
     case "$2" in
@@ -837,13 +841,18 @@ if [ "$need_potcar" = 1 ]; then
     "$HERE/make_potcars.sh" || { echo "ERROR: make_potcars.sh failed; fix VASP_POTCAR_DIR in env.sh"; exit 1; }
 fi
 
-submitted=0
+submitted=0; n_done=0
 while read -r id; do
     [ -z "$id" ] && continue
     d="$HERE/materials/$id"
-    [ -d "$d" ] || continue
-    [ -f "$d/.done" ] && continue
-    in_queue "$id" "$d" && continue
+    [ -d "$d" ] || { echo "SKIP $id -- no folder materials/$id (rerun ht_runs.py for it)"; continue; }
+    [ -f "$d/.done" ] && { n_done=$((n_done + 1)); continue; }
+    if in_queue "$id" "$d"; then
+        echo "SKIP $id -- its jobs from this folder are still queued (squeue -u $USER_NAME); run again when they end"
+        continue
+    fi
+    other="$(queued_elsewhere "$id" "$d")"
+    [ -n "$other" ] && echo "NOTE $id -- jobs of the same name are queued from ${other% } (another run, separate files); submitting this folder's copy too"
     if [ ! -f "$d/POTCAR" ]; then
         echo "SKIP $id -- no POTCAR (make_potcars.sh did not build one)"
         continue
@@ -867,6 +876,7 @@ while read -r id; do
 done < "$HERE/material_list.txt"
 
 echo ""
+[ "$n_done" -gt 0 ] && echo "Skipped $n_done finished material(s) (materials/<id>/.done; delete that file to run one again)."
 echo "Submitted $submitted material(s).  Monitor:  squeue -u $USER_NAME"
 '''
 

@@ -391,6 +391,11 @@ class Material(object):
         names = self.jobnames()
         return any(n in names and self.mine(w) for n, w in queue)
 
+    def elsewhere(self, pairs, names=None):
+        """Folders (not this one) that ran or queued jobs with this material's job names."""
+        names = names or self.jobnames()
+        return sorted({w for n, w in pairs if n in names and w and not self.mine(w)})
+
     def rec(self, recs, step):
         """Newest sacct record of the step's job from this folder (None if none)."""
         name, best = self.jobname(step), None
@@ -1334,6 +1339,7 @@ def report_block(r, tally, max_rounds):
     L = ['=' * 100,
          '%s   repair round %d%s' % (r['label'], r['round'], ' of at most %d' % max_rounds if max_rounds else ''),
          '  folder : %s' % r['path']]
+    L += ['  NOTE   : %s' % n for n in r.get('notes', [])]
     for s, cls, cc, ev, errs in r['steps']:
         L.append('  %-8s problem : %s   (certainty %.2f)' % (s, cls, cc))
         L.append('           cause   : %s' % CAUSE_TEXT.get(cls, cls))
@@ -1401,6 +1407,7 @@ def main():
             rows.append([m.label, m.layout, m.path, 'queued', 'queued', '', '', '', ''])
             mats.append((hist, None))
             continue
+        other_q = m.elsewhere(queue)
         cbad = conv_check(m, recs)
         for t in m.conv:
             key = 'conv:' + t
@@ -1430,6 +1437,17 @@ def main():
         mats.append((hist, dict(status)))
         bad = [s for s in m.steps if not status[s].startswith('ok')]
         notes = ['%s:unchecked' % d for d in m.unhandled]
+        n0 = len(notes)
+        if other_q:
+            notes.append('jobs with the same names are queued from another folder (%s): a separate run, '
+                         'not counted here' % ', '.join(other_q))
+        other_r = [s for s in m.steps if mrecs[s] is None and m.elsewhere(recs, {m.jobname(s)})]
+        if other_r:
+            notes.append('no job of %s was submitted from this folder; jobs with the same names ran from %s '
+                         '(another run of this material; submit this one with: cd %s && ./submit_all.sh)'
+                         % (','.join(other_r), ', '.join(m.elsewhere(recs, {m.jobname(s) for s in other_r})),
+                            m.root if m.layout == 'ht' else m.path))
+        folder_notes = notes[n0:]
         nc = conv_not_converged(m)
         if nc:
             notes.append('convergence not reached in the tested range: ' + ','.join(nc))
@@ -1495,7 +1513,7 @@ def main():
              'hold': '; '.join(holds), 'redo': ' ; '.join(x for x in redo_txt if x), 'says': says,
              'steps': [(s, cls_of[s], cert.get(s, 0.5), ev.get(s, ''), errs.get(s, []))
                        for s in list(status) if s in cls_of],
-             'fkeys': fkeys,
+             'fkeys': fkeys, 'notes': folder_notes,
              'user': ['%s %s = %s' % (st_, k, v) for st_, lst in sorted(user.items()) for k, v, _ in lst]}
         todo.append((r, m, status, errs, fix, submit))
         rows.append([m.label, m.layout, m.path, steps_txt,
