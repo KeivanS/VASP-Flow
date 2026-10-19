@@ -506,12 +506,17 @@ fi'''
                 # OMP_NUM_THREADS=N would otherwise give ranks x N threads.
                 f.write('export OMP_NUM_THREADS=${VASP_OMP_NUM_THREADS:-1}\n\n')
 
-                explicit = kp.get('meshes', [])
+                explicit = kp.get('meshes') or []
+                ladder = not explicit and bool(kp.get('range'))
+                if ladder:      # 'from A to B': N_i proportional to |b_i*|
+                    explicit = self.generator.convergence_ladder(*kp['range'])
                 f.write('vf_done() { [ -f "$1/OUTCAR" ] && '
                         'grep -q "General timing and accounting" "$1/OUTCAR"; }\n')
                 f.write(': > "$HERE/kpoint_convergence.dat"\n\n')
                 if explicit:
-                    f.write("# K-point convergence — explicit meshes\n\n")
+                    f.write("# K-point convergence — " + ("%s → %s, N_i proportional to |b_i*|"
+                            % ('x'.join(map(str, kp['range'][0])), 'x'.join(map(str, kp['range'][1])))
+                            if ladder else "explicit meshes") + "\n\n")
                     for mesh in explicit:
                         nx, ny, nz = mesh
                         label = f"{nx}x{ny}x{nz}"
@@ -528,36 +533,6 @@ fi'''
                         f.write(f'fi\n')
                         f.write(f'E=$(grep "energy  without" "{label}/OUTCAR" | tail -1 | awk \'{{print $7}}\')\n')
                         f.write(f'echo "{label}  $E" >> "$HERE/kpoint_convergence.dat"\n\n')
-                else:
-                    start, end = kp['range']
-                    k0x, k0y, k0z = start
-                    k1x, k1y, k1z = end
-                    step = (k1x - k0x) // 4 if (k1x - k0x) >= 4 else 2
-                    f.write(f"# K-point convergence: {k0x}x{k0y}x{k0z} → {k1x}x{k1y}x{k1z}\n\n")
-                    f.write(f"for NX in $(seq {k0x} {step} {k1x}); do\n")
-                    if k0z == k0x:
-                        f.write('    NZ=$NX\n')
-                    elif k0z > 0:
-                        ratio = k0z / k0x
-                        f.write(f'    NZ=$(echo "$NX * {ratio}" | bc | xargs printf "%.0f")\n')
-                    else:
-                        f.write('    NZ=1\n')
-                    f.write('    LABEL="${NX}x${NX}x${NZ}"\n')
-                    f.write('    if vf_done "$LABEL"; then\n')
-                    f.write('        echo "  $LABEL — already complete, skipping"\n')
-                    f.write('    else\n')
-                    f.write('        mkdir -p "$LABEL"\n')
-                    f.write('        cp INCAR POSCAR POTCAR "$LABEL/"\n')
-                    f.write('        printf "Automatic Gamma mesh\\n0\\nGamma\\n  %d  %d  %d\\n  0  0  0\\n" $NX $NX $NZ > "$LABEL/KPOINTS"\n')
-                    f.write('        cd "$LABEL"\n')
-                    f.write(f'        echo "  $LABEL ..."\n')
-                    f.write(f'        {vasp} > vasp.out 2>&1\n')
-                    f.write('        cd "$HERE"\n')
-                    f.write('    fi\n')
-                    f.write("    E=$(grep \"energy  without\" \"$LABEL/OUTCAR\" | tail -1 | awk '{print $7}')\n")
-                    f.write('    echo "$LABEL  $E" >> "$HERE/kpoint_convergence.dat"\n')
-                    f.write("done\n\n")
-
                 f.write('echo "Results → kpoint_convergence.dat"\n')
             chmod_x(script)
 

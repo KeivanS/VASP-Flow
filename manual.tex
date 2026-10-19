@@ -1721,6 +1721,12 @@ Test ENCUT 350-650      Test ENCUT 350 650     Test ENCUT 350 to 650
 Test ENCUT 350,650      Test ENCUT 350:50:650  # start:step:stop
 \end{lstlisting}
 
+A range is a ladder of meshes with $N_i \propto |\mathbf{b}_i^*|$, like the
+production meshes: the largest $N_i$ runs from the largest number of the first
+mesh to that of the second, and the others follow the cell (from 4x4x4 to 12x12x12 for
+$a,b,c = 3.5, 5.2, 9.8$~\AA\ gives 4x3x1, 6x4x2, 8x5x3, 10x7x4, 12x8x4); $N_z = 1$
+at both ends keeps a 2-D ladder.  An explicit list is used as typed.
+
 The \texttt{start:step:stop} form is the only one that sets the step; the
 others sweep in 50~eV increments.  A convergence line that cannot be parsed
 now emits a \texttt{[warn]} on stderr rather than silently generating no

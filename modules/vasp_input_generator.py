@@ -2800,6 +2800,31 @@ echo "      Data:  band.yaml  FORCE_SETS"
             mesh.append(max(step, step * int(math.floor(s * x / step + 0.5))))
         return tuple(mesh) + ((1,) if flat else ())
 
+    def convergence_ladder(self, start, end) -> list:
+        """Meshes of a `k-points from A to B` convergence test, N_i proportional
+        to |b_i*| like the production meshes.  The largest N (on the largest
+        |b_i*|) runs from max(start) to max(end) in steps of (range)//4 (at least 2);
+        the others are N*|b_i*|/max|b*| rounded (minimum 1).  A range with N_z = 1
+        at both ends, or a 2-D slab, keeps N_z = 1.  Repeated meshes are dropped."""
+        try:
+            with open(self.poscar) as f:
+                lines = f.readlines()
+            sc = float(lines[1].split()[0])
+            A = np.array([[float(x) * sc for x in lines[i].split()[:3]] for i in range(2, 5)])
+            b = np.linalg.norm(2 * np.pi * np.linalg.inv(A).T, axis=1)
+        except Exception:
+            b = np.ones(3)
+        flat = bool(self.instructions.get('is_2d')) or (start[2] <= 1 and end[2] <= 1)
+        bb = b[:2] if flat else b
+        n0, n1 = max(start[:len(bb)]), max(end[:len(bb)])
+        step = (n1 - n0) // 4 if (n1 - n0) >= 4 else 2
+        out = []
+        for n in range(n0, n1 + 1, step):
+            m = tuple(max(1, int(round(n * x / bb.max()))) for x in bb) + ((1,) if flat else ())
+            if m not in out:
+                out.append(m)
+        return [list(m) for m in out]
+
     def _spacing_note(self, mesh) -> str:
         """', spacing 0.100-0.104 1/A' — |b_i*|/N_i range (uniformity check)."""
         try:
