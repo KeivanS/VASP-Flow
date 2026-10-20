@@ -118,6 +118,11 @@ def potcar_dir_for(functional, pbe_dir=None, lda_dir=None):
 LOBSTER_MAX_KPTS = 10000
 LOBSTER_MAX_KPW = 6.0e6
 
+# LOBSTER NSCF bands: NBANDS >= this x the occupied bands (NELECT/2, with SOC NELECT) and
+# >= the basis count, so the NSCF always has empty bands (with NBANDS = occupied bands
+# every band is filled and ICOBI = 0).
+LOBSTER_OCC_NBANDS_FACTOR = 1.2
+
 
 def plane_waves_per_k(volume, encut):
     """Plane waves inside the ENCUT sphere: V k_c^3 / (6 pi^2), hbar^2/2m = 3.80998 eV A^2."""
@@ -694,7 +699,13 @@ class VASPInputGenerator:
                 el = toks[0].split('_')[0]
                 per_el[el] = sum(mult[o[-1]] for o in toks[1:])
             n_basis = sum(per_el[el] * counts[el] for el in counts)
-            nb = max(n_basis, math.ceil(nelect / 2))
+            # and at least 1.2 x the occupied bands (NELECT/2; with SOC one electron per
+            # band, NELECT).  With only the basis count (Mg_pv, Ca_sv, Sr_sv one-atom cells:
+            # basis = occupied bands) every band was filled and LOBSTER returned
+            # ICOHP = ICOBI = 0 (mp-110, mp-132, mp-95, 2026-10-20)
+            occ = nelect if self.instructions.get('soc', False) else nelect / 2
+            lob = math.ceil(LOBSTER_OCC_NBANDS_FACTOR * occ - 1e-9)
+            nb = max(n_basis, lob + lob % 2)
             if ncore and ncore > 1:
                 nb = int(math.ceil(nb / ncore) * ncore)
             return nb
@@ -1086,6 +1097,21 @@ fi
             f.write('cp "$SCF_DIR/CHGCAR" "$HERE/"\n')
             f.write('echo "  CHGCAR copied from 02_scf"\n')
             self._write_copy_if_newer(f, '$SCF_DIR', 'POSCAR', 'POSCAR', '02_scf')
+            # at least LOBSTER_OCC_NBANDS_FACTOR x the occupied bands, from NELECT of the SCF
+            # OUTCAR (2026-10-20: Mg/Ca/Sr NSCFs had NBANDS = occupied bands, ICOBI = 0)
+            f.write('NELECT=$(grep "^ *NELECT" "$SCF_DIR/OUTCAR" 2>/dev/null | head -1 | awk \'{print int($3)}\')\n')
+            f.write('CUR=$(grep "^ *NBANDS" "$HERE/INCAR" | head -1 | sed "s/#.*//" | tr -cd "0-9")\n')
+            f.write('if [ -n "$NELECT" ] && [ "$NELECT" -gt 0 ]; then\n')
+            f.write(f'    OCC=$(( {"NELECT" if self.instructions.get("soc", False) else "(NELECT + 1) / 2"} ))\n')
+            f.write(f'    NEED=$(( (OCC * {int(round(LOBSTER_OCC_NBANDS_FACTOR * 10))} + 9) / 10 )); NEED=$(( NEED + NEED % 2 ))\n')
+            f.write('    if [ -z "$CUR" ]; then\n')
+            f.write(f'        echo "NBANDS = $NEED   # {LOBSTER_OCC_NBANDS_FACTOR} x occupied ($OCC)" >> "$HERE/INCAR"\n')
+            f.write(f'        echo "  NBANDS = $NEED  ({LOBSTER_OCC_NBANDS_FACTOR} x occupied $OCC)"\n')
+            f.write('    elif [ "$NEED" -gt "$CUR" ]; then\n')
+            f.write(f'        sed -i.bak "s/^ *NBANDS.*/NBANDS = $NEED   # {LOBSTER_OCC_NBANDS_FACTOR} x occupied ($OCC), was $CUR/" "$HERE/INCAR"\n')
+            f.write(f'        echo "  NBANDS = $NEED  (was $CUR: below {LOBSTER_OCC_NBANDS_FACTOR} x occupied $OCC)"\n')
+            f.write('    fi\n')
+            f.write('fi\n')
         os.chmod(f"{output_dir}/copy_from_scf.sh", 0o755)
 
         with open(f"{output_dir}/run.sh", 'w') as f:
@@ -2463,7 +2489,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "ALGO = Normal",
         ]
         if nbands:
-            lines.append(f"NBANDS = {nbands}   # >= number of LOBSTER local basis functions")
+            lines.append(f"NBANDS = {nbands}   # >= LOBSTER basis count and 1.2 x occupied bands")
         lines += [
             "",
             "# Static calculation",
@@ -2596,7 +2622,7 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "NELM = 100",
         ]
         if nbands:
-            lines.append(f"NBANDS = {nbands}   # >= number of LOBSTER local basis functions")
+            lines.append(f"NBANDS = {nbands}   # >= LOBSTER basis count and 1.2 x occupied bands")
         isym = str(self.instructions.get('lobster_isym') or '0')
         if isym not in ('0', '-1'):              # LOBSTER requires symmetry off
             isym = '0'

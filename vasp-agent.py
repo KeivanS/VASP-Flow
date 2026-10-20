@@ -14,6 +14,9 @@ POTCAR is built ONCE at <ProjectName>/POTCAR using $VASP_POTCAR_DIR.
 """
 
 import os, sys, re, shutil, argparse, json
+# numpy's OpenBLAS starts one thread per core, each with its own buffer; on a login node
+# with a memory limit that fails ('OpenBLAS error: Memory allocation still failed').
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))

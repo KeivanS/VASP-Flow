@@ -58,6 +58,9 @@ import importlib.util
 import json
 import math
 import os
+# numpy's OpenBLAS starts one thread per core, each with its own buffer; on a login node
+# with a memory limit that fails ('OpenBLAS error: Memory allocation still failed').
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 import re
 import shutil
 import subprocess
@@ -111,7 +114,8 @@ LOW_MOMENT  = 0.6
 # 37 occupied, 44 bands) the electron count then drifts between SCF steps (BRMIX "old and
 # new charge density differ"), Davidson goes non-hermitian and the SCF diverges.  The same
 # value goes into relax, SCF and bands (the relax WAVECAR then fits the SCF, and bands never
-# has fewer bands than the SCF).  LOBSTER sets its own, larger NBANDS.
+# has fewer bands than the SCF).  LOBSTER: >= 1.2 x the occupied bands (NELECT/2, SOC: NELECT) and
+# >= the basis count (LOBSTER_OCC_NBANDS_FACTOR in vasp_input_generator.py; also at run time).
 NBANDS_FACTOR = 1.2
 
 STAGE_DIR = '_ht_inputs'
