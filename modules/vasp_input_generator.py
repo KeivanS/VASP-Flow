@@ -2599,8 +2599,9 @@ echo "      Data:  band.yaml  FORCE_SETS"
             "# DOS output",
             "LORBIT = 11",
             "NEDOS = 3000",
-            "EMIN = -15",
-            "EMAX = 15",
+            # no EMIN/EMAX: VASP's default spans all eigenvalues.  A fixed -15..15 eV is
+            # absolute, not relative to E_F, and cut off deep bands (2-D C, 2s band at
+            # -21 eV): their weight landed in the first point of the projected DOS
             "",
             "LWAVE = .FALSE.",
             "LCHARG = .FALSE.",
