@@ -103,7 +103,7 @@ Regex-based extraction from natural language instruction files. K-path `along G-
 
 **Relax → SCF:** relax INCAR has `ISTART=0`, `ICHARG=2`, `LWAVE/LCHARG=.TRUE.`. `02_scf/copy_from_relax.sh` (run at RUN time by both run.sh flavours) copies CONTCAR (if newer) and CHGCAR; WAVECAR too and `ISTART=1, ICHARG=1` when KPOINTS (mesh), ISPIN, LSORBIT and ENCUT match the relax, else `ISTART=0, ICHARG=1`. `ISTART`/`ICHARG` in an `INCAR scf:` block disable it.
 
-**KPAR/NCORE:** `_auto_kpar_ncore(np, n_k, kpar=None, ncore=None)`: KPAR = largest divisor of np ≤ n_k (irreducible k of the step's own KPOINTS); NCORE = largest divisor of np/KPAR ≤ its sqrt. A given value is snapped to a divisor and the other derived. Priority: ELF pin > INCAR block > per-step key > global key > rule. DFPT hard-codes 1/1; phonons and wannier default KPAR=1.
+**KPAR/NCORE:** `_auto_kpar_ncore(np, n_k, kpar=None, ncore=None)`: KPAR = largest divisor of np ≤ n_k (irreducible k of the step's own KPOINTS); NCORE = largest divisor of np/KPAR ≤ its sqrt. A given value is snapped to a divisor and the other derived. Priority: ELF pin > INCAR block > per-step key > global key > rule. DFPT hard-codes 1/1; phonons and wannier default KPAR=1. SLURM agent: an explicit `MPI: N` wins — the job runs exactly N ranks (nodes = ceil(N/ntasks_per_node), ntasks-per-node = ceil(N/nodes), `--ntasks=N` when uneven); without it np = nodes × ntasks-per-node.
 
 **ELF:** `ELF: on` (default) = LELF in the SCF, KPAR pinned to 1; `ELF: separate` (default in `ht-mp-scf.py`) = SCF at auto KPAR, then `02_scf/run_elf.sh` runs a short restart in `02_scf/elf/` (ISTART=1, ICHARG=1, LELF, KPAR=1, NBANDS from the SCF OUTCAR) and copies ELFCAR to `02_scf/`. Both run.sh flavours call run_elf.sh after VASP.
 

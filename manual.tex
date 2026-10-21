@@ -1506,7 +1506,7 @@ Keyword & Meaning \\ \midrule
 \thead
 Keyword (continued) & Meaning \\ \midrule
 \texttt{NKPTS:} & k-points per band segment. Default 40. \\
-\texttt{MPI:} & Total MPI tasks (nodes $\times$ cores/node). \\
+\texttt{MPI:} & Total MPI tasks; KPAR/NCORE are derived from it. The SLURM agent runs exactly this many ranks (profile \texttt{ntasks\_per\_node} = most per node; nodes as needed); without it, nodes $\times$ ntasks-per-node. \\
 \texttt{KPAR:} & Global k-point parallelisation. \\
 \texttt{NCORE:} & Global cores-per-orbital. \\
 \texttt{SCF\_KPAR:} \textit{etc.} &

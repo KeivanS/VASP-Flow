@@ -138,10 +138,24 @@ class SLURMVASPAgent:
         self.modules         = self.profile.get('modules',  [])
         self.mpi_cmd         = self.profile.get('mpi_cmd',  'srun')
         self.ntasks          = self.nodes * self.ntasks_per_node
+        self.ntasks_exact    = None      # set when 'MPI: N' fixes the rank count
 
-        # ── Propagate total MPI ranks to instructions so the generator
-        #    computes correct KPAR/NCORE defaults (unless MPI was explicit) ──
-        if not inst.get('mpi_np') or inst.get('mpi_np') == 1:
+        # ── MPI ranks: an explicit 'MPI: N' wins -- the job runs exactly N ranks (KPAR/NCORE
+        #    are derived from N); ntasks-per-node is then the most per node, nodes = as many as
+        #    needed.  Without it the job's nodes x ntasks-per-node ranks are used. ──
+        n_mpi = inst.get('mpi_np') or 1
+        if n_mpi > 1:
+            if n_mpi != self.ntasks:
+                cap = self.ntasks_per_node
+                self.nodes = -(-n_mpi // cap)
+                self.ntasks_per_node = -(-n_mpi // self.nodes)
+                if n_mpi != self.nodes * self.ntasks_per_node:
+                    self.ntasks_exact = n_mpi
+                print(f"  MPI: {n_mpi} in the instructions -> the job runs {n_mpi} ranks "
+                      f"({self.nodes} node(s), <= {self.ntasks_per_node} per node; "
+                      f"the profile gave {self.ntasks})")
+                self.ntasks = n_mpi
+        else:
             inst['mpi_np'] = self.ntasks
 
         # ── VASP binaries from profile ────────────────────────────────────
@@ -202,6 +216,7 @@ class SLURMVASPAgent:
             f"#SBATCH --partition={self.partition}",
             f"#SBATCH --nodes={self.nodes}",
             f"#SBATCH --ntasks-per-node={self.ntasks_per_node}",
+        ] + ([f"#SBATCH --ntasks={self.ntasks_exact}"] if self.ntasks_exact else []) + [
             f"#SBATCH --time={t}",
             f"#SBATCH --output={self.slurm_output}",
             f"#SBATCH --error={self.slurm_error}",
