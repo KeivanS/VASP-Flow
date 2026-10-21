@@ -938,7 +938,11 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
 
     dos_tot = tot[:, 1] + (tot[:, 2] if spin_pol else 0.0)
     xmin, xmax = _dos_window(energies, dos_tot)
+    if emin is not None: xmin = float(emin)     # user zoom window override
+    if emax is not None: xmax = float(emax)
     mask = (energies >= xmin) & (energies <= xmax)
+    if not mask.any():
+        mask = np.ones_like(energies, dtype=bool)
     en   = energies[mask]
 
     elements_ordered = list(dict.fromkeys(ion_elements))
@@ -968,7 +972,8 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
         ax.plot(en, -tot_down_full[mask], color='k', lw=1.6, zorder=5, ls='--')
 
         ax.axhline(0, color='k', lw=0.9)
-        ymax_v = max(tot_up_full[mask].max(), tot_down_full[mask].max()) * 1.1 or 1
+        ymax_v = 1.1 * max(tot_up_full[mask].max(), tot_down_full[mask].max(),
+                           cum_up.max(), cum_down.max()) or 1
         ax.set_ylim(-ymax_v, ymax_v)
         ax.set_ylabel('DOS (states/eV)   ↑ up  /  ↓ down', fontsize=10)
         handles = [Line2D([0],[0], color=colors[i % len(colors)], lw=1.5, label=el)
@@ -986,7 +991,7 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
             ax.plot(en, cumulative, color=color, lw=1.2)
         # Total DOS on top (black line)
         ax.plot(en, tot_up_full[mask], color='k', lw=1.6, zorder=5, label='Total')
-        ax.set_ylim(bottom=0)
+        ax.set_ylim(0, 1.1 * max(tot_up_full[mask].max(), cumulative.max()) or 1)
         ax.set_ylabel('DOS (states/eV)', fontsize=12)
         ax.legend(fontsize=9, loc='upper left')
 
@@ -994,8 +999,6 @@ def _cumulative_dos_plot(dos_dir, out_png, project_label, emin=None, emax=None):
     sc.set_scientific(False)
     ax.yaxis.set_major_formatter(sc)
     ax.axvline(0, color='k', ls='--', lw=0.8)
-    if emin is not None: xmin = float(emin)     # user zoom window override
-    if emax is not None: xmax = float(emax)
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
     ax.set_title(f'Cumulative DOS — {project_label}')
@@ -1088,7 +1091,11 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
         return False
 
     xmin, xmax = _dos_window(energies, tot[:, 1] + (tot[:, 2] if spin_pol else 0.0))
+    if emin is not None: xmin = float(emin)     # user zoom window override
+    if emax is not None: xmax = float(emax)
     mask = (energies >= xmin) & (energies <= xmax)
+    if not mask.any():
+        mask = np.ones_like(energies, dtype=bool)
     en = energies[mask]
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -1108,6 +1115,8 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
         ax.plot(en,  tot_up[mask], color='k', lw=1.6, zorder=5, label='Total')
         ax.plot(en, -tot_dn[mask], color='k', lw=1.6, zorder=5, ls='--')
         ax.axhline(0, color='k', lw=0.9)
+        yv = 1.1 * max(tot_up[mask].max(), tot_dn[mask].max(), cu.max(), cd.max()) or 1
+        ax.set_ylim(-yv, yv)
         ax.set_ylabel('DOS (states/eV)   ↑ up  /  ↓ down', fontsize=10)
     else:
         cu = np.zeros(mask.sum())
@@ -1117,14 +1126,12 @@ def _cumulative_proj_dos_plot(dos_dir, out_png, project_label, proj_list,
             ax.fill_between(en, pu, cu, alpha=0.35, color=c, label=k)
             ax.plot(en, cu, color=c, lw=1.0)
         ax.plot(en, tot_up[mask], color='k', lw=1.6, zorder=5, label='Total')
-        ax.set_ylim(bottom=0)
+        ax.set_ylim(0, 1.1 * max(tot_up[mask].max(), cu.max()) or 1)
         ax.set_ylabel('DOS (states/eV)', fontsize=12)
 
     sc = ScalarFormatter(useOffset=False, useMathText=False); sc.set_scientific(False)
     ax.yaxis.set_major_formatter(sc)
     ax.axvline(0, color='gray', ls='--', lw=0.8)
-    if emin is not None: xmin = float(emin)     # user zoom window override
-    if emax is not None: xmax = float(emax)
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel('Energy − $E_F$ (eV)', fontsize=12)
     ax.set_title(f'Projected DOS (cumulative) — {project_label}')

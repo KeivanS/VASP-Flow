@@ -219,7 +219,6 @@ def plot_lobster_dos(lobster_dir, out_stem, project_label, dos_dir=None,
             ax.plot(x, cu, color=c, lw=1.0)
         ax.plot(x, D['tot_up'][m], color='0.45', lw=1.2, ls='--', zorder=4,
                 label=lob_lbl)
-        ax.set_ylim(bottom=0)
         ax.set_ylabel('DOS (states/eV)', fontsize=12)
 
     # The comparison curve: projection-free VASP total, solid black.
@@ -229,6 +228,17 @@ def plot_lobster_dos(lobster_dir, out_stem, project_label, dos_dir=None,
         ax.plot(ve[vm], vu[vm], color='k', lw=1.7, zorder=6, label=vlabel)
         if spin_pol and vd is not None:
             ax.plot(ve[vm], -vd[vm], color='k', lw=1.7, zorder=6, ls='--')
+
+    # y range = 1.1 x the largest curve inside the energy window
+    top = [cu.max(), D['tot_up'][m].max()] if m.any() else [0.0]
+    if spin_pol and m.any():
+        top += [cd.max(), D['tot_dn'][m].max()]
+    if V is not None and vm.any():
+        top.append(vu[vm].max())
+        if spin_pol and vd is not None:
+            top.append(vd[vm].max())
+    yv = 1.1 * max(top) or 1
+    ax.set_ylim(-yv if spin_pol else 0, yv)
 
     sc = ScalarFormatter(useOffset=False, useMathText=False)
     sc.set_scientific(False)
