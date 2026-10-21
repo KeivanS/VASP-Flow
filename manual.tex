@@ -1808,34 +1808,35 @@ before running.  This section covers the first two plus
 \subsection{Raw INCAR passthrough}
 \label{sec:incar-raw}
 
-Place literal INCAR lines --- in ordinary VASP syntax --- inside an
-\texttt{INCAR:} \ldots\ \texttt{END\_INCAR} block in your
-\texttt{instructions.txt}.  They are merged into the generated INCAR(s):
+Every step's INCAR can be edited from \texttt{instructions.txt}: put literal INCAR
+lines, in ordinary VASP syntax, in a block whose header names the step.  Accepted step
+names: \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos}, \texttt{wannier},
+\texttt{dfpt}, \texttt{phonons}, \texttt{lobster} (\texttt{INCAR\_SCF:} works as well as
+\texttt{INCAR scf:}).  A block changes only the INCAR of its own step:
 
 \begin{lstlisting}
-INCAR:                  # global block -- applies to every step
-   LREAL  = Auto
-   ALGO   = Fast
-   NELMIN = 6
+INCAR dos:              # applies only to 04_dos
+   ISMEAR = 0
+   SIGMA  = 0.05
 END_INCAR
 \end{lstlisting}
 
-A tag that the agent already writes is \textbf{overwritten in place}
-(so \texttt{ALGO = Fast} above replaces the default \texttt{ALGO =
-Normal}); any tag the agent does not normally emit is appended under a
-clearly labelled \texttt{\# User INCAR overrides} section, so nothing is
-silently lost.
+A tag that the agent already writes is \textbf{overwritten in place}; any other tag is
+appended under a \texttt{\# User INCAR overrides} section.  The header needs its colon,
+each tag goes on its own line, and the block ends with \texttt{END\_INCAR}; case, extra
+spaces and \texttt{\#} comments do not matter.  If a block is malformed (no colon, written
+on one line, no \texttt{END\_INCAR}, a misspelt step name) or an INCAR tag stands outside a
+block, the agents stop before generating anything, list each problem with its line
+number and print examples of the correct syntax.
 
-To target a single step, name it on the header line.  Recognised steps
-are \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos},
-\texttt{wannier}, \texttt{dfpt}, \texttt{phonons}, \texttt{lobster}:
-
-\begin{lstlisting}
-INCAR scf:              # applies only to 02_scf
-   EDIFF = 1E-8
-   SIGMA = 0.10
-END_INCAR
-\end{lstlisting}
+\begin{notebox}
+A block \emph{without} a step name (\texttt{INCAR:} \ldots\ \texttt{END\_INCAR}) writes its
+tags into the INCAR of \textbf{every} step (relax, SCF, bands, DOS, LOBSTER, \ldots).
+Use it only for settings every step must share, such as the functional, the GGA+U
+values or \texttt{ENCUT}.  For anything else it is \textbf{not recommended}: a tag that
+suits one step is usually wrong for another (e.g.\ \texttt{ISMEAR = 0} replaces the
+tetrahedron method of the DOS).  Name the step.
+\end{notebox}
 
 \begin{notebox}
 Precedence: a \emph{per-step} block beats the \emph{global} block, and

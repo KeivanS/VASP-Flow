@@ -15,19 +15,99 @@ BLOCK_STEPS = ('relax', 'scf', 'bands', 'dos', 'wannier', 'dfpt', 'phonons',
 def _make_block_re(name: str):
     """Regex for a block   NAME[ step]:  ...  END_NAME   (header/step optional).
 
-    Accepted headers:  `INCAR:`  `INCAR scf:`  `INCAR_SCF:`  (same for KPOINTS);
+    Accepted headers:  `INCAR:`  `INCAR scf:`  `INCAR_SCF:`  (same for KPOINTS), any case,
+    extra spaces and a trailing # comment allowed; the colon is required;
     terminator: END_INCAR / END INCAR (END_KPOINTS / END KPOINTS).
     """
     return re.compile(
-        r'^[ \t]*' + name + r'(?:[ \t_]+([A-Za-z]+))?[ \t]*:[ \t]*\n'
+        r'^[ \t]*' + name + r'(?:[ \t_]+([A-Za-z]+))?[ \t]*:[ \t]*(?:[#!][^\n]*)?\n'
         r'(.*?)'
-        r'^[ \t]*END[ _]?' + name + r'[ \t]*$',
+        r'^[ \t]*END[ \t_]*' + name + r'[ \t]*$',
         re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
 _BLOCK_RES = {'INCAR': _make_block_re('INCAR'),
               'KPOINTS': _make_block_re('KPOINTS')}
 
 _NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
+
+# INCAR tags that the parser has no keyword for: outside an INCAR block they would be
+# ignored, so check_blocks() reports them (ENCUT, KPAR, NCORE, ISIF, NSW, EDIFFG, MAGMOM
+# are keywords and are left out).
+_LOOSE_INCAR_TAGS = (
+    'ISMEAR SIGMA EDIFF NELM NELMIN ALGO PREC LREAL NBANDS LORBIT NEDOS EMIN EMAX ISPIN '
+    'LASPH LMAXMIX ADDGRID IVDW AMIX BMIX IBRION POTIM ISYM LWAVE LCHARG ICHARG ISTART '
+    'GGA METAGGA LDAU LDAUU LDAUL LDAUJ LDAUTYPE LHFCALC HFSCREEN NPAR LSORBIT SAXIS LELF '
+    'LOPTICS NOMEGA CSHIFT LEPSILON LCALCEPS LVTOT LVHAR IDIPOL LDIPOL NWRITE KSPACING').split()
+
+
+BLOCK_SYNTAX_HELP = """
+
+  Correct syntax (header with a colon, one tag per line, END line; case and extra
+  spaces do not matter, # starts a comment):
+      INCAR dos:              # only 04_dos; also INCAR_DOS:
+         ISMEAR = 0
+         SIGMA  = 0.05
+      END_INCAR
+      INCAR scf:              # only 02_scf
+         EDIFF = 1E-7
+      END_INCAR
+  Steps: relax, scf, bands, dos, wannier, dfpt, phonons, lobster.  A block with no step
+  name (INCAR: ... END_INCAR) goes to EVERY step: use it only for settings all steps
+  must share (functional, GGA+U values, ENCUT).
+"""
+
+
+class InstructionError(ValueError):
+    """A malformed INCAR / KPOINTS block or an INCAR tag outside a block."""
+
+
+def check_blocks(raw_text: str) -> List[str]:
+    """Problems with the INCAR / KPOINTS blocks of an instructions file, one message
+    each (line number, what is wrong, how to fix it); [] when all is well."""
+    lines = raw_text.splitlines()
+    inside = [False] * len(lines)
+    errs = []
+    steps = ', '.join(BLOCK_STEPS)
+    for kind, rx in _BLOCK_RES.items():
+        for m in rx.finditer(raw_text):
+            a = raw_text.count('\n', 0, m.start())
+            b = raw_text.count('\n', 0, m.end())
+            for i in range(a, min(b + 1, len(lines))):
+                inside[i] = True
+            name = m.group(1)
+            if name and name.lower() not in BLOCK_STEPS + ('all',):
+                errs.append(f"line {a + 1}: unknown step '{name}' in '{lines[a].strip()}'. "
+                            f"Use one of: {steps} (or no name for every step).")
+    head = re.compile(r'^[ \t]*(INCAR|KPOINTS)(?:[ \t_]+([A-Za-z]+))?[ \t]*(:?)[ \t]*(.*)$', re.I)
+    end = re.compile(r'^[ \t]*END[ \t_]*(INCAR|KPOINTS)[ \t]*$', re.I)
+    for i, line in enumerate(lines):
+        if inside[i] or line.lstrip().startswith('#'):
+            continue
+        m = head.match(line)
+        if m:
+            kind, name, colon, rest = m.group(1).upper(), m.group(2), m.group(3), m.group(4)
+            if name and name.lower() not in BLOCK_STEPS + ('all',):
+                continue                      # another keyword, e.g. KPOINTS_DENSITY: fine
+            hdr = f"{kind} {name.lower()}:" if name else f"{kind}:"
+            if not colon:
+                errs.append(f"line {i + 1}: '{line.strip()}' needs a colon: '{hdr}'.")
+            elif rest and not rest.startswith('#'):
+                errs.append(f"line {i + 1}: '{line.strip()}': a block cannot be on one line. "
+                            f"Write '{hdr}', then one tag per line, then END_{kind}.")
+            else:
+                errs.append(f"line {i + 1}: '{line.strip()}' has no END_{kind} line after it.")
+            continue
+        if end.match(line):
+            errs.append(f"line {i + 1}: '{line.strip()}' without a block header before it "
+                        f"(e.g. 'INCAR dos:').")
+            continue
+        t = re.match(r'^[ \t]*([A-Za-z]+)[ \t]*[=:][ \t]*(.*)$', line)
+        if t and t.group(1).upper() in _LOOSE_INCAR_TAGS:
+            tag = f"{t.group(1).upper()} = {t.group(2).strip()}"
+            errs.append(f"line {i + 1}: '{line.strip()}' is an INCAR tag outside an INCAR block "
+                        f"and would be ignored. Put it in a block for its step, e.g.\n"
+                        f"      INCAR dos:\n         {tag}\n      END_INCAR")
+    return sorted(errs, key=lambda e: int(re.match(r'line (\d+)', e).group(1)))
 
 
 class InstructionParser:
@@ -46,6 +126,11 @@ class InstructionParser:
         # KPOINTS block may legitimately begin with a '#' comment line, which
         # is line 1 of the file and must not be lost).
         self._raw_text = raw
+        errs = check_blocks(raw)
+        if errs:
+            raise InstructionError(
+                f"{self.instruction_file}: {len(errs)} problem(s) with INCAR/KPOINTS blocks "
+                f"(nothing was generated)\n  " + "\n  ".join(errs) + BLOCK_SYNTAX_HELP)
         incar_raw   = self._extract_incar_raw(raw)
         kpoints_raw = self._extract_kpoints_raw(raw)
 
@@ -752,7 +837,8 @@ class InstructionParser:
                     continue
                 if '=' not in s:
                     continue
-                tags.append(s)
+                tag, val = s.split('=', 1)
+                tags.append(f"{tag.strip().upper()} = {val.strip()}")
             if tags:
                 raw.setdefault(name, []).extend(tags)
 

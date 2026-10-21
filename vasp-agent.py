@@ -20,7 +20,7 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
-from instruction_parser import InstructionParser
+from instruction_parser import InstructionParser, InstructionError
 from cell_reduce import prepare_poscar
 from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for,
                                   merge_cli_incar)
@@ -1356,6 +1356,9 @@ POTCAR is built once from $VASP_POTCAR_DIR (set in ~/.bash_profile).
                           incar_cli=args.incar).run()
     except SystemExit:
         raise
+    except InstructionError as e:
+        print(f"\nERROR in the instructions file:\n  {e}", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         import traceback; traceback.print_exc()
         sys.exit(1)
