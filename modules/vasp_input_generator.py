@@ -1002,7 +1002,8 @@ fi
         # KPOINTS — 2× the SCF mesh in every direction for better DOS resolution
         # (unless an explicit `KPOINTS dos:` block is given).
         self._write_kpoints(output_dir, 'dos')
-        
+        self._dos_smearing(output_dir)
+
         # Copy from SCF at runtime (relative path)
         rel_scf = os.path.relpath(from_scf, output_dir)
         with open(f"{output_dir}/copy_from_scf.sh", 'w') as f:
@@ -2608,6 +2609,34 @@ echo "      Data:  band.yaml  FORCE_SETS"
         ])
         lines = self._apply_incar_overrides(lines, 'dos')
         return '\n'.join(lines) + '\n'
+
+    def _dos_smearing(self, output_dir: str):
+        """DOS smearing rule: ISMEAR = -5 (tetrahedra) always, also over a user INCAR block,
+        unless a subdivision of the DOS k-mesh is 1 (slab, wire, molecule: no tetrahedra
+        along that axis), then ISMEAR = 0 with the given SIGMA (0.05 if none)."""
+        kind, mesh = self._parse_kpoints_text(open(f"{output_dir}/KPOINTS").read())
+        flat = kind == 'mesh' and min(mesh) == 1
+        want = '0' if flat else '-5'
+        path = f"{output_dir}/INCAR"
+        lines = open(path).read().splitlines()
+        had, out = None, []
+        for l in lines:
+            if self._incar_tag_name(l) == 'ISMEAR':
+                had = l.split('=', 1)[1].split('#')[0].split('!')[0].strip()
+                continue
+            out.append(l)
+        why = (f"a k-mesh subdivision is 1 ({mesh[0]} {mesh[1]} {mesh[2]})" if flat
+               else "tetrahedra for the DOS")
+        out += ["", f"# DOS smearing rule: {why}"]
+        raw = self.instructions.get('incar_raw', {}) or {}
+        user = any(self._incar_tag_name(o) == 'ISMEAR' for o in list(raw.get('all', [])) + list(raw.get('dos', [])))
+        if user and had is not None and had != want:
+            out.append(f"# (ISMEAR = {had} from the instructions replaced)")
+            print(f"  04_dos: ISMEAR = {had} from the instructions replaced by {want} ({why})")
+        out.append(f"ISMEAR = {want}")
+        if flat and not any(self._incar_tag_name(l) == 'SIGMA' for l in out):
+            out.append("SIGMA = 0.05")
+        open(path, 'w').write('\n'.join(out) + '\n')
 
     def _generate_incar_lobster(self, nbands: int = None, lmax: int = 2) -> str:
         """INCAR for the LOBSTER NSCF: ISYM=0, fixed charge, WAVECAR for LOBSTER."""

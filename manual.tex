@@ -1816,10 +1816,14 @@ names: \texttt{relax}, \texttt{scf}, \texttt{bands}, \texttt{dos}, \texttt{wanni
 
 \begin{lstlisting}
 INCAR dos:              # applies only to 04_dos
-   ISMEAR = 0
-   SIGMA  = 0.05
+   NEDOS = 5000
 END_INCAR
 \end{lstlisting}
+
+Exception: the DOS step always uses \texttt{ISMEAR = -5} (tetrahedra), whatever the blocks
+say, unless a subdivision of its k-mesh is 1 (slab, wire, molecule); then it uses
+\texttt{ISMEAR = 0} with your \texttt{SIGMA} (0.05 if none).  A replaced value is noted in
+\texttt{04\_dos/INCAR}.
 
 A tag that the agent already writes is \textbf{overwritten in place}; any other tag is
 appended under a \texttt{\# User INCAR overrides} section.  The header needs its colon,
@@ -1834,8 +1838,8 @@ A block \emph{without} a step name (\texttt{INCAR:} \ldots\ \texttt{END\_INCAR})
 tags into the INCAR of \textbf{every} step (relax, SCF, bands, DOS, LOBSTER, \ldots).
 Use it only for settings every step must share, such as the functional, the GGA+U
 values or \texttt{ENCUT}.  For anything else it is \textbf{not recommended}: a tag that
-suits one step is usually wrong for another (e.g.\ \texttt{ISMEAR = 0} replaces the
-tetrahedron method of the DOS).  Name the step.
+suits one step is usually wrong for another (e.g.\ an \texttt{ISIF} meant for the
+relaxation).  Name the step.
 \end{notebox}
 
 \begin{notebox}

@@ -45,8 +45,7 @@ BLOCK_SYNTAX_HELP = """
   Correct syntax (header with a colon, one tag per line, END line; case and extra
   spaces do not matter, # starts a comment):
       INCAR dos:              # only 04_dos; also INCAR_DOS:
-         ISMEAR = 0
-         SIGMA  = 0.05
+         NEDOS  = 5000
       END_INCAR
       INCAR scf:              # only 02_scf
          EDIFF = 1E-7

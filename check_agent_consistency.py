@@ -491,7 +491,7 @@ def check_semantics(case, out_dir, instr):
             (r.get('LREAL') == 'Auto', "global LREAL in relax"),
             (s_.get('SIGMA') == '0.1' and s_.get('NELM') == '200', "scf SIGMA/NELM"),
             (b.get('NBANDS') == '64', "bands NBANDS"),
-            (dd.get('NEDOS') == '5000' and dd.get('SIGMA') == '0.02' and dd.get('ISMEAR') == '0', "dos block"),
+            (dd.get('NEDOS') == '5000' and dd.get('SIGMA') == '0.02' and dd.get('ISMEAR') == '-5', "dos block (ISMEAR=0 of the block replaced by -5: 3-D mesh)"),
             (kpts_mesh(steps['01_relax'] / 'KPOINTS') == (3, 3, 2), "relax explicit KPOINTS"),
             (kpts_mesh(steps['02_scf'] / 'KPOINTS') == (9, 9, 5), "scf explicit KPOINTS"),
             (kpts_mesh(steps['04_dos'] / 'KPOINTS') == (18, 18, 10), "dos = 2x explicit scf mesh"),
