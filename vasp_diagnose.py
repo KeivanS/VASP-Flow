@@ -198,6 +198,27 @@ ERRSKIP = re.compile(r'IBZKPT|Often results|\(SIGTERM\)|^Image|Unknown  |Stack t
                      r'srun: error: .*tasks? [0-9]', re.I)
 
 
+# ── VASP error messages (also used by FOCEX/AGENT/diagnose.py) ──────────────
+def error_lines(text, n=6):
+    """Up to n distinct lines of text that look like error messages (ERRLINE, not ERRSKIP)."""
+    errs, seen = [], set()
+    for line in text.splitlines():
+        line = line.strip()
+        if ERRLINE.search(line) and not ERRSKIP.search(line) and line not in seen:
+            seen.add(line)
+            errs.append(line[:160])
+    return errs[:n]
+
+
+def match_pattern(text):
+    """(class, certainty, matched text) of the first known error message (PAT) in text, or None."""
+    for cls, rx in PAT:
+        hit = re.search(rx, text, re.I)
+        if hit:
+            return cls, PATTERN_CERT[cls], hit.group(0)
+    return None
+
+
 # ── small file helpers ───────────────────────────────────────────────────────
 def read(path, tail=None, head=None):
     try:
@@ -542,14 +563,7 @@ def classify(m, step, rec, provisional, point=None):
     if point:
         log += '\n' + read(os.path.join(point, 'vasp.out'), tail=200000)
     text = log + '\n' + read(outcar, tail=20000)
-    errs = []
-    seen = set()
-    for line in text.splitlines():
-        line = line.strip()
-        if ERRLINE.search(line) and not ERRSKIP.search(line) and line not in seen:
-            seen.add(line)
-            errs.append(line[:160])
-    errs = errs[:6]
+    errs = error_lines(text)
     state = rec['state'] if rec else ''
     job = ('sacct: job %s %s after %s of %s' % (rec['id'], state, rec['elapsed'], rec['limit'])) if rec else ''
     static = step in ('scf', 'bands', 'dos', 'lobster') and not point
@@ -594,12 +608,12 @@ def classify(m, step, rec, provisional, point=None):
               'nscf_diverged': '|E| > 1e6 eV in OSZICAR',
               'lobster_fail': 'VASP finished; lobster.out has no "finished in" (or ICOHPLIST is empty)'}[provisional]
         return out(provisional, 0.8 if provisional == 'lobster_fail' else CAUSE_CERT['outputs'], ev)
-    for cls, rx in PAT:
-        hit = re.search(rx, text, re.I)
-        if hit:
-            if cls == 'edddav' and step in NSCF:
-                return out('nscf_diverged', PATTERN_CERT[cls], 'log: "%s"' % hit.group(0))
-            return out(cls, PATTERN_CERT[cls], 'log: "%s"' % hit.group(0))
+    hit = match_pattern(text)
+    if hit:
+        cls, cert, what = hit
+        if cls == 'edddav' and step in NSCF:
+            return out('nscf_diverged', cert, 'log: "%s"' % what)
+        return out(cls, cert, 'log: "%s"' % what)
     if stopped:
         return time_limit(0.75, 'OUTCAR: "%s" (the walltime guard stops VASP 15 min before the limit)'
                           % stopped.group(0))
