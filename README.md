@@ -30,7 +30,7 @@ git clone https://github.com/KeivanS/VASP-Flow.git
 cd VASP-Flow
 
 # 2. A Python >= 3.8 environment with what your route needs
-python3 -m venv ~/vaspenv && source ~/vaspenv/bin/activate
+python3 -m venv ~/dftphonon-env && source ~/dftphonon-env/bin/activate
 pip install numpy matplotlib            # all
 pip install flask sumo                  # GUI
 pip install pymatgen mp-api spglib      # high-throughput drivers

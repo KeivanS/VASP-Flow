@@ -688,7 +688,7 @@ fi
 # Each job runs makeplots.sh (plots + LOBSTER CSV) after its last step.  It needs
 # a python3 with numpy + matplotlib; module purge above usually leaves only the
 # system python, so point ANALYSIS_PYTHON at a python that has them, e.g.
-#   export ANALYSIS_PYTHON="$HOME/vaspenv/bin/python3"
+#   export ANALYSIS_PYTHON="$HOME/dftphonon-env/bin/python3"
 export RUN_ANALYSIS=1
 export ANALYSIS_PYTHON="${ANALYSIS_PYTHON:-}"
 
@@ -1075,7 +1075,7 @@ sbatch.  POTCARs are deliberately absent; step 3 rebuilds them there.
 Each job ends by running its `makeplots.sh` (band / COHP / COBI / COOP /
 LOBSTER-DOS plots and `lobster_summary.csv` in `plots/`, log in
 `plots/makeplots.log`).  That needs a python3 with numpy + matplotlib: set
-`ANALYSIS_PYTHON` (e.g. `$HOME/vaspenv/bin/python3`) if the system python
+`ANALYSIS_PYTHON` (e.g. `$HOME/dftphonon-env/bin/python3`) if the system python
 lacks them.  `./makeplots_all.sh` redoes the plots of finished materials.
 
 `LOBSTER_BIN` must be the **Linux** LOBSTER build — the macOS binary named in

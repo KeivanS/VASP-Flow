@@ -145,7 +145,7 @@ def main(argv):
     else:
         say('FAIL', 'Python %d.%d at %s is too old (3.8 or newer needed)' % (v[0], v[1], sys.executable),
             'load a newer Python (cluster: module load ...), then make and activate the '
-            'environment: python3 -m venv ~/vaspenv && source ~/vaspenv/bin/activate')
+            'environment: python3 -m venv ~/dftphonon-env && source ~/dftphonon-env/bin/activate')
     for mod in ('numpy', 'matplotlib'):
         if module_ok(mod):
             say('ok', '%s installed' % mod)
@@ -224,7 +224,7 @@ def main(argv):
                    if not module_ok(m)]
         if missing:
             say('FAIL', 'missing: %s' % ' '.join(missing), 'pip install pymatgen mp-api spglib   '
-                '(in the environment: source ~/vaspenv/bin/activate)')
+                '(in the environment: source ~/dftphonon-env/bin/activate)')
         else:
             say('ok', 'pymatgen, mp-api, spglib installed')
         if os.environ.get('MP_API_KEY'):

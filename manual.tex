@@ -283,8 +283,8 @@ cd ~ && git clone https://github.com/KeivanS/VASP-Flow.git
 
 # 2. A Python >= 3.8 environment, made once
 python3 --version               # cluster: load a newer Python first
-python3 -m venv ~/vaspenv
-source ~/vaspenv/bin/activate   # at every login
+python3 -m venv ~/dftphonon-env
+source ~/dftphonon-env/bin/activate   # at every login
 pip install numpy matplotlib              # all routes
 pip install flask sumo                    # GUI (Example 1)
 pip install pymatgen mp-api spglib        # many materials (Ex. 4, 5)
@@ -942,7 +942,7 @@ cell and runs relax $\to$ SCF (+ ELF) $\to$ LOBSTER for each with
   {the same on a cluster with repair rounds: Example~5; both drivers: Section~\ref{sec:highthroughput}}
 
 \begin{lstlisting}[language=bash]
-source ~/vaspenv/bin/activate          # made once at installation
+source ~/dftphonon-env/bin/activate          # made once at installation
 export MP_API_KEY=your_key
 export VASP_POTCAR_DIR=/path/to/potpaw_PBE
 mkdir -p ~/ht_small && cd ~/ht_small
@@ -1081,7 +1081,7 @@ Material & Why it is in the list \\ \midrule
 \paragraph{1. Generate the run.}  On the login node (it downloads from Materials Project):
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow && git pull
-source ~/vaspenv/bin/activate          # made once at installation (pymatgen, mp-api, ...)
+source ~/dftphonon-env/bin/activate          # made once at installation (pymatgen, mp-api, ...)
 export MP_API_KEY=your_key
 printf 'mp-149\nmp-972937\nmp-1080459\n' > lists/example5.txt
 python3 ht_runs.py --list lists/example5.txt --single-node \
@@ -2456,7 +2456,7 @@ drivers download from MP, so run them on the login node (internet access).
 
 \begin{lstlisting}[language=bash]
 cd ~/VASP-Flow && git pull
-source ~/vaspenv/bin/activate    # made once at installation
+source ~/dftphonon-env/bin/activate    # made once at installation
 export MP_API_KEY=your_key       # materialsproject.org/api
 export VASP_POTCAR_DIR=/path/to/PAW_PBE
 \end{lstlisting}
@@ -3113,7 +3113,7 @@ Full descriptions are in \cmd{ht_tools/README.md}.
 Symptom & Solution \\ \midrule
 \texttt{No module named 'pymatgen'}, \texttt{unexpected keyword argument 'capture\_output'} &
   The \texttt{python3} in use is the system one (too old, no pymatgen).  Activate the
-  environment of Section~\ref{sec:install}: \texttt{source \textasciitilde/vaspenv/bin/activate}. \\[3pt]
+  environment of Section~\ref{sec:install}: \texttt{source \textasciitilde/dftphonon-env/bin/activate}. \\[3pt]
 POTCAR not found &
   Check \texttt{VASP\_POTCAR\_DIR} (LDA: \texttt{VASP\_POTCAR\_DIR\_LDA}) in
   \texttt{default\_paths} or GUI System Setup.  Use the POTCAR chooser for unusual variants
