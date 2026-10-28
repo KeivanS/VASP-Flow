@@ -17,6 +17,24 @@ def _cell_reduce():
         import cell_reduce
     return cell_reduce
 
+
+def slurm_account(instructions: Dict, profile: Dict) -> str:
+    """Allocation for '#SBATCH --account': the profile's slurm.account (set once for your
+    cluster), or ACCOUNT: in the instruction file, which overrides it. Mandatory for a SLURM run."""
+    acct = (instructions or {}).get('slurm_account') or \
+        (((profile or {}).get('slurm') or {}).get('account') or '').strip()
+    if not acct:
+        # the same module object as the caller's, so that its 'except InstructionError' catches it
+        if __name__.startswith('modules.'):
+            from modules.instruction_parser import InstructionError
+        else:
+            from instruction_parser import InstructionError
+        name = (profile or {}).get('name') or 'the SLURM profile'
+        raise InstructionError(f'no SLURM account in {name}: set "account" in the "slurm" block of your '
+                               'profile\n  (profiles/<name>.json, once for your cluster) or add '
+                               '"ACCOUNT: <your allocation>" to the instruction file')
+    return acct
+
 # ── Platform settings ────────────────────────────────────────────────────────
 # Read from environment (set via site.env + Makefile export).
 # These can also be set as shell environment variables directly.
@@ -573,12 +591,12 @@ class VASPInputGenerator:
         if slurm:
             s = slurm
             lines.append(f'#SBATCH --job-name={job_name}')
-            lines.append(f'#SBATCH --partition={s.get("partition", "standard")}')
+            part = self.instructions.get('slurm_partition') or s.get('partition', 'standard')
+            lines.append(f'#SBATCH --partition={part}')
             lines.append(f'#SBATCH --nodes={s.get("nodes", 1)}')
             lines.append(f'#SBATCH --ntasks-per-node={s.get("ntasks_per_node", 1)}')
             lines.append(f'#SBATCH --time={s.get("time", "24:00:00")}')
-            if s.get('account'):
-                lines.append(f'#SBATCH --account={s["account"]}')
+            lines.append(f'#SBATCH --account={slurm_account(self.instructions, self.profile)}')
             lines.append(f'#SBATCH --output={s.get("output", "slurm-%j.out")}')
             lines.append(f'#SBATCH --error={s.get("error", "slurm-%j.err")}')
             lines.append('')

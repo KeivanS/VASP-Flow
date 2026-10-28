@@ -25,7 +25,6 @@ The profile JSON must contain a "slurm" block:
         "nodes":           2,
         "ntasks_per_node": 64,
         "time":            "12:00:00",
-        "account":         "",
         "output":          "slurm-%j.out",
         "error":           "slurm-%j.err"
       }
@@ -41,7 +40,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser, InstructionError
 from cell_reduce import prepare_poscar
-from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for,
+from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for, slurm_account,
                                   merge_cli_incar, STEP_WALLTIME, RESUME_SBATCH,
                                   RESUME_LIB)
 
@@ -132,7 +131,7 @@ class SLURMVASPAgent:
         self.nodes           = int(_get('slurm_nodes',      'nodes',           1))
         self.ntasks_per_node = int(_get('slurm_ntasks_per_node', 'ntasks_per_node', 16))
         self.slurm_time      = _get('slurm_walltime',       'time',            '12:00:00')
-        self.account         = _get('slurm_account',        'account',         '')
+        self.account         = slurm_account(inst, self.profile)   # profile, or ACCOUNT: (mandatory)
         self.slurm_output    = slurm.get('output',          'slurm-%j.out')
         self.slurm_error     = slurm.get('error',           'slurm-%j.err')
         self.modules         = self.profile.get('modules',  [])

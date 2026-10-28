@@ -348,7 +348,7 @@
 │     "slurm": {                                                                │
 │       "partition": "standard", "nodes": 2,                                   │
 │       "ntasks_per_node": 64,   "time": "12:00:00",                           │
-│       "account": "elmgroup"                                                   │
+│       "account": "myalloc"                                                    │
 │     }                                                                         │
 │   }                                                                           │
 │                                                                               │

@@ -261,6 +261,8 @@ def run_case(case, work, gui, potcar_dir, env_base):
         gui_dir = None
         instr = case['text']
     (root / 'instructions.txt').write_text(instr)
+    # a SLURM run needs an account (profile or ACCOUNT:); the shipped slurm.json has none
+    (root / 'instructions_sl.txt').write_text(instr + '\nACCOUNT: testalloc\n')
 
     outs = {}
     for label, script, extra in (('ws', 'vasp-agent.py', []),
@@ -269,7 +271,8 @@ def run_case(case, work, gui, potcar_dir, env_base):
             continue
         wd = root / label
         wd.mkdir()
-        r = subprocess.run([sys.executable, str(REPO / script), '-i', '../instructions.txt',
+        inp = '../instructions_sl.txt' if label == 'sl' else '../instructions.txt'
+        r = subprocess.run([sys.executable, str(REPO / script), '-i', inp,
                             '-s', '../POSCAR'] + extra, cwd=wd, env=env,
                            capture_output=True, text=True)
         if r.returncode != 0:
@@ -550,6 +553,7 @@ def main():
     for case in cases():
         if args.filter and args.filter not in case['name']:
             continue
+        outs = {}
         try:
             outs, instr = run_case(case, work, gui, potcar_dir, env_base)
             problems = compare_outputs(outs)

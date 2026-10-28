@@ -1,5 +1,5 @@
 {
-  "_comment": "Edit this file for your cluster. Used by vasp-agent-slurm.py.",
+  "_comment": "Template for a SLURM cluster: copy it to profiles/<name>.json, set the VASP command, modules, partition, nodes, tasks and time for your cluster, and use --profile <name>. account (your allocation) is required; ACCOUNT: in an instruction file overrides it.",
   "name": "SLURM HPC",
   "vasp_std": "vasp_std",
   "vasp_ncl": "vasp_ncl",
@@ -13,7 +13,7 @@
     "nodes": 1,
     "ntasks_per_node": 20,
     "time": "12:00:00",
-    "account": "elmgroup",
+    "account": "",
     "output": "slurm-%j.out",
     "error": "slurm-%j.err"
   }

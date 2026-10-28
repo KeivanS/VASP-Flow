@@ -267,7 +267,7 @@ phonopy, wannier90.x & optional: phonons, Wannier functions & \texttt{conda inst
 \end{tabularx}
 
 \medskip\noindent\textbf{Check the Python first.}  The system \texttt{python3} of a cluster is often too old
-(on Rivanna it is 3.6, without pymatgen): \texttt{ht\_runs.py} then stops with
+(often 3.6, without pymatgen): \texttt{ht\_runs.py} then stops with
 \texttt{unexpected keyword argument 'capture\_output'} or \texttt{No module named 'pymatgen'}.
 Make the environment of step~2 below once, and activate it at every login.
 
@@ -2246,8 +2246,9 @@ RELAX_KPAR: 2   PHONONS_KPAR: 1   # DFPT is always KPAR=1, NCORE=1
 
 \subsection{Per-project resources (in \texttt{instructions.txt})}
 
-The cluster defaults (partition, nodes, tasks per node, account) are in
-\texttt{profiles/slurm.json} (Section~\ref{sec:remote-setup}); these lines override them for one project:
+The cluster defaults (partition, nodes, tasks per node, account) are in your copy of
+\texttt{profiles/slurm.json} (Section~\ref{sec:remote-setup}), set once for your cluster; the account is
+required. These lines override them for one project:
 
 \begin{lstlisting}
 NODES: 4     NTASKS_PER_NODE: 32     PARTITION: gpu     ACCOUNT: myallocation
@@ -2448,7 +2449,7 @@ Use for & structures to relax and characterise (ELF, bonding) &
 \bottomrule
 \end{tabularx}
 
-\subsection{Step by step on the cluster (Rivanna)}
+\subsection{Step by step on the cluster}
 \label{sec:ht-howto}
 
 \textbf{1. Every new login}: update the code and set the environment.  The
@@ -2486,13 +2487,13 @@ material folders into the directory it is run from, so use a work directory:
 mkdir -p /scratch/$USER/ht_mylist && cd /scratch/$USER/ht_mylist
 python3 ~/VASP-Flow/ht-mp-scf.py -l ~/VASP-Flow/lists/mylist.txt \
     --agent slurm --no-chain --nodes 1 --ntasks-per-node 40 \
-    --account elmgroup --kpra 8000 --encut 520
+    --account <your allocation> --kpra 8000 --encut 520
 ./runall.sh     # build inputs, submit relax -> SCF+ELF -> LOBSTER
 squeue -u $USER
 \end{lstlisting}
 Check \texttt{\textasciitilde/VASP-Flow/profiles/slurm.json} first: its
-\texttt{modules} list must load a working VASP on the cluster (on Rivanna
-\texttt{vasp/5.4.4} alone; extra compiler/MPI modules cause version swaps).
+\texttt{modules} list must load a working VASP on the cluster (e.g.\
+\texttt{vasp/5.4.4} alone, if extra compiler/MPI modules cause version swaps).
 Choose \texttt{-{}-encut} as about $1.3\times$ the largest ENMAX in the set
 (the ISIF = 3 relaxation needs it against Pulay stress).
 \texttt{-{}-no-chain} lets the materials run in parallel; the default

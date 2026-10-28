@@ -79,7 +79,6 @@ MAX_ATOMS       = 20        # primitive-cell atom limit
 CORES_PER_NODE  = 40
 MAX_NODES       = 4
 PARTITION       = 'standard'
-ACCOUNT         = 'elmgroup'
 ENCUT_FLOOR     = 400       # eV; never go below the PBE default
 ENCUT_FACTOR    = 1.3       # x max(ENMAX); hard cutoff for LOBSTER/bands consistency
 
@@ -996,7 +995,7 @@ RETUNE_SH = r'''#!/bin/bash
 # Change partition / account in every job.sbatch, or the per-step walltimes in
 # env.sh (used by submit_all.sh for jobs submitted from now on).
 #
-#   ./retune.sh --partition compute --account elmgroup
+#   ./retune.sh --partition compute --account <your allocation>
 #   ./retune.sh --time-relax 12:00:00 --time-lobster 06:00:00
 #   ./retune.sh --time 06:00:00          # all four steps
 #
@@ -1374,7 +1373,8 @@ def main():
     ap.add_argument('--cores-per-node', type=int, default=CORES_PER_NODE)
     ap.add_argument('--max-nodes', type=int, default=MAX_NODES)
     ap.add_argument('--partition', default=PARTITION)
-    ap.add_argument('--account', default=ACCOUNT)
+    ap.add_argument('--account', default=None,
+                    help='SLURM allocation (#SBATCH --account); default: "account" of the profile')
     ap.add_argument('--functional', default='PBE')
     ap.add_argument('--profile', default='slurm', help='agent profile name')
     ap.add_argument('--modules', default='vasp/5.4.4',
@@ -1403,6 +1403,15 @@ def main():
                     help='materials prepared in parallel (default: min(8, CPUs))')
     ap.add_argument('--api-key', default=None)
     args = ap.parse_args()
+    if not args.account:                      # the cluster profile carries it (set once)
+        prof = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profiles', f'{args.profile}.json')
+        try:
+            args.account = ((json.load(open(prof)).get('slurm') or {}).get('account') or '').strip()
+        except (OSError, ValueError):
+            args.account = ''
+    if not args.account:
+        sys.exit(f'ERROR: no SLURM account: set "account" in the "slurm" block of profiles/{args.profile}.json '
+                 '(once for your cluster) or give --account <your allocation>')
     if args.kspacing is None and args.kpra is None:
         args.kpra = 8000            # default density: k-points per reciprocal atom
 

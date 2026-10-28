@@ -187,6 +187,10 @@ def api_config():
     if request.method == 'GET':
         return jsonify(dict(CONFIG))
     data = request.json or {}
+    if (data.get('profile_mode', CONFIG['profile_mode']) == 'slurm'
+            and not str(data.get('slurm_account', CONFIG['slurm_account']) or '').strip()):
+        return jsonify(ok=False, error='SLURM needs an account: fill in Account '
+                                       '(the allocation you charge jobs to)'), 400
     for k in CONFIG:
         if k in data:
             try:
@@ -2657,7 +2661,7 @@ main{flex:1;padding:20px 24px;max-width:1120px;width:100%;}
       <div class="g2" style="margin-bottom:14px;">
         <div class="f"><label>Partition</label>
           <input id="cfg_slurm_partition" placeholder="e.g. standard"></div>
-        <div class="f"><label>Account <span style="font-weight:400;color:var(--sub);">(optional)</span></label>
+        <div class="f"><label>Account <span style="font-weight:400;color:var(--sub);">(required for SLURM)</span></label>
           <input id="cfg_slurm_account" placeholder="your-project-account"></div>
         <div class="f"><label>Nodes</label>
           <input id="cfg_slurm_nodes" type="number" min="1" placeholder="2"></div>
@@ -3256,7 +3260,8 @@ async function saveSystemConfig(){
     // Refresh project list with (possibly new) projects directory
     populateResumeList();
   } else {
-    msg.style.color='var(--err)'; msg.textContent='✗ Save failed';
+    let e=''; try{ e=(await r.json()).error||''; }catch(_){}
+    msg.style.color='var(--err)'; msg.textContent='✗ '+(e||'Save failed');
   }
 }
 

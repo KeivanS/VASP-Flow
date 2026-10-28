@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules'))
 from instruction_parser import InstructionParser, InstructionError
 from cell_reduce import prepare_poscar
-from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for,
+from vasp_input_generator import (VASPInputGenerator, write_shifted_poscar, potcar_dir_for, slurm_account,
                                   merge_cli_incar)
 
 
@@ -117,6 +117,8 @@ class VASPWorkflowAgent:
 
         self.inst_file   = os.path.abspath(instructions_file)
         self.profile     = profile or {}
+        if self.profile.get('slurm'):
+            slurm_account(inst, self.profile)   # a SLURM run needs an account (profile or ACCOUNT:)
         os.makedirs(self.project_dir, exist_ok=True)
         shutil.copy(self.inst_file,   self.project_dir)
         # The project's POSCAR is the cell every step runs; Niggli-reduced first when LOBSTER

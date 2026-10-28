@@ -43,6 +43,14 @@ make snaps    # Alternate GUI on port 5050 (sc-snaps-gui.py)
   - `PYTHON`, `VASP_STD`, `VASP_NCL`, `VASP_GAM`, `MPI_LAUNCH`, `MPI_NP`, `WANNIER90_X`, `VASP_POTCAR_DIR`, `VASP_POTCAR_DIR_LDA`
   - POTCAR library per functional: `potcar_dir_for()` in vasp_input_generator.py — LDA uses `VASP_POTCAR_DIR_LDA` (default `lda_sibling()`: PBE → LDA in the folder name, PAW_PBE → PAW_LDA), every other functional `VASP_POTCAR_DIR`; both agents stop if the LDA library is missing; GUI System Setup field `potcar_dir_lda`, `/api/potcar_variants` takes `functional`; `ht_runs.py --functional LDA` uses it locally and `--hpc-potcar-dir-lda` (default: sibling of `--hpc-potcar-dir`) in env.sh
 - `<Project>/settings.json` — GUI state for "Edit & Regenerate"
+- SLURM profiles (2026-10-27, user): no site names in the repository (rivanna.json removed);
+  `profiles/slurm.json` is a template with `"account": ""`. The user copies it to
+  `profiles/<name>.json` once per cluster and sets account, partition, modules there.
+  `slurm_account()` (vasp_input_generator.py) = ACCOUNT: of the instruction file, else the
+  profile's account; neither -> InstructionError before any folder is made (vasp-agent.py,
+  vasp-agent-slurm.py, focex-agent init, the generator's #SBATCH header). ht_runs.py --account
+  defaults to the profile's; the GUI refuses to save SLURM settings without an account.
+  check_agent_consistency.py gives its SLURM run `ACCOUNT: testalloc`.
 - `<Project>/instructions.txt` — Natural language workflow definition
 
 ## Dependencies
