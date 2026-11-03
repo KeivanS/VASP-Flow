@@ -1,5 +1,9 @@
 # VASP-Flow release notes
 
+## Unreleased
+
+- The Python environment is now called `~/myenv` (was `~/dftphonon-env`); manual, README, `check_setup.py` and `ht_runs.py` updated.
+
 ## v2.7 — 2026-10-23 · Cells along the axes, DOS fixes, checked instruction blocks
 
 - **Reduced cells along the Cartesian axes**, before and after the relaxation: the relaxation keeps atom 1 fixed (selective dynamics `F F F`, the others `T T T`); `02_scf/copy_from_relax.sh` reduces the relaxed cell again and, on a basis change, rewrites the later KPOINTS (band path exact, meshes rescaled, `KPOINTS.prereduce`). Among the bases of equal vector lengths the one with vector *i* along axis *i* is chosen (fcc `(0,a,a),(a,0,a),(a,a,0)`, hexagonal `(a,0,0),(a/2,a√3/2,0),c`); a conventional cell of a P lattice with the Niggli lengths is kept as it is. Relaxation plots gain the force on atom 1 per ionic step; Visualize draws the cell outline.

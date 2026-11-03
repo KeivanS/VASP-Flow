@@ -40,7 +40,7 @@ make snaps    # Alternate GUI on port 5050 (sc-snaps-gui.py)
 ## Configuration
 
 - `default_paths` — Platform-specific config (Makefile syntax, NOT committed, created from `default_paths.example`)
-  - `PYTHON`, `VASP_STD`, `VASP_NCL`, `VASP_GAM`, `MPI_LAUNCH`, `MPI_NP`, `WANNIER90_X`, `VASP_POTCAR_DIR`, `VASP_POTCAR_DIR_LDA`
+  - `PYTHON` (unset: the Makefile uses `~/myenv/bin/python` if it exists, else `python3`; 2026-11-03, user: a bare `make` must work without activating), `VASP_STD`, `VASP_NCL`, `VASP_GAM`, `MPI_LAUNCH`, `MPI_NP`, `WANNIER90_X`, `VASP_POTCAR_DIR`, `VASP_POTCAR_DIR_LDA`
   - POTCAR library per functional: `potcar_dir_for()` in vasp_input_generator.py — LDA uses `VASP_POTCAR_DIR_LDA` (default `lda_sibling()`: PBE → LDA in the folder name, PAW_PBE → PAW_LDA), every other functional `VASP_POTCAR_DIR`; both agents stop if the LDA library is missing; GUI System Setup field `potcar_dir_lda`, `/api/potcar_variants` takes `functional`; `ht_runs.py --functional LDA` uses it locally and `--hpc-potcar-dir-lda` (default: sibling of `--hpc-potcar-dir`) in env.sh
 - `<Project>/settings.json` — GUI state for "Edit & Regenerate"
 - SLURM profiles (2026-10-27, user): no site names in the repository (rivanna.json removed);

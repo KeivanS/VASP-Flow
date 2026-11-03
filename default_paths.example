@@ -22,8 +22,9 @@
 # Lines starting with # are comments.
 
 # ── Python interpreter ──────────────────────────────────────────────────────
-# Full path recommended if conda/virtualenv is not auto-activated in your shell
-PYTHON = python3
+# Left unset, the Makefile uses ~/myenv/bin/python when it exists, else python3.
+# Set a full path only for another environment, e.g.
+# PYTHON = /path/to/env/bin/python
 
 # ── VASP executables ────────────────────────────────────────────────────────
 # vasp_std : collinear calculations (default)

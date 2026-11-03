@@ -4,7 +4,8 @@
 export
 
 # Fallbacks (used only when default_paths is missing)
-PYTHON      ?= python3
+# Python: ~/myenv (the environment of the manual) when it exists, else python3
+PYTHON      ?= $(if $(wildcard $(HOME)/myenv/bin/python),$(HOME)/myenv/bin/python,python3)
 VASP_STD    ?= ~/BIN/vasp_std
 VASP_NCL    ?= ~/BIN/vasp_ncl
 VASP_GAM    ?= ~/BIN/vasp_gam
