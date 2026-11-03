@@ -15,7 +15,7 @@
 - **High throughput**: jobs are matched by name *and* folder (two runs of one mp-ID no longer mix); `submit_all.sh` and `vasp_diagnose.py` say why a material is skipped; repairs that change partition or fix an out-of-memory get an explicit `--mem` from `sinfo`; `collect_lobster.sh` names tarballs with seconds and the run.
 - `OPENBLAS_NUM_THREADS=1` in the drivers (OpenBLAS failed on a Rivanna login node).
 - `vasp_diagnose.py`: `error_lines()` and `match_pattern()` callable on any text (used by the FOCEX agent's `diagnose.py`); diagnosis unchanged.
-- The Python environment is called `~/dftphonon-env` (was `~/vaspenv`); one environment serves VASP-Flow and the FOCEX agent.
+- The Python environment is called `~/myenv` (was `~/dftphonon-env`, and `~/vaspenv` before that); one environment serves VASP-Flow and the FOCEX agent.
 
 ## v2.6 — 2026-10-14 · Repairs in rounds, with certainty
 
