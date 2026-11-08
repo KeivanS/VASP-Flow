@@ -89,7 +89,7 @@ External binaries required: VASP (std/ncl/gam), MPI, wannier90.x, phonopy
 | `03_bands` | Band structure (line-mode KPOINTS) |
 | `04_dos` | Density of states (dense mesh, LORBIT=11) |
 | `05_wannier` | Wannier90 NSCF interface |
-| `06_dfpt` | Born charges + dielectric (IBRION=8) |
+| `06_dfpt` | Born charges + dielectric (IBRION=8; SOC/HSE06/R2SCAN: IBRION=6 + LCALCEPS, `set_efield.py` sets EFIELD_PEAD from the SCF gap at run time) |
 | `07_phonons` | Phonopy finite-displacement supercells |
 | `08_lobster` | LOBSTER bonding analysis: symmetry-off (ISYM=0) NSCF from `02_scf` CHGCAR + lobster run (COHP/COBI/COOP) |
 

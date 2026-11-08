@@ -1439,8 +1439,15 @@ cp "$SCF_DIR/CHGCAR" "$HERE/" 2>/dev/null && echo "  CHGCAR copied from 02_scf" 
         with open(f"{output_dir}/extract_born.py", 'w') as f:
             f.write(self._extract_born_script())
 
+        # finite-field route: EFIELD_PEAD is set at run time from the SCF gap
+        # (unknown when the inputs are written), see _set_efield_script
+        ff = self._dfpt_finite_field_reason() is not None
+        if ff:
+            with open(f"{output_dir}/set_efield.py", 'w') as f:
+                f.write(self._set_efield_script())
+
         with open(f"{output_dir}/run.sh", 'w') as f:
-            f.write(self._generate_job_script_dfpt())
+            f.write(self._generate_job_script_dfpt(rel_scf if ff else None))
         os.chmod(f"{output_dir}/run.sh", 0o755)
 
     def _dfpt_finite_field_reason(self):
@@ -1483,7 +1490,8 @@ cp "$SCF_DIR/CHGCAR" "$HERE/" 2>/dev/null && echo "  CHGCAR copied from 02_scf" 
                 "POTIM  = 0.015",
                 "",
                 "LCALCEPS = .TRUE.    ! response to a finite E-field: eps, Z*, piezo",
-                "# EFIELD_PEAD = 0.01 0.01 0.01   ! field strength in eV/A (default 0.01)",
+                "# EFIELD_PEAD: set by set_efield.py (run.sh) to half of VASP's Zener limit",
+                "# E_g/(10 N_i |a_i|) from the SCF gap; a line you set here is kept",
             ]
         else:
             lines += [
@@ -1529,6 +1537,88 @@ cp "$SCF_DIR/CHGCAR" "$HERE/" 2>/dev/null && echo "  CHGCAR copied from 02_scf" 
                  else ln
                  for ln in lines]
         return '\n'.join(lines) + '\n'
+
+    def _set_efield_script(self) -> str:
+        """Python script (standard library only) run by the DFPT run.sh before VASP."""
+        return r'''#!/usr/bin/env python3
+"""set_efield.py -- EFIELD_PEAD for the finite-field (LCALCEPS) run in this folder.
+VASP warns of Zener tunnelling when e|E.a_i| > E_g/(10 N_i) (VASP wiki, EFIELD_PEAD);
+the default field 0.01 eV/A can exceed it (Cu2O, r2SCAN+U, gap 0.93 eV, 6x6x6: 2.7 times),
+which gave eps_inf = 207 and Born charges not summing to zero. This sets
+    EFIELD_PEAD = 1/2 min_i E_g/(10 N_i |a_i|),  at most 0.01 eV/A,
+E_g = band gap of the SCF (its EIGENVAL), N_i = k-points along a_i (KPOINTS here),
+a_i = lattice vectors (POSCAR here). An EFIELD_PEAD line you put in the INCAR is kept.
+It never stops the job: when something cannot be read, VASP's default field stays.
+Usage: python3 set_efield.py [SCF_DIR]     (default: SCF_DIR of copy_from_scf.sh, else ../02_scf)
+"""
+import math, os, re, sys
+
+MARK = '! set_efield.py'
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def gap_from_eigenval(path):
+    L = open(path).read().split('\n')
+    nk, nb = [int(float(x)) for x in L[5].split()[1:3]]
+    occ, emp, i = [], [], 6
+    for _ in range(nk):
+        while not L[i].strip():
+            i += 1
+        i += 1                                        # the k-point line
+        for _ in range(nb):
+            v = [float(x) for x in L[i].split()[1:]]
+            i += 1
+            pairs = [(v[0], v[1])] if len(v) == 2 else [(v[0], v[2]), (v[1], v[3])] if len(v) == 4 else None
+            if pairs is None:
+                raise ValueError('EIGENVAL without occupations')
+            for e, o in pairs:
+                (occ if o > 0.5 else emp).append(e)
+    return min(emp) - max(occ)
+
+
+def main():
+    scf = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, '..', '02_scf')
+    cp = os.path.join(HERE, 'copy_from_scf.sh')       # its SCF_DIR="$HERE/<rel>" line, if any
+    if len(sys.argv) < 2 and os.path.isfile(cp):
+        m = re.search(r'^SCF_DIR="\$HERE/([^"]+)"', open(cp).read(), re.M)
+        if m:
+            scf = os.path.join(HERE, m.group(1))
+    incar = os.path.join(HERE, 'INCAR')
+    lines = open(incar).read().splitlines()
+    act = lambda l, tag: re.match(r'\s*' + tag + r'\s*=', l, re.I)
+    if not any(act(l, 'LCALCEPS') and '.T' in l.split('=', 1)[1].upper() for l in lines):
+        return 'no LCALCEPS = .TRUE. in INCAR: nothing to do'
+    if any(act(l, 'EFIELD_PEAD') and MARK not in l for l in lines):
+        return 'EFIELD_PEAD set in INCAR by you: kept'
+    gap = gap_from_eigenval(os.path.join(scf, 'EIGENVAL'))
+    if gap <= 0.05:
+        return 'WARNING: SCF gap %.3f eV -- LCALCEPS needs an insulator; default field kept' % gap
+    K = open(os.path.join(HERE, 'KPOINTS')).read().splitlines()
+    if K[2].strip()[:1].upper() not in 'GM':
+        return 'KPOINTS is not an automatic mesh: default field kept'
+    N = [int(x) for x in K[3].split()[:3]]
+    P = open(os.path.join(HERE, 'POSCAR')).read().splitlines()
+    s = float(P[1].split()[0])
+    A = [[float(x) for x in P[k].split()[:3]] for k in (2, 3, 4)]
+    if s < 0:                                         # negative scale = volume
+        v = abs(A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0])
+                + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]))
+        s = (-s / v) ** (1 / 3)
+    a = [s * math.sqrt(sum(x * x for x in r)) for r in A]
+    e = min(0.01, float('%.2g' % (0.5 * min(gap / (10 * n * ai) for n, ai in zip(N, a)))))
+    lines = [l for l in lines if MARK not in l]
+    lines.append(f'EFIELD_PEAD = {e:g} {e:g} {e:g}   {MARK}: half of the Zener limit E_g/(10 N_i |a_i|), '
+                 f'E_g = {gap:.3f} eV, N = {N[0]}x{N[1]}x{N[2]}')
+    open(incar, 'w').write('\n'.join(lines) + '\n')
+    return f'EFIELD_PEAD = {e:g} eV/A (SCF gap {gap:.3f} eV, k-mesh {N[0]}x{N[1]}x{N[2]})'
+
+
+if __name__ == '__main__':
+    try:
+        print('  set_efield.py: ' + main())
+    except Exception as err:                          # never stop the job
+        print(f'  set_efield.py: WARNING: {err}; VASP default field kept')
+'''
 
     def _extract_born_script(self) -> str:
         """Python script to parse DFPT/finite-field OUTCAR → phonopy BORN + summary."""
@@ -1690,10 +1780,13 @@ for i, z in enumerate(born):
     print(f"  Ion {i+1} {labels[i]}: Zxx={z[0][0]:8.4f}  Zyy={z[1][1]:8.4f}  Zzz={z[2][2]:8.4f}")
 '''
 
-    def _generate_job_script_dfpt(self) -> str:
+    def _generate_job_script_dfpt(self, rel_scf=None) -> str:
         vasp_exec  = self._get_vasp_exec()
         launch_cmd = self._get_mpi_cmd(vasp_exec)
         preamble   = self._run_sh_preamble('vasp_dfpt')
+        efield = ('' if rel_scf is None else
+                  '# finite-field run: EFIELD_PEAD = half of the Zener limit, from the SCF gap\n'
+                  f'[ -f "$HERE/set_efield.py" ] && python3 "$HERE/set_efield.py" "$HERE/{rel_scf}"\n')
         return f"""#!/bin/bash
 {preamble}# run.sh — VASP DFPT: Born effective charges + dielectric tensor
 set -e
@@ -1702,7 +1795,7 @@ cd "$HERE"
 
 if [ ! -f "$HERE/POTCAR" ]; then echo "ERROR: POTCAR not found"; exit 1; fi
 [ -f "$HERE/copy_from_scf.sh" ] && bash "$HERE/copy_from_scf.sh"
-
+{efield}
 echo "Starting Born-charge / dielectric response run at $(date)"
 {launch_cmd} > vasp.out 2>&1
 

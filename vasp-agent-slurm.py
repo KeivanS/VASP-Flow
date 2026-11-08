@@ -264,6 +264,9 @@ class SLURMVASPAgent:
                 if os.path.isfile(os.path.join(step_dir, copy_script)):
                     f.write(f'echo "Copying input files..."\n')
                     f.write(f'[ "$vf_skip_vasp" = 1 ] || bash {abs_dir}/{copy_script}\n\n')
+            if os.path.isfile(os.path.join(step_dir, 'set_efield.py')):
+                # DFPT finite-field route: EFIELD_PEAD = half of the Zener limit, from the SCF gap
+                f.write(f'[ "$vf_skip_vasp" = 1 ] || python3 {abs_dir}/set_efield.py\n\n')
             f.write('VF_PHASE=vasp\n')
             f.write(f'[ "$vf_skip_vasp" = 1 ] || vf_run {self._vasp_run_line()}\n')
             f.write('echo "Exit status: $?"\n')
@@ -397,7 +400,9 @@ fi'''
             scf_d = calc_dirs.get('scf', os.path.join(pd, '02_scf'))
             self.generator.generate_dfpt_input(d, scf_d)
             link_potcar(d, potcar_path)
-            self._write_step_script(d, f"{proj}_dfpt")
+            self._write_step_script(d, f"{proj}_dfpt",
+                                    post='python3 extract_born.py OUTCAR > extract_born.out 2>&1 '
+                                         '|| echo "  extract_born.py failed -- see extract_born.out"')
             calc_dirs['dfpt'] = d
             print(f"  06_dfpt/     INCAR  KPOINTS  POTCAR  run.sh (SLURM)")
 

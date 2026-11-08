@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **DFPT, finite-field route** (SOC, HSE06, R2SCAN): `run.sh` calls the new `06_dfpt/set_efield.py` before VASP, which sets `EFIELD_PEAD` to half of VASP's Zener limit E_g/(10 N_i |a_i|) from the SCF gap (EIGENVAL), the k-mesh and the lattice, at most 0.01 eV/Å; a user value in the INCAR is kept. VASP's default 0.01 eV/Å had been 2.7× the limit for Cu2O (r2SCAN+U, 6×6×6): ε∞ = 207, Born charges summing to −3.2 e.
 - The Python environment is now called `~/myenv` (was `~/dftphonon-env`); manual, README, `check_setup.py` and `ht_runs.py` updated.
 
 ## v2.7 — 2026-10-23 · Cells along the axes, DOS fixes, checked instruction blocks

@@ -2148,6 +2148,17 @@ SOC, HSE06, or R2SCAN &
 
 KPAR, NCORE and ISYM are fixed for this step (Appendix~\ref{app:dfpt}).
 
+On the finite-field route the field strength \texttt{EFIELD\_PEAD} is set
+when the job runs: \texttt{run.sh} calls \texttt{set\_efield.py}, which takes
+half of VASP's limit for Zener tunnelling,
+$e|E|\,|a_i| < E_g/(10N_i)$ ($E_g$ the band gap of \texttt{02\_scf} from its
+\texttt{EIGENVAL}, $N_i$ the k-points along $\mathbf{a}_i$), at most VASP's
+default 0.01\,eV/\AA.  An \texttt{EFIELD\_PEAD} you set in a \texttt{dfpt}
+INCAR block is kept.  The default field can be too large: for Cu$_2$O
+(R2SCAN+U, gap 0.93\,eV, $6\times6\times6$) it was 2.7 times the limit, VASP
+warned of Zener tunnelling, and the result was $\varepsilon_\infty = 207$
+with Born charges summing to $-3.2$\,e.
+
 \texttt{run.sh} executes \texttt{extract\_born.py} after VASP, which
 writes:
 
